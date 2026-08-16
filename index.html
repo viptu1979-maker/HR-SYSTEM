@@ -12,7 +12,6 @@
 <style>
   html, body { margin: 0; padding: 0; }
   * { box-sizing: border-box; }
-  body { direction: rtl; }
 </style>
 </head>
 <body>
@@ -31,10 +30,60 @@
   window.__hrDb = firebase.firestore();
 </script>
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useMemo, useRef } = React;
+const { useState, useEffect, useMemo, useRef, useContext, createContext } = React;
 const db = window.__hrDb;
 const DATA_DOC = db.collection("hrSystem").doc("data");
 const USERS_DOC = db.collection("hrSystem").doc("users");
+
+/* ============ اللغة (عربي/إنجليزي) ============ */
+const LangContext = createContext({ lang: "ar", dir: "rtl", t: (ar) => ar, toggleLang: () => {} });
+function useLang() {
+  return useContext(LangContext);
+}
+function LangProvider({ children }) {
+  const [lang, setLang] = useState(() => {
+    try {
+      return localStorage.getItem("hr-system-lang") || "ar";
+    } catch (e) {
+      return "ar";
+    }
+  });
+
+  /* الواجهة تبقى RTL دايمًا (نفس التخطيط) — بس النصوص تتغيّر بين عربي وإنجليزي */
+  useEffect(() => {
+    document.documentElement.setAttribute("lang", lang);
+    try {
+      localStorage.setItem("hr-system-lang", lang);
+    } catch (e) {}
+  }, [lang]);
+
+  const toggleLang = () => setLang((prev) => (prev === "ar" ? "en" : "ar"));
+  /* t(نص عربي, English text) — يرجع النص المناسب حسب اللغة الحالية */
+  const t = (ar, en) => (lang === "en" && en !== undefined ? en : ar);
+
+  return <LangContext.Provider value={{ lang, t, toggleLang }}>{children}</LangContext.Provider>;
+}
+function LangToggle({ style }) {
+  const { lang, toggleLang } = useLang();
+  return (
+    <button
+      onClick={toggleLang}
+      style={{
+        border: `1px solid ${COLORS.line}`,
+        background: "#fff",
+        color: COLORS.espresso,
+        borderRadius: 8,
+        padding: "6px 12px",
+        fontSize: 12,
+        fontWeight: 700,
+        cursor: "pointer",
+        ...style,
+      }}
+    >
+      {lang === "ar" ? "English" : "العربية"}
+    </button>
+  );
+}
 
 
 /* ============ ألوان وهوية بصرية: دفتر محاسبة قهوة سعودي ============ */
@@ -69,15 +118,15 @@ const BRANCHES_SEED = [
 ];
 
 const NAV = [
-  { key: "dash", label: "لوحة التحكم", icon: "◧" },
-  { key: "employees", label: "الموظفون", icon: "◈" },
-  { key: "iqamas", label: "الإقامات والعقود", icon: "◐" },
-  { key: "licenses", label: "تراخيص الفروع", icon: "▤" },
-  { key: "branches", label: "الكيانات والفروع", icon: "◫" },
-  { key: "attendance", label: "الحضور والإجازات", icon: "◔" },
-  { key: "payroll", label: "الرواتب و GOSI", icon: "◎" },
-  { key: "eos", label: "نهاية الخدمة", icon: "◆" },
-  { key: "settings", label: "الإعدادات", icon: "⚙" },
+  { key: "dash", label: "لوحة التحكم", labelEn: "Dashboard", icon: "◧" },
+  { key: "employees", label: "الموظفون", labelEn: "Employees", icon: "◈" },
+  { key: "iqamas", label: "الإقامات والعقود", labelEn: "Iqamas & Contracts", icon: "◐" },
+  { key: "licenses", label: "تراخيص الفروع", labelEn: "Branch Licenses", icon: "▤" },
+  { key: "branches", label: "الكيانات والفروع", labelEn: "Entities & Branches", icon: "◫" },
+  { key: "attendance", label: "الحضور والإجازات", labelEn: "Attendance & Leave", icon: "◔" },
+  { key: "payroll", label: "الرواتب و GOSI", labelEn: "Payroll & GOSI", icon: "◎" },
+  { key: "eos", label: "نهاية الخدمة", labelEn: "End of Service", icon: "◆" },
+  { key: "settings", label: "الإعدادات", labelEn: "Settings", icon: "⚙" },
 ];
 
 /* ============ المستخدمون والصلاحيات ============ */
@@ -86,17 +135,30 @@ const USERS_SEED = [
 ];
 
 const ROLE_LABELS = { admin: "أدمن", branch_manager: "مسؤول فرع", employee: "موظف" };
+const ROLE_LABELS_EN = { admin: "Admin", branch_manager: "Branch Manager", employee: "Employee" };
+
+/* ترجمة نصوص العرض فقط لقيم مخزّنة بالعربي (الحالة/الجنسية/إلخ) — القيمة المخزّنة في البيانات تفضل عربي دايمًا */
+const STATUS_LABELS_EN = { "نشط": "Active", "موقوف": "Suspended", "منتهي الخدمة": "Terminated" };
+const NATIONALITY_LABELS_EN = { "سعودي": "Saudi", "غير سعودي": "Non-Saudi" };
+const CONTRACT_TYPE_LABELS_EN = { "محدد المدة": "Fixed-term", "غير محدد المدة": "Unlimited" };
+const LEAVE_TYPE_LABELS_EN = { "سنوية": "Annual", "مرضية": "Sick", "طارئة": "Emergency", "بدون راتب": "Unpaid", "أخرى": "Other" };
+const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late" };
+const EOS_REASON_LABELS_EN = { "استقالة": "Resignation", "فصل من صاحب العمل": "Termination by Employer", "انتهاء عقد محدد المدة": "Fixed-term Contract End" };
+function trLabel(t, dict, v) {
+  return t(v, dict[v] || v);
+}
 
 const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "" };
 
 function navForRole(role) {
-  if (role === "admin") return [...NAV, { key: "users", label: "المستخدمون", icon: "◑" }];
+  if (role === "admin") return [...NAV, { key: "users", label: "المستخدمون", labelEn: "Users", icon: "◑" }];
   if (role === "branch_manager")
     return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "payroll", "eos"].includes(n.key));
   return [];
 }
 
 const SAUDI_HOLIDAYS_NOTE = "٢١ يوم إجازة سنوية (تزيد لـ ٣٠ يوم بعد ٥ سنوات خدمة) وفق نظام العمل السعودي";
+const SAUDI_HOLIDAYS_NOTE_EN = "21 days of annual leave (increasing to 30 days after 5 years of service) per Saudi labor law";
 
 function fmt(n) {
   if (n === "" || n === null || n === undefined || isNaN(n)) return "٠";
@@ -217,6 +279,7 @@ function Btn({ children, onClick, tone = "primary", small, type = "button" }) {
 
 /* ============ التطبيق الرئيسي ============ */
 function HRApp({ currentUser, users, setUsers, onLogout }) {
+  const { t } = useLang();
   const role = currentUser.role;
   const isAdmin = role === "admin";
   const isBranchManager = role === "branch_manager";
@@ -348,9 +411,12 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
           minHeight: "100vh",
         }}
       >
-        <div style={{ marginBottom: 26 }}>
-          <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 0.3 }}>نظام الموارد البشرية</div>
-          <div style={{ fontSize: 11, color: COLORS.goldLight, marginTop: 3 }}>مجموعة ينبع للمقاهي · السعودية</div>
+        <div style={{ marginBottom: 26, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 0.3 }}>{t("نظام الموارد البشرية", "HR System")}</div>
+            <div style={{ fontSize: 11, color: COLORS.goldLight, marginTop: 3 }}>{t("مجموعة ينبع للمقاهي · السعودية", "Yanbu Cafés Group · Saudi Arabia")}</div>
+          </div>
+          <LangToggle style={{ background: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.25)", color: "#F5EBDC", flexShrink: 0 }} />
         </div>
         <nav style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {navItems.map((n) => (
@@ -374,7 +440,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
               }}
             >
               <span style={{ fontSize: 15, color: COLORS.goldLight }}>{n.icon}</span>
-              {n.label}
+              {t(n.label, n.labelEn)}
             </button>
           ))}
         </nav>
@@ -388,7 +454,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
         >
           <div style={{ fontSize: 12.5, fontWeight: 700, color: "#fff" }}>{currentUser.name}</div>
           <div style={{ fontSize: 10.5, color: COLORS.goldLight, marginTop: 2, marginBottom: 10 }}>
-            {ROLE_LABELS[role]}
+            {t(ROLE_LABELS[role], ROLE_LABELS_EN[role])}
             {isBranchManager && ` · ${branchName(currentUser.branchId)}`}
           </div>
           <button
@@ -404,7 +470,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
               cursor: "pointer",
             }}
           >
-            تسجيل الخروج
+            {t("تسجيل الخروج", "Sign Out")}
           </button>
         </div>
       </aside>
@@ -478,6 +544,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
 
 /* ============ لوحة التحكم ============ */
 function Dashboard({ entities, branches, employees, leaves, branchName, entityName }) {
+  const { t } = useLang();
   const activeCount = employees.filter((e) => e.status === "نشط").length;
   const totalSalaries = employees.filter((e) => e.status === "نشط").reduce((s, e) => s + Number(e.salary || 0), 0);
   const today = new Date().toISOString().slice(0, 10);
@@ -490,17 +557,17 @@ function Dashboard({ entities, branches, employees, leaves, branchName, entityNa
 
   return (
     <div>
-      <Header title="لوحة التحكم" subtitle="نظرة عامة على الكيانات والفروع والموظفين" />
+      <Header title={t("لوحة التحكم", "Dashboard")} subtitle={t("نظرة عامة على الكيانات والفروع والموظفين", "Overview of entities, branches, and employees")} />
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
-        <ReceiptCard label="إجمالي الموظفين النشطين" value={fmt(activeCount)} sub={`من أصل ${fmt(employees.length)} مسجّل`} />
-        <ReceiptCard label="إجمالي الرواتب الشهرية" value={`${fmt(totalSalaries)} ﷼`} tone={COLORS.coffee} />
-        <ReceiptCard label="عدد الفروع" value={fmt(branches.length)} sub={`عبر ${fmt(entities.length)} كيانات`} />
-        <ReceiptCard label="في إجازة اليوم" value={fmt(onLeaveToday)} tone={onLeaveToday > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("إجمالي الموظفين النشطين", "Total Active Employees")} value={fmt(activeCount)} sub={t(`من أصل ${fmt(employees.length)} مسجّل`, `of ${fmt(employees.length)} registered`)} />
+        <ReceiptCard label={t("إجمالي الرواتب الشهرية", "Total Monthly Salaries")} value={`${fmt(totalSalaries)} ﷼`} tone={COLORS.coffee} />
+        <ReceiptCard label={t("عدد الفروع", "Number of Branches")} value={fmt(branches.length)} sub={t(`عبر ${fmt(entities.length)} كيانات`, `across ${fmt(entities.length)} entities`)} />
+        <ReceiptCard label={t("في إجازة اليوم", "On Leave Today")} value={fmt(onLeaveToday)} tone={onLeaveToday > 0 ? COLORS.brick : COLORS.green} />
       </div>
 
-      <SectionTitle>توزيع الموظفين حسب الفرع</SectionTitle>
+      <SectionTitle>{t("توزيع الموظفين حسب الفرع", "Employee Distribution by Branch")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
-        {byBranch.length === 0 && <Empty text="لا توجد فروع بعد — أضف فرعًا من تبويب الكيانات والفروع" />}
+        {byBranch.length === 0 && <Empty text={t("لا توجد فروع بعد — أضف فرعًا من تبويب الكيانات والفروع", "No branches yet — add one from the Entities & Branches tab")} />}
         {byBranch.map((b, i) => (
           <div
             key={b.id}
@@ -516,7 +583,7 @@ function Dashboard({ entities, branches, employees, leaves, branchName, entityNa
               <div style={{ fontWeight: 700, fontSize: 13.5 }}>{b.name}</div>
               <div style={{ fontSize: 11.5, color: "#8a7a63" }}>{entityName(b.entityId)} · {b.city}</div>
             </div>
-            <Stamp>{fmt(b.count)} موظف</Stamp>
+            <Stamp>{fmt(b.count)} {t("موظف", "employees")}</Stamp>
           </div>
         ))}
       </div>
@@ -585,19 +652,21 @@ function HijriNote({ dateStr }) {
 }
 
 /* حالة تاريخ (إقامة/عقد) حسب الأيام المتبقية */
-function expiryStatus(dateStr) {
-  if (!dateStr) return { label: "غير محدد", tone: "gold", days: null };
+function expiryStatus(dateStr, t) {
+  const tr = t || ((ar) => ar);
+  if (!dateStr) return { label: tr("غير محدد", "Not set"), tone: "gold", days: null };
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const d = new Date(dateStr);
   const days = Math.round((d - today) / (1000 * 60 * 60 * 24));
-  if (days < 0) return { label: `منتهية منذ ${Math.abs(days)} يوم`, tone: "brick", days };
-  if (days <= 30) return { label: `تنتهي خلال ${days} يوم`, tone: "brick", days };
-  if (days <= 90) return { label: `تنتهي خلال ${days} يوم`, tone: "gold", days };
-  return { label: `سارية (${days} يوم متبقي)`, tone: "green", days };
+  if (days < 0) return { label: tr(`منتهية منذ ${Math.abs(days)} يوم`, `Expired ${Math.abs(days)} days ago`), tone: "brick", days };
+  if (days <= 30) return { label: tr(`تنتهي خلال ${days} يوم`, `Expires in ${days} days`), tone: "brick", days };
+  if (days <= 90) return { label: tr(`تنتهي خلال ${days} يوم`, `Expires in ${days} days`), tone: "gold", days };
+  return { label: tr(`سارية (${days} يوم متبقي)`, `Valid (${days} days left)`), tone: "green", days };
 }
 
 function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch }) {
+  const { t } = useLang();
   const [form, setForm] = useState(EMPTY_EMP);
   const [editingId, setEditingId] = useState(null);
   const [filterBranch, setFilterBranch] = useState("");
@@ -631,28 +700,28 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 
   return (
     <div>
-      <Header title="الموظفون" subtitle="سجل بيانات الموظفين عبر جميع الفروع" />
+      <Header title={t("الموظفون", "Employees")} subtitle={t("سجل بيانات الموظفين عبر جميع الفروع", "Employee records across all branches")} />
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
-          {editingId ? "تعديل بيانات موظف" : "إضافة موظف جديد"}
+          {editingId ? t("تعديل بيانات موظف", "Edit Employee") : t("إضافة موظف جديد", "Add New Employee")}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-          <Field label="الاسم الكامل">
+          <Field label={t("الاسم الكامل", "Full Name")}>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
-          <Field label="رقم الهوية / الإقامة">
+          <Field label={t("رقم الهوية / الإقامة", "National ID / Iqama No.")}>
             <input style={inputStyle} value={form.nationalId} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} />
           </Field>
-          <Field label="الجنسية">
+          <Field label={t("الجنسية", "Nationality")}>
             <select style={inputStyle} value={form.nationality} onChange={(e) => setForm({ ...form, nationality: e.target.value })}>
-              <option>سعودي</option>
-              <option>غير سعودي</option>
+              <option value="سعودي">{t("سعودي", "Saudi")}</option>
+              <option value="غير سعودي">{t("غير سعودي", "Non-Saudi")}</option>
             </select>
           </Field>
-          <Field label="الفرع">
+          <Field label={t("الفرع", "Branch")}>
             <select style={inputStyle} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
-              <option value="">اختر الفرع</option>
+              <option value="">{t("اختر الفرع", "Select branch")}</option>
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
@@ -660,58 +729,58 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
               ))}
             </select>
           </Field>
-          <Field label="المسمى الوظيفي">
+          <Field label={t("المسمى الوظيفي", "Job Title")}>
             <input style={inputStyle} value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} />
           </Field>
-          <Field label="الراتب الأساسي (﷼)">
+          <Field label={t("الراتب الأساسي (﷼)", "Basic Salary (SAR)")}>
             <input type="number" style={inputStyle} value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
           </Field>
-          <Field label="تاريخ التعيين">
+          <Field label={t("تاريخ التعيين", "Hire Date")}>
             <input type="date" style={inputStyle} value={form.joinDate} onChange={(e) => setForm({ ...form, joinDate: e.target.value })} />
           </Field>
-          <Field label="رقم الجوال">
+          <Field label={t("رقم الجوال", "Mobile Number")}>
             <input style={inputStyle} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
           </Field>
-          <Field label="الحالة">
+          <Field label={t("الحالة", "Status")}>
             <select style={inputStyle} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-              <option>نشط</option>
-              <option>موقوف</option>
-              <option>منتهي الخدمة</option>
+              <option value="نشط">{t("نشط", "Active")}</option>
+              <option value="موقوف">{t("موقوف", "Suspended")}</option>
+              <option value="منتهي الخدمة">{t("منتهي الخدمة", "Terminated")}</option>
             </select>
           </Field>
         </div>
 
-        <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.coffee, margin: "14px 0 8px" }}>بيانات الإقامة والعقد</div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.coffee, margin: "14px 0 8px" }}>{t("بيانات الإقامة والعقد", "Iqama & Contract Details")}</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-          <Field label="تاريخ انتهاء الإقامة">
+          <Field label={t("تاريخ انتهاء الإقامة", "Iqama Expiry Date")}>
             <input type="date" style={inputStyle} value={form.iqamaExpiry} onChange={(e) => setForm({ ...form, iqamaExpiry: e.target.value })} />
           </Field>
-          <Field label="المهنة على الإقامة">
+          <Field label={t("المهنة على الإقامة", "Profession on Iqama")}>
             <input style={inputStyle} value={form.iqamaProfession} onChange={(e) => setForm({ ...form, iqamaProfession: e.target.value })} />
           </Field>
-          <Field label="نوع العقد">
+          <Field label={t("نوع العقد", "Contract Type")}>
             <select style={inputStyle} value={form.contractType} onChange={(e) => setForm({ ...form, contractType: e.target.value })}>
-              <option>محدد المدة</option>
-              <option>غير محدد المدة</option>
+              <option value="محدد المدة">{t("محدد المدة", "Fixed-term")}</option>
+              <option value="غير محدد المدة">{t("غير محدد المدة", "Unlimited")}</option>
             </select>
           </Field>
-          <Field label="بداية العقد">
+          <Field label={t("بداية العقد", "Contract Start")}>
             <input type="date" style={inputStyle} value={form.contractStart} onChange={(e) => setForm({ ...form, contractStart: e.target.value })} />
           </Field>
-          <Field label="نهاية العقد">
+          <Field label={t("نهاية العقد", "Contract End")}>
             <input type="date" style={inputStyle} value={form.contractEnd} onChange={(e) => setForm({ ...form, contractEnd: e.target.value })} />
           </Field>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-          <Btn onClick={submit}>{editingId ? "حفظ التعديل" : "إضافة الموظف"}</Btn>
-          {editingId && <Btn tone="secondary" onClick={resetForm}>إلغاء</Btn>}
+          <Btn onClick={submit}>{editingId ? t("حفظ التعديل", "Save Changes") : t("إضافة الموظف", "Add Employee")}</Btn>
+          {editingId && <Btn tone="secondary" onClick={resetForm}>{t("إلغاء", "Cancel")}</Btn>}
         </div>
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <SectionTitle>قائمة الموظفين ({fmt(list.length)})</SectionTitle>
+        <SectionTitle>{t("قائمة الموظفين", "Employee List")} ({fmt(list.length)})</SectionTitle>
         <select style={{ ...inputStyle, maxWidth: 220 }} value={filterBranch} onChange={(e) => setFilterBranch(e.target.value)}>
-          <option value="">كل الفروع</option>
+          <option value="">{t("كل الفروع", "All Branches")}</option>
           {branches.map((b) => (
             <option key={b.id} value={b.id}>
               {b.name}
@@ -721,13 +790,22 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
       </div>
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
-        {list.length === 0 && <Empty text="لا يوجد موظفون مطابقون" />}
+        {list.length === 0 && <Empty text={t("لا يوجد موظفون مطابقون", "No matching employees")} />}
         {list.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
-                {["الاسم", "الفرع", "الوظيفة", "الجنسية", "الراتب", "تاريخ التعيين", "الحالة", ""].map((h) => (
-                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>
+                {[
+                  t("الاسم", "Name"),
+                  t("الفرع", "Branch"),
+                  t("الوظيفة", "Position"),
+                  t("الجنسية", "Nationality"),
+                  t("الراتب", "Salary"),
+                  t("تاريخ التعيين", "Hire Date"),
+                  t("الحالة", "Status"),
+                  "",
+                ].map((h, i) => (
+                  <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>
                     {h}
                   </th>
                 ))}
@@ -739,15 +817,15 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
                   <td style={{ padding: "9px 12px", fontWeight: 700 }}>{e.name}</td>
                   <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === e.branchId)?.name || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{e.position}</td>
-                  <td style={{ padding: "9px 12px" }}>{e.nationality}</td>
+                  <td style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, e.nationality)}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{fmt(e.salary)} ﷼</td>
                   <td style={{ padding: "9px 12px" }}>{e.joinDate || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>
-                    <Stamp tone={e.status === "نشط" ? "green" : e.status === "موقوف" ? "gold" : "brick"}>{e.status}</Stamp>
+                    <Stamp tone={e.status === "نشط" ? "green" : e.status === "موقوف" ? "gold" : "brick"}>{trLabel(t, STATUS_LABELS_EN, e.status)}</Stamp>
                   </td>
                   <td style={{ padding: "9px 12px", display: "flex", gap: 6 }}>
-                    <Btn small tone="secondary" onClick={() => edit(e)}>تعديل</Btn>
-                    <Btn small tone="danger" onClick={() => remove(e.id)}>حذف</Btn>
+                    <Btn small tone="secondary" onClick={() => edit(e)}>{t("تعديل", "Edit")}</Btn>
+                    <Btn small tone="danger" onClick={() => remove(e.id)}>{t("حذف", "Delete")}</Btn>
                   </td>
                 </tr>
               ))}
@@ -761,6 +839,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 
 /* ============ الإقامات والعقود ============ */
 function IqamasContractsTab({ employees, setEmployees, branches }) {
+  const { t } = useLang();
   const [filterUrgency, setFilterUrgency] = useState("");
 
   const update = (id, field, value) => {
@@ -771,8 +850,8 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
 
   const rows = nonSaudi.map((e) => ({
     ...e,
-    iqamaStatus: expiryStatus(e.iqamaExpiry),
-    contractStatus: expiryStatus(e.contractEnd),
+    iqamaStatus: expiryStatus(e.iqamaExpiry, t),
+    contractStatus: expiryStatus(e.contractEnd, t),
   }));
 
   const filtered = rows.filter((r) => {
@@ -787,31 +866,41 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
 
   return (
     <div>
-      <Header title="الإقامات والعقود" subtitle="متابعة تواريخ انتهاء الإقامات وعقود العمل لتفادي الغرامات وتجديد العقود في وقتها" />
+      <Header title={t("الإقامات والعقود", "Iqamas & Contracts")} subtitle={t("متابعة تواريخ انتهاء الإقامات وعقود العمل لتفادي الغرامات وتجديد العقود في وقتها", "Track iqama and contract expiry dates to avoid fines and renew on time")} />
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
-        <ReceiptCard label="إقامات تنتهي خلال ٣٠ يوم" value={fmt(iqamaAlerts)} tone={iqamaAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label="عقود تنتهي خلال ٣٠ يوم" value={fmt(contractAlerts)} tone={contractAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label="إجمالي الموظفين النشطين" value={fmt(rows.length)} />
+        <ReceiptCard label={t("إقامات تنتهي خلال ٣٠ يوم", "Iqamas expiring within 30 days")} value={fmt(iqamaAlerts)} tone={iqamaAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("عقود تنتهي خلال ٣٠ يوم", "Contracts expiring within 30 days")} value={fmt(contractAlerts)} tone={contractAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("إجمالي الموظفين النشطين", "Total Active Employees")} value={fmt(rows.length)} />
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <SectionTitle>جدول المتابعة</SectionTitle>
+        <SectionTitle>{t("جدول المتابعة", "Tracking Table")}</SectionTitle>
         <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
-          <option value="">عرض الكل</option>
-          <option value="iqama">إقامات مقتربة من الانتهاء (٩٠ يوم)</option>
-          <option value="contract">عقود مقتربة من الانتهاء (٩٠ يوم)</option>
+          <option value="">{t("عرض الكل", "Show All")}</option>
+          <option value="iqama">{t("إقامات مقتربة من الانتهاء (٩٠ يوم)", "Iqamas nearing expiry (90 days)")}</option>
+          <option value="contract">{t("عقود مقتربة من الانتهاء (٩٠ يوم)", "Contracts nearing expiry (90 days)")}</option>
         </select>
       </div>
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
-        {filtered.length === 0 && <Empty text="لا توجد بيانات مطابقة" />}
+        {filtered.length === 0 && <Empty text={t("لا توجد بيانات مطابقة", "No matching data")} />}
         {filtered.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 980 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
-                {["الاسم", "الفرع", "الجنسية", "رقم الهوية/الإقامة", "انتهاء الإقامة", "حالة الإقامة", "نوع العقد", "نهاية العقد", "حالة العقد"].map((h) => (
-                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                {[
+                  t("الاسم", "Name"),
+                  t("الفرع", "Branch"),
+                  t("الجنسية", "Nationality"),
+                  t("رقم الهوية/الإقامة", "National ID/Iqama No."),
+                  t("انتهاء الإقامة", "Iqama Expiry"),
+                  t("حالة الإقامة", "Iqama Status"),
+                  t("نوع العقد", "Contract Type"),
+                  t("نهاية العقد", "Contract End"),
+                  t("حالة العقد", "Contract Status"),
+                ].map((h, i) => (
+                  <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -820,7 +909,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
                   <td style={{ padding: "9px 12px", fontWeight: 700 }}>{r.name}</td>
                   <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>{r.nationality}</td>
+                  <td style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{r.nationalId || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
@@ -840,8 +929,8 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                       value={r.contractType || "محدد المدة"}
                       onChange={(e) => update(r.id, "contractType", e.target.value)}
                     >
-                      <option>محدد المدة</option>
-                      <option>غير محدد المدة</option>
+                      <option value="محدد المدة">{t("محدد المدة", "Fixed-term")}</option>
+                      <option value="غير محدد المدة">{t("غير محدد المدة", "Unlimited")}</option>
                     </select>
                   </td>
                   <td style={{ padding: "9px 12px" }}>
@@ -855,7 +944,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                   </td>
                   <td style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.contractStatus.tone}>
-                      {r.contractType === "غير محدد المدة" && !r.contractEnd ? "عقد مفتوح" : r.contractStatus.label}
+                      {r.contractType === "غير محدد المدة" && !r.contractEnd ? t("عقد مفتوح", "Open-ended") : r.contractStatus.label}
                     </Stamp>
                   </td>
                 </tr>
@@ -866,7 +955,10 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
       </div>
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
-        التنبيهات هنا مبنية على التواريخ المسجَّلة فقط داخل التطبيق. تأكد من مطابقتها لتواريخ منصة أبشر أعمال / مقيم بشكل دوري، خصوصًا رسوم وغرامات تجديد الإقامة والعمل النظامي.
+        {t(
+          "التنبيهات هنا مبنية على التواريخ المسجَّلة فقط داخل التطبيق. تأكد من مطابقتها لتواريخ منصة أبشر أعمال / مقيم بشكل دوري، خصوصًا رسوم وغرامات تجديد الإقامة والعمل النظامي.",
+          "These alerts are based only on dates recorded in this app. Verify them regularly against Absher Business / Muqeem, especially iqama renewal fees and compliance fines."
+        )}
       </div>
     </div>
   );
@@ -893,6 +985,7 @@ const EMPTY_VEHICLE = {
 };
 
 function BranchLicensesTab({ branches, setBranches, employees, setEmployees, vehicles, setVehicles }) {
+  const { t } = useLang();
   const [filterUrgency, setFilterUrgency] = useState("");
   const [vehicleForm, setVehicleForm] = useState(EMPTY_VEHICLE);
   const [editingVehicleId, setEditingVehicleId] = useState(null);
@@ -936,22 +1029,22 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
 
   const branchRows = branches.map((b) => ({
     ...b,
-    crStatus: expiryStatus(b.crExpiry),
-    civilDefenseStatus: expiryStatus(b.civilDefenseExpiry),
-    municipalityStatus: expiryStatus(b.municipalityExpiry),
+    crStatus: expiryStatus(b.crExpiry, t),
+    civilDefenseStatus: expiryStatus(b.civilDefenseExpiry, t),
+    municipalityStatus: expiryStatus(b.municipalityExpiry, t),
   }));
 
   const activeEmployees = employees.filter((e) => e.status === "نشط");
   const healthRows = activeEmployees.map((e) => ({
     ...e,
-    healthCertStatus: expiryStatus(e.healthCertExpiry),
-    insuranceStatus: expiryStatus(e.insuranceExpiry),
+    healthCertStatus: expiryStatus(e.healthCertExpiry, t),
+    insuranceStatus: expiryStatus(e.insuranceExpiry, t),
   }));
 
   const vehicleRows = vehicles.map((v) => ({
     ...v,
-    istimaraStatus: expiryStatus(v.istimaraExpiry),
-    vehicleInsuranceStatus: expiryStatus(v.insuranceExpiry),
+    istimaraStatus: expiryStatus(v.istimaraExpiry, t),
+    vehicleInsuranceStatus: expiryStatus(v.insuranceExpiry, t),
   }));
 
   const filteredBranchRows = branchRows.filter((r) => {
@@ -972,36 +1065,53 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
 
   return (
     <div>
-      <Header title="تراخيص الفروع" subtitle="متابعة تواريخ انتهاء السجل التجاري ورخصة الدفاع المدني ورخصة البلدية للفروع، والشهادات الصحية والتأمين الطبي للموظفين، واستمارات وتأمين سيارات الشركة" />
+      <Header
+        title={t("تراخيص الفروع", "Branch Licenses")}
+        subtitle={t(
+          "متابعة تواريخ انتهاء السجل التجاري ورخصة الدفاع المدني ورخصة البلدية للفروع، والشهادات الصحية والتأمين الطبي للموظفين، واستمارات وتأمين سيارات الشركة",
+          "Track commercial register, civil defense, and municipality license expiry for branches, employee health certificates & medical insurance, and company vehicle registration & insurance"
+        )}
+      />
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
-        <ReceiptCard label="سجلات تجارية تنتهي خلال ٣٠ يوم" value={fmt(crAlerts)} tone={crAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label="رخص دفاع مدني تنتهي خلال ٣٠ يوم" value={fmt(civilDefenseAlerts)} tone={civilDefenseAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label="رخص بلدية تنتهي خلال ٣٠ يوم" value={fmt(municipalityAlerts)} tone={municipalityAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label="شهادات صحية تنتهي خلال ٣٠ يوم" value={fmt(healthAlerts)} tone={healthAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label="تأمين طبي ينتهي خلال ٣٠ يوم" value={fmt(insuranceAlerts)} tone={insuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label="استمارات سيارات تنتهي خلال ٣٠ يوم" value={fmt(istimaraAlerts)} tone={istimaraAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label="تأمين سيارات ينتهي خلال ٣٠ يوم" value={fmt(vehicleInsuranceAlerts)} tone={vehicleInsuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("سجلات تجارية تنتهي خلال ٣٠ يوم", "Commercial registers expiring in 30 days")} value={fmt(crAlerts)} tone={crAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("رخص دفاع مدني تنتهي خلال ٣٠ يوم", "Civil defense licenses expiring in 30 days")} value={fmt(civilDefenseAlerts)} tone={civilDefenseAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("رخص بلدية تنتهي خلال ٣٠ يوم", "Municipality licenses expiring in 30 days")} value={fmt(municipalityAlerts)} tone={municipalityAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("شهادات صحية تنتهي خلال ٣٠ يوم", "Health certificates expiring in 30 days")} value={fmt(healthAlerts)} tone={healthAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("تأمين طبي ينتهي خلال ٣٠ يوم", "Medical insurance expiring in 30 days")} value={fmt(insuranceAlerts)} tone={insuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("استمارات سيارات تنتهي خلال ٣٠ يوم", "Vehicle registrations expiring in 30 days")} value={fmt(istimaraAlerts)} tone={istimaraAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("تأمين سيارات ينتهي خلال ٣٠ يوم", "Vehicle insurance expiring in 30 days")} value={fmt(vehicleInsuranceAlerts)} tone={vehicleInsuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <SectionTitle>تراخيص الفروع</SectionTitle>
+        <SectionTitle>{t("تراخيص الفروع", "Branch Licenses")}</SectionTitle>
         <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
-          <option value="">عرض الكل</option>
-          <option value="cr">سجل تجاري مقترب من الانتهاء (٩٠ يوم)</option>
-          <option value="civilDefense">دفاع مدني مقترب من الانتهاء (٩٠ يوم)</option>
-          <option value="municipality">رخصة بلدية مقتربة من الانتهاء (٩٠ يوم)</option>
+          <option value="">{t("عرض الكل", "Show All")}</option>
+          <option value="cr">{t("سجل تجاري مقترب من الانتهاء (٩٠ يوم)", "Commercial register nearing expiry (90 days)")}</option>
+          <option value="civilDefense">{t("دفاع مدني مقترب من الانتهاء (٩٠ يوم)", "Civil defense nearing expiry (90 days)")}</option>
+          <option value="municipality">{t("رخصة بلدية مقتربة من الانتهاء (٩٠ يوم)", "Municipality license nearing expiry (90 days)")}</option>
         </select>
       </div>
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginBottom: 26 }}>
-        {filteredBranchRows.length === 0 && <Empty text="لا توجد فروع مطابقة" />}
+        {filteredBranchRows.length === 0 && <Empty text={t("لا توجد فروع مطابقة", "No matching branches")} />}
         {filteredBranchRows.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1080 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
-                {["الفرع", "رقم السجل التجاري", "انتهاء السجل التجاري", "حالة السجل التجاري", "رقم رخصة الدفاع المدني", "انتهاء الدفاع المدني", "حالة الدفاع المدني", "رقم رخصة البلدية", "انتهاء رخصة البلدية", "حالة رخصة البلدية"].map((h) => (
-                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                {[
+                  t("الفرع", "Branch"),
+                  t("رقم السجل التجاري", "CR Number"),
+                  t("انتهاء السجل التجاري", "CR Expiry"),
+                  t("حالة السجل التجاري", "CR Status"),
+                  t("رقم رخصة الدفاع المدني", "Civil Defense License No."),
+                  t("انتهاء الدفاع المدني", "Civil Defense Expiry"),
+                  t("حالة الدفاع المدني", "Civil Defense Status"),
+                  t("رقم رخصة البلدية", "Municipality License No."),
+                  t("انتهاء رخصة البلدية", "Municipality License Expiry"),
+                  t("حالة رخصة البلدية", "Municipality License Status"),
+                ].map((h, i) => (
+                  <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1073,15 +1183,25 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
         )}
       </div>
 
-      <SectionTitle>الشهادات الصحية والتأمين الطبي للموظفين</SectionTitle>
+      <SectionTitle>{t("الشهادات الصحية والتأمين الطبي للموظفين", "Employee Health Certificates & Medical Insurance")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginTop: 10 }}>
-        {healthRows.length === 0 && <Empty text="لا يوجد موظفون نشطون" />}
+        {healthRows.length === 0 && <Empty text={t("لا يوجد موظفون نشطون", "No active employees")} />}
         {healthRows.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1100 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
-                {["الاسم", "الفرع", "الوظيفة", "انتهاء الشهادة الصحية", "حالة الشهادة الصحية", "شركة التأمين", "رقم وثيقة التأمين", "انتهاء التأمين الطبي", "حالة التأمين الطبي"].map((h) => (
-                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                {[
+                  t("الاسم", "Name"),
+                  t("الفرع", "Branch"),
+                  t("الوظيفة", "Position"),
+                  t("انتهاء الشهادة الصحية", "Health Cert. Expiry"),
+                  t("حالة الشهادة الصحية", "Health Cert. Status"),
+                  t("شركة التأمين", "Insurance Company"),
+                  t("رقم وثيقة التأمين", "Policy Number"),
+                  t("انتهاء التأمين الطبي", "Medical Insurance Expiry"),
+                  t("حالة التأمين الطبي", "Medical Insurance Status"),
+                ].map((h, i) => (
+                  <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1136,21 +1256,21 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
         )}
       </div>
 
-      <SectionTitle>سيارات الشركة — الاستمارة والتأمين</SectionTitle>
+      <SectionTitle>{t("سيارات الشركة — الاستمارة والتأمين", "Company Vehicles — Registration & Insurance")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginTop: 10, marginBottom: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
-          {editingVehicleId ? "تعديل بيانات سيارة" : "إضافة سيارة جديدة"}
+          {editingVehicleId ? t("تعديل بيانات سيارة", "Edit Vehicle") : t("إضافة سيارة جديدة", "Add New Vehicle")}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-          <Field label="رقم اللوحة">
+          <Field label={t("رقم اللوحة", "Plate Number")}>
             <input style={inputStyle} value={vehicleForm.plateNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, plateNumber: e.target.value })} />
           </Field>
-          <Field label="نوع/موديل السيارة">
+          <Field label={t("نوع/موديل السيارة", "Vehicle Make/Model")}>
             <input style={inputStyle} value={vehicleForm.make} onChange={(e) => setVehicleForm({ ...vehicleForm, make: e.target.value })} />
           </Field>
-          <Field label="الفرع التابعة له">
+          <Field label={t("الفرع التابعة له", "Assigned Branch")}>
             <select style={inputStyle} value={vehicleForm.branchId} onChange={(e) => setVehicleForm({ ...vehicleForm, branchId: e.target.value })}>
-              <option value="">اختر الفرع</option>
+              <option value="">{t("اختر الفرع", "Select branch")}</option>
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
@@ -1158,33 +1278,44 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
               ))}
             </select>
           </Field>
-          <Field label="تاريخ انتهاء الاستمارة">
+          <Field label={t("تاريخ انتهاء الاستمارة", "Registration Expiry")}>
             <input type="date" style={inputStyle} value={vehicleForm.istimaraExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, istimaraExpiry: e.target.value })} />
           </Field>
-          <Field label="شركة تأمين السيارة">
+          <Field label={t("شركة تأمين السيارة", "Vehicle Insurance Company")}>
             <input style={inputStyle} value={vehicleForm.insuranceCompany} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceCompany: e.target.value })} />
           </Field>
-          <Field label="رقم وثيقة تأمين السيارة">
+          <Field label={t("رقم وثيقة تأمين السيارة", "Vehicle Policy Number")}>
             <input style={inputStyle} value={vehicleForm.insurancePolicyNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, insurancePolicyNumber: e.target.value })} />
           </Field>
-          <Field label="تاريخ انتهاء تأمين السيارة">
+          <Field label={t("تاريخ انتهاء تأمين السيارة", "Vehicle Insurance Expiry")}>
             <input type="date" style={inputStyle} value={vehicleForm.insuranceExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceExpiry: e.target.value })} />
           </Field>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-          <Btn onClick={submitVehicle}>{editingVehicleId ? "حفظ التعديل" : "إضافة السيارة"}</Btn>
-          {editingVehicleId && <Btn tone="secondary" onClick={resetVehicleForm}>إلغاء</Btn>}
+          <Btn onClick={submitVehicle}>{editingVehicleId ? t("حفظ التعديل", "Save Changes") : t("إضافة السيارة", "Add Vehicle")}</Btn>
+          {editingVehicleId && <Btn tone="secondary" onClick={resetVehicleForm}>{t("إلغاء", "Cancel")}</Btn>}
         </div>
       </div>
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
-        {vehicleRows.length === 0 && <Empty text="لا توجد سيارات مسجَّلة" />}
+        {vehicleRows.length === 0 && <Empty text={t("لا توجد سيارات مسجَّلة", "No registered vehicles")} />}
         {vehicleRows.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1150 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
-                {["رقم اللوحة", "النوع/الموديل", "الفرع", "انتهاء الاستمارة", "حالة الاستمارة", "شركة التأمين", "رقم الوثيقة", "انتهاء تأمين السيارة", "حالة تأمين السيارة", ""].map((h) => (
-                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                {[
+                  t("رقم اللوحة", "Plate Number"),
+                  t("النوع/الموديل", "Make/Model"),
+                  t("الفرع", "Branch"),
+                  t("انتهاء الاستمارة", "Registration Expiry"),
+                  t("حالة الاستمارة", "Registration Status"),
+                  t("شركة التأمين", "Insurance Company"),
+                  t("رقم الوثيقة", "Policy Number"),
+                  t("انتهاء تأمين السيارة", "Insurance Expiry"),
+                  t("حالة تأمين السيارة", "Insurance Status"),
+                  "",
+                ].map((h, i) => (
+                  <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1221,8 +1352,8 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     <Stamp tone={r.vehicleInsuranceStatus.tone}>{r.vehicleInsuranceStatus.label}</Stamp>
                   </td>
                   <td style={{ padding: "9px 12px", display: "flex", gap: 6 }}>
-                    <Btn small tone="secondary" onClick={() => editVehicle(r)}>تعديل</Btn>
-                    <Btn small tone="danger" onClick={() => removeVehicle(r.id)}>حذف</Btn>
+                    <Btn small tone="secondary" onClick={() => editVehicle(r)}>{t("تعديل", "Edit")}</Btn>
+                    <Btn small tone="danger" onClick={() => removeVehicle(r.id)}>{t("حذف", "Delete")}</Btn>
                   </td>
                 </tr>
               ))}
@@ -1232,7 +1363,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
       </div>
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
-        التنبيهات هنا مبنية على التواريخ المسجَّلة فقط داخل التطبيق. تأكد من مطابقتها لمنصة بلدي وتراخيص الدفاع المدني والشهادات الصحية وشركة التأمين الطبي واستمارات المرور بشكل دوري.
+        {t(
+          "التنبيهات هنا مبنية على التواريخ المسجَّلة فقط داخل التطبيق. تأكد من مطابقتها لمنصة بلدي وتراخيص الدفاع المدني والشهادات الصحية وشركة التأمين الطبي واستمارات المرور بشكل دوري.",
+          "These alerts are based only on dates recorded in this app. Verify them regularly against Balady, civil defense licensing, health certification, medical insurance, and vehicle registration platforms."
+        )}
       </div>
     </div>
   );
@@ -1240,6 +1374,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
 
 /* ============ الكيانات والفروع ============ */
 function BranchesTab({ entities, setEntities, branches, setBranches, employees }) {
+  const { t } = useLang();
   const [entityName, setEntityName] = useState("");
   const [branchForm, setBranchForm] = useState({ entityId: "", name: "", city: "" });
 
@@ -1261,18 +1396,18 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees }
 
   return (
     <div>
-      <Header title="الكيانات والفروع" subtitle="الهيكل التنظيمي للمجموعة" />
+      <Header title={t("الكيانات والفروع", "Entities & Branches")} subtitle={t("الهيكل التنظيمي للمجموعة", "The group's organizational structure")} />
 
-      <SectionTitle>الكيانات (المؤسسات / الشركات)</SectionTitle>
+      <SectionTitle>{t("الكيانات (المؤسسات / الشركات)", "Entities (Establishments / Companies)")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
         <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
           <input
             style={{ ...inputStyle, flex: 1 }}
-            placeholder="اسم الكيان الجديد"
+            placeholder={t("اسم الكيان الجديد", "New entity name")}
             value={entityName}
             onChange={(e) => setEntityName(e.target.value)}
           />
-          <Btn onClick={addEntity}>إضافة كيان</Btn>
+          <Btn onClick={addEntity}>{t("إضافة كيان", "Add Entity")}</Btn>
         </div>
         {entities.map((en) => (
           <div
@@ -1281,19 +1416,19 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees }
           >
             <div style={{ fontSize: 13, fontWeight: 600 }}>{en.name}</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <Stamp>{branches.filter((b) => b.entityId === en.id).length} فرع</Stamp>
-              <Btn small tone="danger" onClick={() => removeEntity(en.id)}>حذف</Btn>
+              <Stamp>{branches.filter((b) => b.entityId === en.id).length} {t("فرع", "branches")}</Stamp>
+              <Btn small tone="danger" onClick={() => removeEntity(en.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
         ))}
       </div>
 
-      <SectionTitle>الفروع</SectionTitle>
+      <SectionTitle>{t("الفروع", "Branches")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
-          <Field label="الكيان التابع له">
+          <Field label={t("الكيان التابع له", "Parent Entity")}>
             <select style={inputStyle} value={branchForm.entityId} onChange={(e) => setBranchForm({ ...branchForm, entityId: e.target.value })}>
-              <option value="">اختر الكيان</option>
+              <option value="">{t("اختر الكيان", "Select entity")}</option>
               {entities.map((en) => (
                 <option key={en.id} value={en.id}>
                   {en.name}
@@ -1301,14 +1436,14 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees }
               ))}
             </select>
           </Field>
-          <Field label="اسم الفرع">
+          <Field label={t("اسم الفرع", "Branch Name")}>
             <input style={inputStyle} value={branchForm.name} onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })} />
           </Field>
-          <Field label="المدينة">
+          <Field label={t("المدينة", "City")}>
             <input style={inputStyle} value={branchForm.city} onChange={(e) => setBranchForm({ ...branchForm, city: e.target.value })} />
           </Field>
           <div style={{ display: "flex", alignItems: "flex-end" }}>
-            <Btn onClick={addBranch}>إضافة فرع</Btn>
+            <Btn onClick={addBranch}>{t("إضافة فرع", "Add Branch")}</Btn>
           </div>
         </div>
 
@@ -1322,8 +1457,8 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees }
               <div style={{ fontSize: 11, color: "#8a7a63" }}>{entities.find((en) => en.id === b.entityId)?.name || "—"} · {b.city}</div>
             </div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <Stamp>{employees.filter((e) => e.branchId === b.id).length} موظف</Stamp>
-              <Btn small tone="danger" onClick={() => removeBranch(b.id)}>حذف</Btn>
+              <Stamp>{employees.filter((e) => e.branchId === b.id).length} {t("موظف", "employees")}</Stamp>
+              <Btn small tone="danger" onClick={() => removeBranch(b.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
         ))}
@@ -1334,6 +1469,7 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees }
 
 /* ============ الحضور والإجازات ============ */
 function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance }) {
+  const { t } = useLang();
   const [leaveForm, setLeaveForm] = useState({ employeeId: "", type: "سنوية", from: "", to: "" });
   const [attForm, setAttForm] = useState({ employeeId: "", date: "", status: "حاضر", lateMinutes: "" });
 
@@ -1356,80 +1492,83 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
 
   return (
     <div>
-      <Header title="الحضور والإجازات" subtitle={SAUDI_HOLIDAYS_NOTE} />
+      <Header title={t("الحضور والإجازات", "Attendance & Leave")} subtitle={t(SAUDI_HOLIDAYS_NOTE, SAUDI_HOLIDAYS_NOTE_EN)} />
 
-      <SectionTitle>تسجيل إجازة</SectionTitle>
+      <SectionTitle>{t("تسجيل إجازة", "Register Leave")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-          <Field label="الموظف">
+          <Field label={t("الموظف", "Employee")}>
             <select style={inputStyle} value={leaveForm.employeeId} onChange={(e) => setLeaveForm({ ...leaveForm, employeeId: e.target.value })}>
-              <option value="">اختر الموظف</option>
+              <option value="">{t("اختر الموظف", "Select employee")}</option>
               {employees.map((e) => (
                 <option key={e.id} value={e.id}>{e.name}</option>
               ))}
             </select>
           </Field>
-          <Field label="نوع الإجازة">
+          <Field label={t("نوع الإجازة", "Leave Type")}>
             <select style={inputStyle} value={leaveForm.type} onChange={(e) => setLeaveForm({ ...leaveForm, type: e.target.value })}>
-              <option>سنوية</option>
-              <option>مرضية</option>
-              <option>طارئة</option>
-              <option>بدون راتب</option>
-              <option>أخرى</option>
+              <option value="سنوية">{t("سنوية", "Annual")}</option>
+              <option value="مرضية">{t("مرضية", "Sick")}</option>
+              <option value="طارئة">{t("طارئة", "Emergency")}</option>
+              <option value="بدون راتب">{t("بدون راتب", "Unpaid")}</option>
+              <option value="أخرى">{t("أخرى", "Other")}</option>
             </select>
           </Field>
-          <Field label="من تاريخ">
+          <Field label={t("من تاريخ", "From Date")}>
             <input type="date" style={inputStyle} value={leaveForm.from} onChange={(e) => setLeaveForm({ ...leaveForm, from: e.target.value })} />
           </Field>
-          <Field label="إلى تاريخ">
+          <Field label={t("إلى تاريخ", "To Date")}>
             <input type="date" style={inputStyle} value={leaveForm.to} onChange={(e) => setLeaveForm({ ...leaveForm, to: e.target.value })} />
           </Field>
           <div style={{ display: "flex", alignItems: "flex-end" }}>
-            <Btn onClick={addLeave}>تسجيل الإجازة</Btn>
+            <Btn onClick={addLeave}>{t("تسجيل الإجازة", "Register Leave")}</Btn>
           </div>
         </div>
         {leaveForm.type === "بدون راتب" && (
           <div style={{ marginTop: 10, fontSize: 11.5, color: COLORS.brick }}>
-            ملاحظة: إجازة "بدون راتب" تُخصم تلقائيًا من راتب الموظف بواقع يوم كامل عن كل يوم إجازة — يظهر الخصم في تبويب الرواتب.
+            {t(
+              'ملاحظة: إجازة "بدون راتب" تُخصم تلقائيًا من راتب الموظف بواقع يوم كامل عن كل يوم إجازة — يظهر الخصم في تبويب الرواتب.',
+              'Note: "Unpaid" leave is automatically deducted from the employee\'s salary at a full day per leave day — the deduction appears in the Payroll tab.'
+            )}
           </div>
         )}
       </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
-        {leaves.length === 0 && <Empty text="لا توجد إجازات مسجّلة" />}
+        {leaves.length === 0 && <Empty text={t("لا توجد إجازات مسجّلة", "No registered leaves")} />}
         {leaves.map((l, i) => (
           <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5 }}>
-            <div><b>{empName(l.employeeId)}</b> — {l.type}</div>
+            <div><b>{empName(l.employeeId)}</b> — {trLabel(t, LEAVE_TYPE_LABELS_EN, l.type)}</div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <span style={{ fontFamily: "Consolas, monospace" }}>{l.from} → {l.to}</span>
-              <Btn small tone="danger" onClick={() => removeLeave(l.id)}>حذف</Btn>
+              <Btn small tone="danger" onClick={() => removeLeave(l.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
         ))}
       </div>
 
-      <SectionTitle>سجل حضور يومي</SectionTitle>
+      <SectionTitle>{t("سجل حضور يومي", "Daily Attendance Log")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-          <Field label="الموظف">
+          <Field label={t("الموظف", "Employee")}>
             <select style={inputStyle} value={attForm.employeeId} onChange={(e) => setAttForm({ ...attForm, employeeId: e.target.value })}>
-              <option value="">اختر الموظف</option>
+              <option value="">{t("اختر الموظف", "Select employee")}</option>
               {employees.map((e) => (
                 <option key={e.id} value={e.id}>{e.name}</option>
               ))}
             </select>
           </Field>
-          <Field label="التاريخ">
+          <Field label={t("التاريخ", "Date")}>
             <input type="date" style={inputStyle} value={attForm.date} onChange={(e) => setAttForm({ ...attForm, date: e.target.value })} />
           </Field>
-          <Field label="الحالة">
+          <Field label={t("الحالة", "Status")}>
             <select style={inputStyle} value={attForm.status} onChange={(e) => setAttForm({ ...attForm, status: e.target.value })}>
-              <option>حاضر</option>
-              <option>غائب</option>
-              <option>متأخر</option>
+              <option value="حاضر">{t("حاضر", "Present")}</option>
+              <option value="غائب">{t("غائب", "Absent")}</option>
+              <option value="متأخر">{t("متأخر", "Late")}</option>
             </select>
           </Field>
           {attForm.status === "متأخر" && (
-            <Field label="عدد دقائق التأخير">
+            <Field label={t("عدد دقائق التأخير", "Minutes Late")}>
               <input
                 type="number"
                 style={inputStyle}
@@ -1439,20 +1578,20 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
             </Field>
           )}
           <div style={{ display: "flex", alignItems: "flex-end" }}>
-            <Btn onClick={addAtt}>تسجيل</Btn>
+            <Btn onClick={addAtt}>{t("تسجيل", "Register")}</Btn>
           </div>
         </div>
       </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
-        {attendance.length === 0 && <Empty text="لا توجد سجلات حضور" />}
+        {attendance.length === 0 && <Empty text={t("لا توجد سجلات حضور", "No attendance records")} />}
         {attendance.slice().reverse().map((a, i) => (
           <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5 }}>
             <div><b>{empName(a.employeeId)}</b> — {a.date}</div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>
-                {a.status}{a.status === "متأخر" && a.lateMinutes ? ` (${a.lateMinutes} د)` : ""}
+                {trLabel(t, ATTENDANCE_STATUS_LABELS_EN, a.status)}{a.status === "متأخر" && a.lateMinutes ? ` (${a.lateMinutes} ${t("د", "min")})` : ""}
               </Stamp>
-              <Btn small tone="danger" onClick={() => removeAtt(a.id)}>حذف</Btn>
+              <Btn small tone="danger" onClick={() => removeAtt(a.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
         ))}
@@ -1463,6 +1602,7 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
 
 /* ============ الرواتب و GOSI ============ */
 function PayrollTab({ employees, branches, entities, gosiRates, attendance, leaves }) {
+  const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
 
@@ -1527,26 +1667,26 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
 
   return (
     <div>
-      <Header title="الرواتب واشتراكات التأمينات (GOSI)" subtitle="النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب" />
+      <Header title={t("الرواتب واشتراكات التأمينات (GOSI)", "Payroll & GOSI Contributions")} subtitle={t("النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب", "Rates are defaults and editable from the Settings tab — verify the official rate at calculation time")} />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
-        <Field label="شهر احتساب الغياب والتأخير">
+        <Field label={t("شهر احتساب الغياب والتأخير", "Attendance Calculation Month")}>
           <input type="month" style={inputStyle} value={month} onChange={(e) => setMonth(e.target.value)} />
         </Field>
       </div>
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
-        <ReceiptCard label="إجمالي الرواتب الأساسية" value={`${fmt(totals.salary)} ﷼`} />
-        <ReceiptCard label="حصة الموظفين GOSI (تخصم)" value={`${fmt(totals.empShare)} ﷼`} tone={COLORS.brick} />
-        <ReceiptCard label="خصومات الغياب والتأخير" value={`${fmt(totals.attendanceDeduction)} ﷼`} tone={COLORS.brick} />
-        <ReceiptCard label="حصة صاحب العمل" value={`${fmt(totals.employerShare)} ﷼`} tone={COLORS.coffee} />
-        <ReceiptCard label="إجمالي التكلفة الشهرية" value={`${fmt(totals.totalCost)} ﷼`} tone={COLORS.espresso} />
+        <ReceiptCard label={t("إجمالي الرواتب الأساسية", "Total Basic Salaries")} value={`${fmt(totals.salary)} ﷼`} />
+        <ReceiptCard label={t("حصة الموظفين GOSI (تخصم)", "Employees' GOSI Share (deducted)")} value={`${fmt(totals.empShare)} ﷼`} tone={COLORS.brick} />
+        <ReceiptCard label={t("خصومات الغياب والتأخير", "Absence & Lateness Deductions")} value={`${fmt(totals.attendanceDeduction)} ﷼`} tone={COLORS.brick} />
+        <ReceiptCard label={t("حصة صاحب العمل", "Employer's Share")} value={`${fmt(totals.employerShare)} ﷼`} tone={COLORS.coffee} />
+        <ReceiptCard label={t("إجمالي التكلفة الشهرية", "Total Monthly Cost")} value={`${fmt(totals.totalCost)} ﷼`} tone={COLORS.espresso} />
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <SectionTitle>كشف الرواتب</SectionTitle>
+        <SectionTitle>{t("كشف الرواتب", "Payroll Sheet")}</SectionTitle>
         <select style={{ ...inputStyle, maxWidth: 220 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
-          <option value="">كل الفروع</option>
+          <option value="">{t("كل الفروع", "All Branches")}</option>
           {branches.map((b) => (
             <option key={b.id} value={b.id}>{b.name}</option>
           ))}
@@ -1554,29 +1694,29 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
       </div>
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
-        {rows.length === 0 && <Empty text="لا يوجد موظفون نشطون مطابقون" />}
+        {rows.length === 0 && <Empty text={t("لا يوجد موظفون نشطون مطابقون", "No matching active employees")} />}
         {rows.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1240 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 {[
-                  "الاسم",
-                  "الفرع",
-                  "الجنسية",
-                  "الراتب الأساسي",
-                  "حصة الموظف GOSI",
-                  "أيام غياب",
-                  "خصم الغياب",
-                  "دقائق تأخير",
-                  "خصم التأخير",
-                  "أيام إجازة بدون راتب",
-                  "خصم الإجازة",
-                  "إجمالي الخصومات",
-                  "حصة صاحب العمل",
-                  "الصافي للموظف",
-                  "تكلفة الشركة",
-                ].map((h) => (
-                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                  t("الاسم", "Name"),
+                  t("الفرع", "Branch"),
+                  t("الجنسية", "Nationality"),
+                  t("الراتب الأساسي", "Basic Salary"),
+                  t("حصة الموظف GOSI", "Employee GOSI Share"),
+                  t("أيام غياب", "Absent Days"),
+                  t("خصم الغياب", "Absence Deduction"),
+                  t("دقائق تأخير", "Late Minutes"),
+                  t("خصم التأخير", "Lateness Deduction"),
+                  t("أيام إجازة بدون راتب", "Unpaid Leave Days"),
+                  t("خصم الإجازة", "Leave Deduction"),
+                  t("إجمالي الخصومات", "Total Deductions"),
+                  t("حصة صاحب العمل", "Employer Share"),
+                  t("الصافي للموظف", "Net for Employee"),
+                  t("تكلفة الشركة", "Company Cost"),
+                ].map((h, i) => (
+                  <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -1585,7 +1725,7 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
                   <td style={{ padding: "9px 12px", fontFamily: "inherit", fontWeight: 700 }}>{r.name}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{r.nationality}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.absentDays)}</td>
@@ -1606,7 +1746,10 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
       </div>
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
-        احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ ٣٠. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ ٤٨٠ دقيقة، على أساس ٨ ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه.
+        {t(
+          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ ٣٠. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ ٤٨٠ دقيقة، على أساس ٨ ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه.',
+          'Deduction calculation: Daily rate = Basic salary ÷ 30. Absence deduction = absent days × daily rate. Lateness deduction = late minutes × (daily rate ÷ 480 minutes, based on an 8-hour workday). Unpaid leave deduction = leave days × daily rate. Figures are based on records from the "Attendance & Leave" tab for the month selected above.'
+        )}
       </div>
     </div>
   );
@@ -1614,6 +1757,7 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
 
 /* ============ نهاية الخدمة ============ */
 function EOSTab({ employees }) {
+  const { t } = useLang();
   const [empId, setEmpId] = useState("");
   const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10));
   const [reason, setReason] = useState("استقالة");
@@ -1631,12 +1775,12 @@ function EOSTab({ employees }) {
     let ratio = 1;
     let note = "";
     if (reason === "استقالة") {
-      if (years < 2) { ratio = 0; note = "لا يستحق مكافأة (أقل من سنتين خدمة)"; }
-      else if (years < 5) { ratio = 1 / 3; note = "يستحق ثلث المكافأة (خدمة من ٢ إلى ٥ سنوات)"; }
-      else if (years < 10) { ratio = 2 / 3; note = "يستحق ثلثي المكافأة (خدمة من ٥ إلى ١٠ سنوات)"; }
-      else { ratio = 1; note = "يستحق المكافأة كاملة (خدمة ١٠ سنوات فأكثر)"; }
+      if (years < 2) { ratio = 0; note = t("لا يستحق مكافأة (أقل من سنتين خدمة)", "Not entitled to a bonus (less than 2 years of service)"); }
+      else if (years < 5) { ratio = 1 / 3; note = t("يستحق ثلث المكافأة (خدمة من ٢ إلى ٥ سنوات)", "Entitled to one-third of the bonus (2 to 5 years of service)"); }
+      else if (years < 10) { ratio = 2 / 3; note = t("يستحق ثلثي المكافأة (خدمة من ٥ إلى ١٠ سنوات)", "Entitled to two-thirds of the bonus (5 to 10 years of service)"); }
+      else { ratio = 1; note = t("يستحق المكافأة كاملة (خدمة ١٠ سنوات فأكثر)", "Entitled to the full bonus (10+ years of service)"); }
     } else {
-      note = reason === "فصل من صاحب العمل" ? "يستحق المكافأة كاملة (إنهاء من صاحب العمل)" : "يستحق المكافأة كاملة";
+      note = reason === "فصل من صاحب العمل" ? t("يستحق المكافأة كاملة (إنهاء من صاحب العمل)", "Entitled to the full bonus (terminated by employer)") : t("يستحق المكافأة كاملة", "Entitled to the full bonus");
     }
     return { full, adjusted: full * ratio, note };
   };
@@ -1645,46 +1789,49 @@ function EOSTab({ employees }) {
 
   return (
     <div>
-      <Header title="حاسبة مكافأة نهاية الخدمة" subtitle="وفق نظام العمل السعودي (المادتان ٨٤–٨٧) — نصف شهر عن كل سنة من أول ٥ سنوات، وشهر كامل عمّا زاد" />
+      <Header title={t("حاسبة مكافأة نهاية الخدمة", "End of Service Benefit Calculator")} subtitle={t("وفق نظام العمل السعودي (المادتان ٨٤–٨٧) — نصف شهر عن كل سنة من أول ٥ سنوات، وشهر كامل عمّا زاد", "Per Saudi Labor Law (Articles 84–87) — half a month per year for the first 5 years, and a full month for each year after")} />
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 20 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-          <Field label="الموظف">
+          <Field label={t("الموظف", "Employee")}>
             <select style={inputStyle} value={empId} onChange={(e) => setEmpId(e.target.value)}>
-              <option value="">اختر الموظف</option>
+              <option value="">{t("اختر الموظف", "Select employee")}</option>
               {employees.map((e) => (
                 <option key={e.id} value={e.id}>{e.name}</option>
               ))}
             </select>
           </Field>
-          <Field label="تاريخ انتهاء الخدمة">
+          <Field label={t("تاريخ انتهاء الخدمة", "Service End Date")}>
             <input type="date" style={inputStyle} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
           </Field>
-          <Field label="سبب انتهاء الخدمة">
+          <Field label={t("سبب انتهاء الخدمة", "Reason for Termination")}>
             <select style={inputStyle} value={reason} onChange={(e) => setReason(e.target.value)}>
-              <option>استقالة</option>
-              <option>فصل من صاحب العمل</option>
-              <option>انتهاء عقد محدد المدة</option>
+              <option value="استقالة">{t("استقالة", "Resignation")}</option>
+              <option value="فصل من صاحب العمل">{t("فصل من صاحب العمل", "Termination by Employer")}</option>
+              <option value="انتهاء عقد محدد المدة">{t("انتهاء عقد محدد المدة", "Fixed-term Contract End")}</option>
             </select>
           </Field>
         </div>
         {emp && (
           <div style={{ marginTop: 10, fontSize: 12, color: "#8a7a63" }}>
-            تاريخ التعيين: {emp.joinDate || "—"} · الراتب الأساسي: {fmt(salary)} ﷼ · مدة الخدمة التقريبية: {years.toFixed(2)} سنة
+            {t("تاريخ التعيين", "Hire date")}: {emp.joinDate || "—"} · {t("الراتب الأساسي", "Basic salary")}: {fmt(salary)} ﷼ · {t("مدة الخدمة التقريبية", "Approx. length of service")}: {years.toFixed(2)} {t("سنة", "years")}
           </div>
         )}
       </div>
 
       {emp && (
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-          <ReceiptCard label="المكافأة الكاملة (نظريًا)" value={`${fmt(result.full)} ﷼`} />
-          <ReceiptCard label="المكافأة المستحقة فعليًا" value={`${fmt(result.adjusted)} ﷼`} tone={COLORS.green} sub={result.note} />
+          <ReceiptCard label={t("المكافأة الكاملة (نظريًا)", "Full Bonus (Theoretical)")} value={`${fmt(result.full)} ﷼`} />
+          <ReceiptCard label={t("المكافأة المستحقة فعليًا", "Actual Bonus Due")} value={`${fmt(result.adjusted)} ﷼`} tone={COLORS.green} sub={result.note} />
         </div>
       )}
-      {!emp && <Empty text="اختر موظفًا لعرض احتساب المكافأة" />}
+      {!emp && <Empty text={t("اختر موظفًا لعرض احتساب المكافأة", "Select an employee to see the bonus calculation")} />}
 
       <div style={{ marginTop: 22, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
-        ملاحظة: هذا احتساب تقريبي يعتمد على الراتب الأساسي المسجَّل فقط. الاحتساب الرسمي وفق نظام العمل يشمل أحيانًا بنودًا إضافية من الأجر الشامل، وقد تختلف التفاصيل حسب نوع العقد ولائحة المنشأة — يُنصح بمراجعة مختص أو مكتب عمل قبل الاعتماد النهائي.
+        {t(
+          "ملاحظة: هذا احتساب تقريبي يعتمد على الراتب الأساسي المسجَّل فقط. الاحتساب الرسمي وفق نظام العمل يشمل أحيانًا بنودًا إضافية من الأجر الشامل، وقد تختلف التفاصيل حسب نوع العقد ولائحة المنشأة — يُنصح بمراجعة مختص أو مكتب عمل قبل الاعتماد النهائي.",
+          "Note: this is an approximate calculation based only on the recorded basic salary. The official calculation under labor law sometimes includes additional items from total wages, and details may vary by contract type and company policy — consult a specialist or labor office before final approval."
+        )}
       </div>
     </div>
   );
@@ -1692,12 +1839,13 @@ function EOSTab({ employees }) {
 
 /* ============ الإعدادات ============ */
 function SettingsTab({ gosiRates, setGosiRates }) {
+  const { t } = useLang();
   return (
     <div>
-      <Header title="الإعدادات" subtitle="تعديل نسب التأمينات الاجتماعية (GOSI) المستخدمة في احتساب الرواتب" />
+      <Header title={t("الإعدادات", "Settings")} subtitle={t("تعديل نسب التأمينات الاجتماعية (GOSI) المستخدمة في احتساب الرواتب", "Edit the Social Insurance (GOSI) rates used in payroll calculations")} />
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, maxWidth: 480 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <Field label="حصة الموظف السعودي (%)">
+          <Field label={t("حصة الموظف السعودي (%)", "Saudi Employee Share (%)")}>
             <input
               type="number"
               step="0.01"
@@ -1706,7 +1854,7 @@ function SettingsTab({ gosiRates, setGosiRates }) {
               onChange={(e) => setGosiRates({ ...gosiRates, saudiEmployee: Number(e.target.value) })}
             />
           </Field>
-          <Field label="حصة صاحب العمل عن السعودي (%)">
+          <Field label={t("حصة صاحب العمل عن السعودي (%)", "Employer Share for Saudi (%)")}>
             <input
               type="number"
               step="0.01"
@@ -1715,7 +1863,7 @@ function SettingsTab({ gosiRates, setGosiRates }) {
               onChange={(e) => setGosiRates({ ...gosiRates, saudiEmployer: Number(e.target.value) })}
             />
           </Field>
-          <Field label="حصة صاحب العمل عن غير السعودي (%) — أخطار مهنية فقط">
+          <Field label={t("حصة صاحب العمل عن غير السعودي (%) — أخطار مهنية فقط", "Employer Share for Non-Saudi (%) — Occupational Hazards Only")}>
             <input
               type="number"
               step="0.01"
@@ -1726,31 +1874,125 @@ function SettingsTab({ gosiRates, setGosiRates }) {
           </Field>
         </div>
         <div style={{ marginTop: 14, fontSize: 11.5, color: "#a3927a" }}>
-          النسب أعلاه قيم افتراضية شائعة الاستخدام. نسب GOSI تتغير تدريجيًا ضمن خطة انتقالية معلَنة — يُرجى تحديثها هنا بما يطابق آخر تعميم رسمي من المؤسسة العامة للتأمينات الاجتماعية.
+          {t(
+            "النسب أعلاه قيم افتراضية شائعة الاستخدام. نسب GOSI تتغير تدريجيًا ضمن خطة انتقالية معلَنة — يُرجى تحديثها هنا بما يطابق آخر تعميم رسمي من المؤسسة العامة للتأمينات الاجتماعية.",
+            "The rates above are commonly used defaults. GOSI rates change gradually under an announced transition plan — please update them here to match the latest official circular from the General Organization for Social Insurance."
+          )}
         </div>
       </div>
       <div style={{ marginTop: 18, fontSize: 11.5, color: "#a3927a" }}>
-        جميع البيانات تُحفظ تلقائيًا محليًا في هذا التطبيق ولا تُشارك مع أي جهة خارجية.
+        {t(
+          "جميع البيانات تُخزَّن وتُزامَن عبر قاعدة بيانات Firestore المشتركة ولا تُشارك مع أي جهة خارجية.",
+          "All data is stored and synced via the shared Firestore database and is not shared with any third party."
+        )}
       </div>
     </div>
   );
 }
 
 /* ============ شاشة تسجيل الدخول ============ */
+/* ============ خلفية زخرفية: أفق مدينة نيويورك ============ */
+function NYSkyline() {
+  /* مبانٍ عشوائية الارتفاع بألوان الهوية، مع مبنى الإمباير ستيت وكرايسلر كملامح مميزة */
+  const buildings = [
+    { x: 0, w: 34, h: 90 },
+    { x: 34, w: 26, h: 130 },
+    { x: 60, w: 30, h: 70 },
+    { x: 90, w: 22, h: 160 },
+    { x: 112, w: 36, h: 100 },
+    { x: 148, w: 24, h: 190, spire: true },
+    { x: 172, w: 30, h: 120 },
+    { x: 202, w: 20, h: 80 },
+    { x: 222, w: 34, h: 150 },
+    { x: 256, w: 26, h: 200, empire: true },
+    { x: 282, w: 30, h: 110 },
+    { x: 312, w: 22, h: 160 },
+    { x: 334, w: 34, h: 90 },
+    { x: 368, w: 26, h: 140 },
+    { x: 394, w: 30, h: 100 },
+    { x: 424, w: 24, h: 175, spire: true },
+    { x: 448, w: 32, h: 120 },
+    { x: 480, w: 22, h: 85 },
+    { x: 502, w: 30, h: 150 },
+    { x: 532, w: 26, h: 105 },
+    { x: 558, w: 34, h: 130 },
+    { x: 592, w: 24, h: 90 },
+    { x: 616, w: 30, h: 165 },
+    { x: 646, w: 26, h: 110 },
+    { x: 672, w: 28, h: 75 },
+  ];
+  const baseY = 240;
+
+  return (
+    <svg
+      viewBox="0 0 700 240"
+      preserveAspectRatio="none"
+      style={{ position: "absolute", left: 0, right: 0, bottom: 0, width: "100%", height: "38vh", minHeight: 150, maxHeight: 260, zIndex: 0, pointerEvents: "none" }}
+    >
+      <defs>
+        <linearGradient id="nySky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={COLORS.goldLight} stopOpacity="0.35" />
+          <stop offset="100%" stopColor={COLORS.gold} stopOpacity="0.12" />
+        </linearGradient>
+      </defs>
+      <rect x="0" y="0" width="700" height="240" fill="url(#nySky)" />
+      {buildings.map((b, i) => (
+        <g key={i}>
+          <rect x={b.x} y={baseY - b.h} width={b.w} height={b.h} fill={COLORS.espresso} opacity={0.85} />
+          {b.empire && (
+            <>
+              <rect x={b.x + b.w * 0.32} y={baseY - b.h - 22} width={b.w * 0.36} height={22} fill={COLORS.espresso} opacity={0.85} />
+              <rect x={b.x + b.w * 0.47} y={baseY - b.h - 34} width={b.w * 0.06} height={34} fill={COLORS.espresso} opacity={0.85} />
+            </>
+          )}
+          {b.spire && (
+            <polygon
+              points={`${b.x + b.w * 0.5},${baseY - b.h - 16} ${b.x + b.w * 0.38},${baseY - b.h} ${b.x + b.w * 0.62},${baseY - b.h}`}
+              fill={COLORS.espresso}
+              opacity={0.85}
+            />
+          )}
+          {/* نوافذ مضيئة */}
+          {Array.from({ length: Math.max(2, Math.floor(b.h / 22)) }).map((_, row) =>
+            Array.from({ length: Math.max(1, Math.floor(b.w / 10)) }).map((_, col) => {
+              if ((row + col + i) % 3 === 0) return null;
+              return (
+                <rect
+                  key={`${row}-${col}`}
+                  x={b.x + 4 + col * 9}
+                  y={baseY - b.h + 8 + row * 20}
+                  width={3.5}
+                  height={5}
+                  fill={COLORS.goldLight}
+                  opacity={0.55}
+                />
+              );
+            })
+          )}
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 function LoginScreen({ form, setForm, onSubmit, error }) {
+  const { t } = useLang();
   return (
     <div
       dir="rtl"
       style={{
         fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
-        background: COLORS.paper,
+        background: `linear-gradient(180deg, ${COLORS.paper} 0%, #EFE6D2 60%, #E7DAC0 100%)`,
         minHeight: "100vh",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
         padding: 16,
+        position: "relative",
+        overflow: "hidden",
       }}
     >
+      <NYSkyline />
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -1763,15 +2005,17 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
           padding: "34px 30px",
           width: 320,
           maxWidth: "100%",
-          boxShadow: "0 4px 18px rgba(59,42,29,0.08)",
+          boxShadow: "0 10px 34px rgba(59,42,29,0.16)",
+          position: "relative",
+          zIndex: 1,
         }}
       >
         <div style={{ textAlign: "center", marginBottom: 22 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: COLORS.espresso }}>نظام الموارد البشرية</div>
-          <div style={{ fontSize: 11.5, color: COLORS.coffee, marginTop: 4 }}>مجموعة ينبع للمقاهي · تسجيل الدخول</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: COLORS.espresso }}>{t("نظام الموارد البشرية", "HR System")}</div>
+          <div style={{ fontSize: 11.5, color: COLORS.coffee, marginTop: 4 }}>{t("مجموعة ينبع للمقاهي · تسجيل الدخول", "Yanbu Cafés Group · Sign In")}</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          <Field label="اسم المستخدم">
+          <Field label={t("اسم المستخدم", "Username")}>
             <input
               style={inputStyle}
               value={form.username}
@@ -1779,7 +2023,7 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
               autoFocus
             />
           </Field>
-          <Field label="كلمة المرور">
+          <Field label={t("كلمة المرور", "Password")}>
             <input
               type="password"
               style={inputStyle}
@@ -1806,8 +2050,11 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
               cursor: "pointer",
             }}
           >
-            دخول
+            {t("دخول", "Sign In")}
           </button>
+        </div>
+        <div style={{ marginTop: 16, textAlign: "center" }}>
+          <LangToggle />
         </div>
       </form>
     </div>
@@ -1816,6 +2063,7 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
 
 /* ============ حساب موظف: عرض شخصي فقط ============ */
 function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLogout }) {
+  const { t } = useLang();
   if (!employee) {
     return (
       <div
@@ -1834,15 +2082,16 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
         }}
       >
         <div style={{ fontSize: 14, color: COLORS.ink }}>
-          هذا الحساب غير مرتبط بسجل موظف بعد. تواصل مع الإدارة لربط الحساب.
+          {t("هذا الحساب غير مرتبط بسجل موظف بعد. تواصل مع الإدارة لربط الحساب.", "This account isn't linked to an employee record yet. Contact management to link the account.")}
         </div>
-        <Btn onClick={onLogout}>تسجيل الخروج</Btn>
+        <Btn onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
+        <LangToggle />
       </div>
     );
   }
 
-  const iqamaStatus = expiryStatus(employee.iqamaExpiry);
-  const contractStatus = expiryStatus(employee.contractEnd);
+  const iqamaStatus = expiryStatus(employee.iqamaExpiry, t);
+  const contractStatus = expiryStatus(employee.contractEnd, t);
   const myLeaves = leaves.filter((l) => l.employeeId === employee.id);
   const myAttendance = attendance.filter((a) => a.employeeId === employee.id).slice().reverse();
 
@@ -1860,25 +2109,28 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
       <div style={{ maxWidth: 860, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.espresso }}>مرحبًا، {employee.name}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.espresso }}>{t("مرحبًا", "Welcome")}، {employee.name}</div>
             <div style={{ fontSize: 12, color: "#8a7a63", marginTop: 3 }}>
               {branchName(employee.branchId)} · {employee.position}
             </div>
           </div>
-          <Btn tone="secondary" onClick={onLogout}>تسجيل الخروج</Btn>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <LangToggle />
+            <Btn tone="secondary" onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
+          </div>
         </div>
 
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 22 }}>
-          <ReceiptCard label="الراتب الأساسي" value={`${fmt(employee.salary)} ﷼`} />
+          <ReceiptCard label={t("الراتب الأساسي", "Basic Salary")} value={`${fmt(employee.salary)} ﷼`} />
           <ReceiptCard
-            label="الحالة الوظيفية"
-            value={employee.status}
+            label={t("الحالة الوظيفية", "Employment Status")}
+            value={trLabel(t, STATUS_LABELS_EN, employee.status)}
             tone={employee.status === "نشط" ? COLORS.green : COLORS.brick}
           />
-          <ReceiptCard label="تاريخ التعيين" value={employee.joinDate || "—"} />
+          <ReceiptCard label={t("تاريخ التعيين", "Hire Date")} value={employee.joinDate || "—"} />
         </div>
 
-        <SectionTitle>الإقامة والعقد</SectionTitle>
+        <SectionTitle>{t("الإقامة والعقد", "Iqama & Contract")}</SectionTitle>
         <div
           style={{
             background: "#fff",
@@ -1892,24 +2144,24 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
           }}
         >
           <div>
-            <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>انتهاء الإقامة</div>
+            <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("انتهاء الإقامة", "Iqama Expiry")}</div>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>{employee.iqamaExpiry || "—"}</div>
             <Stamp tone={iqamaStatus.tone}>{iqamaStatus.label}</Stamp>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>نوع العقد</div>
-            <div style={{ fontWeight: 700 }}>{employee.contractType || "—"}</div>
+            <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("نوع العقد", "Contract Type")}</div>
+            <div style={{ fontWeight: 700 }}>{trLabel(t, CONTRACT_TYPE_LABELS_EN, employee.contractType) || "—"}</div>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>نهاية العقد</div>
+            <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("نهاية العقد", "Contract End")}</div>
             <div style={{ fontWeight: 700, marginBottom: 6 }}>{employee.contractEnd || "—"}</div>
             <Stamp tone={contractStatus.tone}>{contractStatus.label}</Stamp>
           </div>
         </div>
 
-        <SectionTitle>سجل الإجازات</SectionTitle>
+        <SectionTitle>{t("سجل الإجازات", "Leave Record")}</SectionTitle>
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 20 }}>
-          {myLeaves.length === 0 && <Empty text="لا توجد إجازات مسجّلة" />}
+          {myLeaves.length === 0 && <Empty text={t("لا توجد إجازات مسجّلة", "No registered leaves")} />}
           {myLeaves.map((l, i) => (
             <div
               key={l.id}
@@ -1921,15 +2173,15 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
                 fontSize: 12.5,
               }}
             >
-              <div>{l.type}</div>
+              <div>{trLabel(t, LEAVE_TYPE_LABELS_EN, l.type)}</div>
               <div style={{ fontFamily: "Consolas, monospace" }}>{l.from} → {l.to}</div>
             </div>
           ))}
         </div>
 
-        <SectionTitle>سجل الحضور</SectionTitle>
+        <SectionTitle>{t("سجل الحضور", "Attendance Record")}</SectionTitle>
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
-          {myAttendance.length === 0 && <Empty text="لا توجد سجلات حضور" />}
+          {myAttendance.length === 0 && <Empty text={t("لا توجد سجلات حضور", "No attendance records")} />}
           {myAttendance.slice(0, 25).map((a, i) => (
             <div
               key={a.id}
@@ -1942,7 +2194,7 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
               }}
             >
               <div>{a.date}</div>
-              <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>{a.status}</Stamp>
+              <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>{trLabel(t, ATTENDANCE_STATUS_LABELS_EN, a.status)}</Stamp>
             </div>
           ))}
         </div>
@@ -1953,6 +2205,7 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
 
 /* ============ إدارة المستخدمين (أدمن فقط) ============ */
 function UsersTab({ users, setUsers, employees, branches }) {
+  const { t } = useLang();
   const [form, setForm] = useState(EMPTY_USER);
   const [editingId, setEditingId] = useState(null);
   const [err, setErr] = useState("");
@@ -1965,12 +2218,12 @@ function UsersTab({ users, setUsers, employees, branches }) {
 
   const submit = () => {
     if (!form.username.trim() || !form.password.trim() || !form.name.trim()) {
-      setErr("الرجاء تعبئة الاسم واسم المستخدم وكلمة المرور");
+      setErr(t("الرجاء تعبئة الاسم واسم المستخدم وكلمة المرور", "Please fill in the name, username, and password"));
       return;
     }
     const dup = users.find((u) => u.username === form.username.trim() && u.id !== editingId);
     if (dup) {
-      setErr("اسم المستخدم مستخدم بالفعل، اختر اسمًا آخر");
+      setErr(t("اسم المستخدم مستخدم بالفعل، اختر اسمًا آخر", "This username is already taken, please choose another"));
       return;
     }
     if (editingId) {
@@ -1990,7 +2243,7 @@ function UsersTab({ users, setUsers, employees, branches }) {
   const remove = (id) => {
     const target = users.find((u) => u.id === id);
     if (target?.role === "admin" && users.filter((u) => u.role === "admin").length <= 1) {
-      setErr("لا يمكن حذف آخر حساب أدمن في النظام");
+      setErr(t("لا يمكن حذف آخر حساب أدمن في النظام", "You cannot delete the last admin account in the system"));
       return;
     }
     setUsers((prev) => prev.filter((u) => u.id !== id));
@@ -1999,37 +2252,37 @@ function UsersTab({ users, setUsers, employees, branches }) {
 
   return (
     <div>
-      <Header title="المستخدمون والصلاحيات" subtitle="إدارة حسابات الدخول: أدمن، مسؤول فرع، موظف — كل حساب بباسورد خاص به" />
+      <Header title={t("المستخدمون والصلاحيات", "Users & Permissions")} subtitle={t("إدارة حسابات الدخول: أدمن، مسؤول فرع، موظف — كل حساب بباسورد خاص به", "Manage login accounts: admin, branch manager, employee — each with its own password")} />
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
-          {editingId ? "تعديل حساب" : "إضافة حساب جديد"}
+          {editingId ? t("تعديل حساب", "Edit Account") : t("إضافة حساب جديد", "Add New Account")}
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-          <Field label="الاسم المعروض">
+          <Field label={t("الاسم المعروض", "Display Name")}>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
-          <Field label="اسم المستخدم">
+          <Field label={t("اسم المستخدم", "Username")}>
             <input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
           </Field>
-          <Field label="كلمة المرور">
+          <Field label={t("كلمة المرور", "Password")}>
             <input style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           </Field>
-          <Field label="الدور">
+          <Field label={t("الدور", "Role")}>
             <select
               style={inputStyle}
               value={form.role}
               onChange={(e) => setForm({ ...form, role: e.target.value, branchId: "", employeeId: "" })}
             >
-              <option value="admin">أدمن (كل الصلاحيات)</option>
-              <option value="branch_manager">مسؤول فرع</option>
-              <option value="employee">موظف</option>
+              <option value="admin">{t("أدمن (كل الصلاحيات)", "Admin (full access)")}</option>
+              <option value="branch_manager">{t("مسؤول فرع", "Branch Manager")}</option>
+              <option value="employee">{t("موظف", "Employee")}</option>
             </select>
           </Field>
           {form.role === "branch_manager" && (
-            <Field label="الفرع">
+            <Field label={t("الفرع", "Branch")}>
               <select style={inputStyle} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
-                <option value="">اختر الفرع</option>
+                <option value="">{t("اختر الفرع", "Select branch")}</option>
                 {branches.map((b) => (
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
@@ -2037,9 +2290,9 @@ function UsersTab({ users, setUsers, employees, branches }) {
             </Field>
           )}
           {form.role === "employee" && (
-            <Field label="الموظف المرتبط">
+            <Field label={t("الموظف المرتبط", "Linked Employee")}>
               <select style={inputStyle} value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })}>
-                <option value="">اختر الموظف</option>
+                <option value="">{t("اختر الموظف", "Select employee")}</option>
                 {employees.map((e) => (
                   <option key={e.id} value={e.id}>{e.name}</option>
                 ))}
@@ -2049,12 +2302,12 @@ function UsersTab({ users, setUsers, employees, branches }) {
         </div>
         {err && <div style={{ color: COLORS.brick, fontSize: 12, marginTop: 10 }}>{err}</div>}
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-          <Btn onClick={submit}>{editingId ? "حفظ التعديل" : "إضافة الحساب"}</Btn>
-          {editingId && <Btn tone="secondary" onClick={resetForm}>إلغاء</Btn>}
+          <Btn onClick={submit}>{editingId ? t("حفظ التعديل", "Save Changes") : t("إضافة الحساب", "Add Account")}</Btn>
+          {editingId && <Btn tone="secondary" onClick={resetForm}>{t("إلغاء", "Cancel")}</Btn>}
         </div>
       </div>
 
-      <SectionTitle>الحسابات الحالية ({fmt(users.length)})</SectionTitle>
+      <SectionTitle>{t("الحسابات الحالية", "Current Accounts")} ({fmt(users.length)})</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
         {users.map((u, i) => (
           <div
@@ -2072,21 +2325,24 @@ function UsersTab({ users, setUsers, employees, branches }) {
                 {u.name} <span style={{ fontWeight: 400, color: "#8a7a63" }}>({u.username})</span>
               </div>
               <div style={{ fontSize: 11.5, color: "#8a7a63" }}>
-                {ROLE_LABELS[u.role]}
+                {t(ROLE_LABELS[u.role], ROLE_LABELS_EN[u.role])}
                 {u.role === "branch_manager" && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
-                {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || "غير مرتبط"}`}
+                {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
               </div>
             </div>
             <div style={{ display: "flex", gap: 6 }}>
-              <Btn small tone="secondary" onClick={() => edit(u)}>تعديل</Btn>
-              <Btn small tone="danger" onClick={() => remove(u.id)}>حذف</Btn>
+              <Btn small tone="secondary" onClick={() => edit(u)}>{t("تعديل", "Edit")}</Btn>
+              <Btn small tone="danger" onClick={() => remove(u.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
         ))}
       </div>
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
-        تنبيه: كلمات المرور هنا وسيلة تقييد وصول بسيطة داخل الفريق وليست تشفيرًا احترافيًا (يمكن لأي شخص يملك صلاحية الأدمن رؤيتها كنص واضح). البيانات الآن تُخزَّن وتُزامَن عبر قاعدة بيانات Firestore المشتركة، فتأكد من ضبط قواعد الأمان (Rules) في مشروع Firebase لمنع الوصول العام غير المصرّح به.
+        {t(
+          "تنبيه: كلمات المرور هنا وسيلة تقييد وصول بسيطة داخل الفريق وليست تشفيرًا احترافيًا (يمكن لأي شخص يملك صلاحية الأدمن رؤيتها كنص واضح). البيانات الآن تُخزَّن وتُزامَن عبر قاعدة بيانات Firestore المشتركة، فتأكد من ضبط قواعد الأمان (Rules) في مشروع Firebase لمنع الوصول العام غير المصرّح به.",
+          "Note: passwords here are a simple team access restriction, not professional-grade encryption (anyone with admin access can see them in plain text). Data is now stored and synced via the shared Firestore database, so make sure to configure the Firebase project's security Rules to prevent unauthorized public access."
+        )}
       </div>
     </div>
   );
@@ -2191,7 +2447,11 @@ function Root() {
 
 const rootEl = document.getElementById("root");
 const root = ReactDOM.createRoot(rootEl);
-root.render(<Root />);
+root.render(
+  <LangProvider>
+    <Root />
+  </LangProvider>
+);
 </script>
 </body>
 </html>
