@@ -1,0 +1,2197 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>نظام الموارد البشرية — مجموعة ينبع للمقاهي</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; }
+  * { box-sizing: border-box; }
+  body { direction: rtl; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+  /* إعداد Firebase — قاعدة بيانات مشتركة لمزامنة النظام بين كل الأجهزة فورياً */
+  const firebaseConfig = {
+    apiKey: "AIzaSyCJvIjUeWWQdVAbGzeOgBGuar4yQExr0P8",
+    authDomain: "hr-system-67df2.firebaseapp.com",
+    projectId: "hr-system-67df2",
+    storageBucket: "hr-system-67df2.firebasestorage.app",
+    messagingSenderId: "1055159632728",
+    appId: "1:1055159632728:web:e5e4807248e0e6e466db2d",
+  };
+  firebase.initializeApp(firebaseConfig);
+  window.__hrDb = firebase.firestore();
+</script>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef } = React;
+const db = window.__hrDb;
+const DATA_DOC = db.collection("hrSystem").doc("data");
+const USERS_DOC = db.collection("hrSystem").doc("users");
+
+
+/* ============ ألوان وهوية بصرية: دفتر محاسبة قهوة سعودي ============ */
+const COLORS = {
+  ink: "#241811",
+  espresso: "#3B2A1D",
+  coffee: "#6B4226",
+  gold: "#B8863B",
+  goldLight: "#D9B473",
+  paper: "#F5F0E6",
+  paperDark: "#EAE1CE",
+  green: "#3F6B4F",
+  greenBg: "#E7EFE8",
+  brick: "#A64B3F",
+  brickBg: "#F3E4E1",
+  line: "#D8CBAE",
+};
+
+const uid = () => Math.random().toString(36).slice(2, 10);
+
+const ENTITIES_SEED = [
+  { id: "e1", name: "مؤسسة اختصاص القهوة (Ikhtisas Coffee)" },
+  { id: "e2", name: "شركة مستقبل الاقتصاد للتجارة (Ratio Amlaj)" },
+  { id: "e3", name: "مؤسسة محمد حامد عطية المحياوي (Café 24 / مسكوب)" },
+];
+
+const BRANCHES_SEED = [
+  { id: "b1", entityId: "e1", name: "فرع الرايس", city: "ينبع البحر" },
+  { id: "b2", entityId: "e1", name: "فرع النعيم", city: "ينبع البحر" },
+  { id: "b3", entityId: "e1", name: "كشك المروج", city: "ينبع البحر" },
+  { id: "b4", entityId: "e2", name: "فرع أملج", city: "أملج" },
+];
+
+const NAV = [
+  { key: "dash", label: "لوحة التحكم", icon: "◧" },
+  { key: "employees", label: "الموظفون", icon: "◈" },
+  { key: "iqamas", label: "الإقامات والعقود", icon: "◐" },
+  { key: "licenses", label: "تراخيص الفروع", icon: "▤" },
+  { key: "branches", label: "الكيانات والفروع", icon: "◫" },
+  { key: "attendance", label: "الحضور والإجازات", icon: "◔" },
+  { key: "payroll", label: "الرواتب و GOSI", icon: "◎" },
+  { key: "eos", label: "نهاية الخدمة", icon: "◆" },
+  { key: "settings", label: "الإعدادات", icon: "⚙" },
+];
+
+/* ============ المستخدمون والصلاحيات ============ */
+const USERS_SEED = [
+  { id: "u1", username: "admin", password: "admin123", role: "admin", name: "المدير العام", branchId: "", employeeId: "" },
+];
+
+const ROLE_LABELS = { admin: "أدمن", branch_manager: "مسؤول فرع", employee: "موظف" };
+
+const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "" };
+
+function navForRole(role) {
+  if (role === "admin") return [...NAV, { key: "users", label: "المستخدمون", icon: "◑" }];
+  if (role === "branch_manager")
+    return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "payroll", "eos"].includes(n.key));
+  return [];
+}
+
+const SAUDI_HOLIDAYS_NOTE = "٢١ يوم إجازة سنوية (تزيد لـ ٣٠ يوم بعد ٥ سنوات خدمة) وفق نظام العمل السعودي";
+
+function fmt(n) {
+  if (n === "" || n === null || n === undefined || isNaN(n)) return "٠";
+  return Number(n).toLocaleString("ar-SA", { maximumFractionDigits: 2 });
+}
+
+function yearsBetween(start, end) {
+  const s = new Date(start);
+  const e = new Date(end);
+  if (isNaN(s) || isNaN(e) || e < s) return 0;
+  return (e - s) / (1000 * 60 * 60 * 24 * 365.25);
+}
+
+/* عدد أيام إجازة (from→to) الواقعة داخل شهر معيّن بصيغة "YYYY-MM" */
+function daysOverlapInMonth(from, to, monthStr) {
+  if (!from || !to || !monthStr) return 0;
+  const [y, m] = monthStr.split("-").map(Number);
+  const monthStart = new Date(y, m - 1, 1);
+  const monthEnd = new Date(y, m, 0); // آخر يوم في الشهر
+  const s = new Date(from);
+  const e = new Date(to);
+  if (isNaN(s) || isNaN(e)) return 0;
+  const start = s > monthStart ? s : monthStart;
+  const end = e < monthEnd ? e : monthEnd;
+  if (end < start) return 0;
+  return Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+}
+
+/* ============ مكونات عامة بطابع "الإيصال/الدفتر" ============ */
+function Stamp({ children, tone = "gold" }) {
+  const bg = tone === "gold" ? COLORS.goldLight : tone === "green" ? COLORS.greenBg : COLORS.brickBg;
+  const fg = tone === "gold" ? COLORS.espresso : tone === "green" ? COLORS.green : COLORS.brick;
+  return (
+    <span
+      style={{
+        background: bg,
+        color: fg,
+        border: `1px solid ${fg}55`,
+        borderRadius: 999,
+        padding: "2px 10px",
+        fontSize: 12,
+        fontWeight: 700,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function ReceiptCard({ label, value, sub, tone }) {
+  return (
+    <div
+      style={{
+        background: "#fff",
+        border: `1px dashed ${COLORS.line}`,
+        borderRadius: 10,
+        padding: "16px 18px",
+        position: "relative",
+        boxShadow: "0 1px 0 rgba(59,42,29,0.04)",
+        flex: "1 1 200px",
+        minWidth: 180,
+      }}
+    >
+      <div style={{ fontSize: 12, color: COLORS.coffee, fontWeight: 600, marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 800, color: tone || COLORS.ink, fontFamily: "Consolas, monospace" }}>
+        {value}
+      </div>
+      {sub && <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 4 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function Field({ label, children }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: "1 1 160px" }}>
+      <span style={{ color: COLORS.coffee, fontWeight: 600 }}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+const inputStyle = {
+  border: `1px solid ${COLORS.line}`,
+  borderRadius: 8,
+  padding: "8px 10px",
+  fontSize: 13,
+  background: "#fff",
+  color: COLORS.ink,
+  outline: "none",
+  fontFamily: "inherit",
+};
+
+function Btn({ children, onClick, tone = "primary", small, type = "button" }) {
+  const base =
+    tone === "primary"
+      ? { background: COLORS.espresso, color: "#fff" }
+      : tone === "danger"
+      ? { background: COLORS.brickBg, color: COLORS.brick, border: `1px solid ${COLORS.brick}55` }
+      : { background: "#fff", color: COLORS.coffee, border: `1px solid ${COLORS.line}` };
+  return (
+    <button
+      type={type}
+      onClick={onClick}
+      style={{
+        ...base,
+        borderRadius: 8,
+        padding: small ? "6px 10px" : "9px 16px",
+        fontSize: 13,
+        fontWeight: 700,
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ============ التطبيق الرئيسي ============ */
+function HRApp({ currentUser, users, setUsers, onLogout }) {
+  const role = currentUser.role;
+  const isAdmin = role === "admin";
+  const isBranchManager = role === "branch_manager";
+  const navItems = navForRole(role);
+  const [tab, setTab] = useState(navItems[0]?.key || "dash");
+  const [entities, setEntities] = useState(ENTITIES_SEED);
+  const [branches, setBranches] = useState(BRANCHES_SEED);
+  const [employees, setEmployees] = useState([]);
+  const [leaves, setLeaves] = useState([]);
+  const [attendance, setAttendance] = useState([]);
+  const [vehicles, setVehicles] = useState([]);
+  const [gosiRates, setGosiRates] = useState({
+    saudiEmployee: 9.75,
+    saudiEmployer: 11.75,
+    nonSaudiEmployer: 2,
+  });
+  const [loaded, setLoaded] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+  const [syncError, setSyncError] = useState("");
+  const lastSyncedRef = useRef("");
+
+  /* الاستماع لحظيًا لبيانات النظام من Firestore — أي تعديل من أي جهاز يوصل هنا فورًا */
+  useEffect(() => {
+    const unsub = DATA_DOC.onSnapshot(
+      (snap) => {
+        /* نتجاهل النسخة المحلية غير المؤكدة من الخادم بعد (كتابتنا إحنا) لتفادي قطع الكتابة أثناء الكتابة */
+        if (snap.metadata.hasPendingWrites) return;
+        const d = snap.data();
+        if (d) {
+          const next = {
+            entities: d.entities || ENTITIES_SEED,
+            branches: d.branches || BRANCHES_SEED,
+            employees: d.employees || [],
+            leaves: d.leaves || [],
+            attendance: d.attendance || [],
+            gosiRates: d.gosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
+            vehicles: d.vehicles || [],
+          };
+          setEntities(next.entities);
+          setBranches(next.branches);
+          setEmployees(next.employees);
+          setLeaves(next.leaves);
+          setAttendance(next.attendance);
+          setVehicles(next.vehicles);
+          setGosiRates(next.gosiRates);
+          lastSyncedRef.current = JSON.stringify(next);
+        } else {
+          /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], attendance: [], vehicles: [], gosiRates }).catch(() => {});
+        }
+        setSyncError("");
+        setLoaded(true);
+      },
+      (err) => {
+        setSyncError("تعذر الاتصال بقاعدة البيانات المشتركة — تحقّق من اتصال الإنترنت");
+        setLoaded(true);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  /* حفظ ومزامنة تلقائية إلى Firestore — تنعكس فورًا على كل الأجهزة المتصلة */
+  useEffect(() => {
+    if (!loaded) return;
+    const payload = { entities, branches, employees, leaves, attendance, gosiRates, vehicles };
+    const json = JSON.stringify(payload);
+    if (json === lastSyncedRef.current) return;
+    const t = setTimeout(() => {
+      DATA_DOC.set(payload)
+        .then(() => {
+          lastSyncedRef.current = json;
+          setSaveMsg("تمت المزامنة ✓");
+          setTimeout(() => setSaveMsg(""), 1500);
+        })
+        .catch(() => setSaveMsg("تعذر الحفظ — تحقّق من الإنترنت"));
+    }, 400);
+    return () => clearTimeout(t);
+  }, [entities, branches, employees, leaves, attendance, gosiRates, vehicles, loaded]);
+
+  const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
+  const entityName = (id) => entities.find((e) => e.id === id)?.name || "—";
+  const entityOfBranch = (branchId) => branches.find((b) => b.id === branchId)?.entityId;
+
+  /* نطاق البيانات حسب الصلاحية: مسؤول الفرع يشوف فرعه فقط */
+  const scopedBranches = isBranchManager ? branches.filter((b) => b.id === currentUser.branchId) : branches;
+  const scopedEmployees = isBranchManager ? employees.filter((e) => e.branchId === currentUser.branchId) : employees;
+  const scopedLeaves = isBranchManager
+    ? leaves.filter((l) => scopedEmployees.some((e) => e.id === l.employeeId))
+    : leaves;
+  const scopedAttendance = isBranchManager
+    ? attendance.filter((a) => scopedEmployees.some((e) => e.id === a.employeeId))
+    : attendance;
+  const scopedVehicles = isBranchManager ? vehicles.filter((v) => v.branchId === currentUser.branchId) : vehicles;
+
+  /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل */
+  if (role === "employee") {
+    const myEmployee = employees.find((e) => e.id === currentUser.employeeId);
+    return (
+      <EmployeeSelfView
+        user={currentUser}
+        employee={myEmployee}
+        leaves={leaves}
+        attendance={attendance}
+        branchName={branchName}
+        onLogout={onLogout}
+      />
+    );
+  }
+
+  return (
+    <div
+      dir="rtl"
+      style={{
+        fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+        background: COLORS.paper,
+        minHeight: "100vh",
+        color: COLORS.ink,
+        display: "flex",
+      }}
+    >
+      {/* الشريط الجانبي */}
+      <aside
+        style={{
+          width: 230,
+          background: COLORS.espresso,
+          color: "#F5EBDC",
+          padding: "22px 14px",
+          flexShrink: 0,
+          minHeight: "100vh",
+        }}
+      >
+        <div style={{ marginBottom: 26 }}>
+          <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 0.3 }}>نظام الموارد البشرية</div>
+          <div style={{ fontSize: 11, color: COLORS.goldLight, marginTop: 3 }}>مجموعة ينبع للمقاهي · السعودية</div>
+        </div>
+        <nav style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          {navItems.map((n) => (
+            <button
+              key={n.key}
+              onClick={() => setTab(n.key)}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                textAlign: "right",
+                background: tab === n.key ? "rgba(216,168,90,0.18)" : "transparent",
+                border: "none",
+                borderRight: tab === n.key ? `3px solid ${COLORS.gold}` : "3px solid transparent",
+                color: tab === n.key ? "#fff" : "#D9CBB2",
+                padding: "10px 10px",
+                borderRadius: 6,
+                fontSize: 13.5,
+                fontWeight: tab === n.key ? 700 : 500,
+                cursor: "pointer",
+              }}
+            >
+              <span style={{ fontSize: 15, color: COLORS.goldLight }}>{n.icon}</span>
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div style={{ marginTop: 30, fontSize: 10.5, color: syncError ? "#E8A9A0" : "#B8A78A", minHeight: 14 }}>{syncError || saveMsg}</div>
+        <div
+          style={{
+            marginTop: 18,
+            paddingTop: 14,
+            borderTop: "1px solid rgba(216,168,90,0.25)",
+          }}
+        >
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: "#fff" }}>{currentUser.name}</div>
+          <div style={{ fontSize: 10.5, color: COLORS.goldLight, marginTop: 2, marginBottom: 10 }}>
+            {ROLE_LABELS[role]}
+            {isBranchManager && ` · ${branchName(currentUser.branchId)}`}
+          </div>
+          <button
+            onClick={onLogout}
+            style={{
+              width: "100%",
+              background: "transparent",
+              border: "1px solid rgba(216,168,90,0.4)",
+              color: "#D9CBB2",
+              borderRadius: 6,
+              padding: "7px 10px",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            تسجيل الخروج
+          </button>
+        </div>
+      </aside>
+
+      {/* المحتوى */}
+      <main style={{ flex: 1, padding: "26px 30px", maxWidth: 1180 }}>
+        {tab === "dash" && (
+          <Dashboard
+            entities={entities}
+            branches={scopedBranches}
+            employees={scopedEmployees}
+            leaves={scopedLeaves}
+            branchName={branchName}
+            entityName={entityName}
+          />
+        )}
+        {tab === "employees" && (
+          <EmployeesTab
+            employees={scopedEmployees}
+            setEmployees={setEmployees}
+            branches={scopedBranches}
+            entities={entities}
+            entityOfBranch={entityOfBranch}
+          />
+        )}
+        {tab === "iqamas" && (
+          <IqamasContractsTab employees={scopedEmployees} setEmployees={setEmployees} branches={scopedBranches} />
+        )}
+        {tab === "licenses" && (
+          <BranchLicensesTab
+            branches={scopedBranches}
+            setBranches={setBranches}
+            employees={scopedEmployees}
+            setEmployees={setEmployees}
+            vehicles={scopedVehicles}
+            setVehicles={setVehicles}
+          />
+        )}
+        {isAdmin && tab === "branches" && (
+          <BranchesTab entities={entities} setEntities={setEntities} branches={branches} setBranches={setBranches} employees={employees} />
+        )}
+        {tab === "attendance" && (
+          <AttendanceTab
+            employees={scopedEmployees}
+            leaves={scopedLeaves}
+            setLeaves={setLeaves}
+            attendance={scopedAttendance}
+            setAttendance={setAttendance}
+            branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
+          />
+        )}
+        {tab === "payroll" && (
+          <PayrollTab
+            employees={scopedEmployees}
+            branches={scopedBranches}
+            entities={entities}
+            gosiRates={gosiRates}
+            attendance={scopedAttendance}
+            leaves={scopedLeaves}
+          />
+        )}
+        {tab === "eos" && <EOSTab employees={scopedEmployees} />}
+        {isAdmin && tab === "settings" && <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} />}
+        {isAdmin && tab === "users" && (
+          <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} />
+        )}
+      </main>
+    </div>
+  );
+}
+
+/* ============ لوحة التحكم ============ */
+function Dashboard({ entities, branches, employees, leaves, branchName, entityName }) {
+  const activeCount = employees.filter((e) => e.status === "نشط").length;
+  const totalSalaries = employees.filter((e) => e.status === "نشط").reduce((s, e) => s + Number(e.salary || 0), 0);
+  const today = new Date().toISOString().slice(0, 10);
+  const onLeaveToday = leaves.filter((l) => l.from <= today && l.to >= today).length;
+
+  const byBranch = branches.map((b) => ({
+    ...b,
+    count: employees.filter((e) => e.branchId === b.id && e.status === "نشط").length,
+  }));
+
+  return (
+    <div>
+      <Header title="لوحة التحكم" subtitle="نظرة عامة على الكيانات والفروع والموظفين" />
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 24 }}>
+        <ReceiptCard label="إجمالي الموظفين النشطين" value={fmt(activeCount)} sub={`من أصل ${fmt(employees.length)} مسجّل`} />
+        <ReceiptCard label="إجمالي الرواتب الشهرية" value={`${fmt(totalSalaries)} ﷼`} tone={COLORS.coffee} />
+        <ReceiptCard label="عدد الفروع" value={fmt(branches.length)} sub={`عبر ${fmt(entities.length)} كيانات`} />
+        <ReceiptCard label="في إجازة اليوم" value={fmt(onLeaveToday)} tone={onLeaveToday > 0 ? COLORS.brick : COLORS.green} />
+      </div>
+
+      <SectionTitle>توزيع الموظفين حسب الفرع</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
+        {byBranch.length === 0 && <Empty text="لا توجد فروع بعد — أضف فرعًا من تبويب الكيانات والفروع" />}
+        {byBranch.map((b, i) => (
+          <div
+            key={b.id}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "12px 16px",
+              borderBottom: i < byBranch.length - 1 ? `1px dashed ${COLORS.line}` : "none",
+            }}
+          >
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13.5 }}>{b.name}</div>
+              <div style={{ fontSize: 11.5, color: "#8a7a63" }}>{entityName(b.entityId)} · {b.city}</div>
+            </div>
+            <Stamp>{fmt(b.count)} موظف</Stamp>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Header({ title, subtitle, action }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20 }}>
+      <div>
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 800, color: COLORS.espresso }}>{title}</h1>
+        {subtitle && <div style={{ fontSize: 12.5, color: "#8a7a63", marginTop: 4 }}>{subtitle}</div>}
+      </div>
+      {action}
+    </div>
+  );
+}
+function SectionTitle({ children }) {
+  return <div style={{ fontSize: 13.5, fontWeight: 700, color: COLORS.coffee, margin: "18px 0 8px" }}>{children}</div>;
+}
+function Empty({ text }) {
+  return <div style={{ padding: 26, textAlign: "center", color: "#a3927a", fontSize: 13 }}>{text}</div>;
+}
+
+/* ============ الموظفون ============ */
+const EMPTY_EMP = {
+  name: "",
+  nationalId: "",
+  nationality: "سعودي",
+  branchId: "",
+  position: "",
+  salary: "",
+  joinDate: "",
+  phone: "",
+  status: "نشط",
+  iqamaExpiry: "",
+  iqamaProfession: "",
+  contractType: "محدد المدة",
+  contractStart: "",
+  contractEnd: "",
+};
+
+/* تحويل تاريخ ميلادي إلى هجري للعرض جنب حقل التاريخ (بدون اتصال إنترنت، عبر Intl المدمجة في المتصفح) */
+function toHijri(dateStr) {
+  if (!dateStr) return "";
+  try {
+    const d = new Date(dateStr + "T00:00:00");
+    if (isNaN(d)) return "";
+    const parts = new Intl.DateTimeFormat("en-u-ca-islamic", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(d);
+    const get = (t) => parts.find((p) => p.type === t)?.value || "";
+    return `${get("year")}/${get("month")}/${get("day")} هـ`;
+  } catch (e) {
+    return "";
+  }
+}
+
+function HijriNote({ dateStr }) {
+  const h = toHijri(dateStr);
+  if (!h) return null;
+  return <div style={{ fontSize: 10, color: "#a3927a", marginTop: 2 }}>{h}</div>;
+}
+
+/* حالة تاريخ (إقامة/عقد) حسب الأيام المتبقية */
+function expiryStatus(dateStr) {
+  if (!dateStr) return { label: "غير محدد", tone: "gold", days: null };
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(dateStr);
+  const days = Math.round((d - today) / (1000 * 60 * 60 * 24));
+  if (days < 0) return { label: `منتهية منذ ${Math.abs(days)} يوم`, tone: "brick", days };
+  if (days <= 30) return { label: `تنتهي خلال ${days} يوم`, tone: "brick", days };
+  if (days <= 90) return { label: `تنتهي خلال ${days} يوم`, tone: "gold", days };
+  return { label: `سارية (${days} يوم متبقي)`, tone: "green", days };
+}
+
+function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch }) {
+  const [form, setForm] = useState(EMPTY_EMP);
+  const [editingId, setEditingId] = useState(null);
+  const [filterBranch, setFilterBranch] = useState("");
+
+  const resetForm = () => {
+    setForm(EMPTY_EMP);
+    setEditingId(null);
+  };
+
+  const submit = () => {
+    if (!form.name || !form.branchId) return;
+    if (editingId) {
+      setEmployees((prev) => prev.map((e) => (e.id === editingId ? { ...form, id: editingId } : e)));
+    } else {
+      setEmployees((prev) => [...prev, { ...form, id: uid() }]);
+    }
+    resetForm();
+  };
+
+  const edit = (emp) => {
+    setForm(emp);
+    setEditingId(emp.id);
+  };
+
+  const remove = (id) => {
+    setEmployees((prev) => prev.filter((e) => e.id !== id));
+    if (editingId === id) resetForm();
+  };
+
+  const list = employees.filter((e) => !filterBranch || e.branchId === filterBranch);
+
+  return (
+    <div>
+      <Header title="الموظفون" subtitle="سجل بيانات الموظفين عبر جميع الفروع" />
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
+          {editingId ? "تعديل بيانات موظف" : "إضافة موظف جديد"}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <Field label="الاسم الكامل">
+            <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </Field>
+          <Field label="رقم الهوية / الإقامة">
+            <input style={inputStyle} value={form.nationalId} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} />
+          </Field>
+          <Field label="الجنسية">
+            <select style={inputStyle} value={form.nationality} onChange={(e) => setForm({ ...form, nationality: e.target.value })}>
+              <option>سعودي</option>
+              <option>غير سعودي</option>
+            </select>
+          </Field>
+          <Field label="الفرع">
+            <select style={inputStyle} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
+              <option value="">اختر الفرع</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="المسمى الوظيفي">
+            <input style={inputStyle} value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} />
+          </Field>
+          <Field label="الراتب الأساسي (﷼)">
+            <input type="number" style={inputStyle} value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
+          </Field>
+          <Field label="تاريخ التعيين">
+            <input type="date" style={inputStyle} value={form.joinDate} onChange={(e) => setForm({ ...form, joinDate: e.target.value })} />
+          </Field>
+          <Field label="رقم الجوال">
+            <input style={inputStyle} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+          </Field>
+          <Field label="الحالة">
+            <select style={inputStyle} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+              <option>نشط</option>
+              <option>موقوف</option>
+              <option>منتهي الخدمة</option>
+            </select>
+          </Field>
+        </div>
+
+        <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.coffee, margin: "14px 0 8px" }}>بيانات الإقامة والعقد</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <Field label="تاريخ انتهاء الإقامة">
+            <input type="date" style={inputStyle} value={form.iqamaExpiry} onChange={(e) => setForm({ ...form, iqamaExpiry: e.target.value })} />
+          </Field>
+          <Field label="المهنة على الإقامة">
+            <input style={inputStyle} value={form.iqamaProfession} onChange={(e) => setForm({ ...form, iqamaProfession: e.target.value })} />
+          </Field>
+          <Field label="نوع العقد">
+            <select style={inputStyle} value={form.contractType} onChange={(e) => setForm({ ...form, contractType: e.target.value })}>
+              <option>محدد المدة</option>
+              <option>غير محدد المدة</option>
+            </select>
+          </Field>
+          <Field label="بداية العقد">
+            <input type="date" style={inputStyle} value={form.contractStart} onChange={(e) => setForm({ ...form, contractStart: e.target.value })} />
+          </Field>
+          <Field label="نهاية العقد">
+            <input type="date" style={inputStyle} value={form.contractEnd} onChange={(e) => setForm({ ...form, contractEnd: e.target.value })} />
+          </Field>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <Btn onClick={submit}>{editingId ? "حفظ التعديل" : "إضافة الموظف"}</Btn>
+          {editingId && <Btn tone="secondary" onClick={resetForm}>إلغاء</Btn>}
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <SectionTitle>قائمة الموظفين ({fmt(list.length)})</SectionTitle>
+        <select style={{ ...inputStyle, maxWidth: 220 }} value={filterBranch} onChange={(e) => setFilterBranch(e.target.value)}>
+          <option value="">كل الفروع</option>
+          {branches.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
+        {list.length === 0 && <Empty text="لا يوجد موظفون مطابقون" />}
+        {list.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                {["الاسم", "الفرع", "الوظيفة", "الجنسية", "الراتب", "تاريخ التعيين", "الحالة", ""].map((h) => (
+                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>
+                    {h}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {list.map((e) => (
+                <tr key={e.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{e.name}</td>
+                  <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === e.branchId)?.name || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>{e.position}</td>
+                  <td style={{ padding: "9px 12px" }}>{e.nationality}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{fmt(e.salary)} ﷼</td>
+                  <td style={{ padding: "9px 12px" }}>{e.joinDate || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={e.status === "نشط" ? "green" : e.status === "موقوف" ? "gold" : "brick"}>{e.status}</Stamp>
+                  </td>
+                  <td style={{ padding: "9px 12px", display: "flex", gap: 6 }}>
+                    <Btn small tone="secondary" onClick={() => edit(e)}>تعديل</Btn>
+                    <Btn small tone="danger" onClick={() => remove(e.id)}>حذف</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============ الإقامات والعقود ============ */
+function IqamasContractsTab({ employees, setEmployees, branches }) {
+  const [filterUrgency, setFilterUrgency] = useState("");
+
+  const update = (id, field, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === id ? { ...e, [field]: value } : e)));
+  };
+
+  const nonSaudi = employees.filter((e) => e.status === "نشط");
+
+  const rows = nonSaudi.map((e) => ({
+    ...e,
+    iqamaStatus: expiryStatus(e.iqamaExpiry),
+    contractStatus: expiryStatus(e.contractEnd),
+  }));
+
+  const filtered = rows.filter((r) => {
+    if (!filterUrgency) return true;
+    if (filterUrgency === "iqama") return r.iqamaStatus.days !== null && r.iqamaStatus.days <= 90;
+    if (filterUrgency === "contract") return r.contractStatus.days !== null && r.contractStatus.days <= 90;
+    return true;
+  });
+
+  const iqamaAlerts = rows.filter((r) => r.iqamaStatus.days !== null && r.iqamaStatus.days <= 30).length;
+  const contractAlerts = rows.filter((r) => r.contractStatus.days !== null && r.contractStatus.days <= 30).length;
+
+  return (
+    <div>
+      <Header title="الإقامات والعقود" subtitle="متابعة تواريخ انتهاء الإقامات وعقود العمل لتفادي الغرامات وتجديد العقود في وقتها" />
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+        <ReceiptCard label="إقامات تنتهي خلال ٣٠ يوم" value={fmt(iqamaAlerts)} tone={iqamaAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label="عقود تنتهي خلال ٣٠ يوم" value={fmt(contractAlerts)} tone={contractAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label="إجمالي الموظفين النشطين" value={fmt(rows.length)} />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <SectionTitle>جدول المتابعة</SectionTitle>
+        <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
+          <option value="">عرض الكل</option>
+          <option value="iqama">إقامات مقتربة من الانتهاء (٩٠ يوم)</option>
+          <option value="contract">عقود مقتربة من الانتهاء (٩٠ يوم)</option>
+        </select>
+      </div>
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
+        {filtered.length === 0 && <Empty text="لا توجد بيانات مطابقة" />}
+        {filtered.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 980 }}>
+            <thead>
+              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                {["الاسم", "الفرع", "الجنسية", "رقم الهوية/الإقامة", "انتهاء الإقامة", "حالة الإقامة", "نوع العقد", "نهاية العقد", "حالة العقد"].map((h) => (
+                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{r.name}</td>
+                  <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>{r.nationality}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{r.nationalId || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.iqamaExpiry || ""}
+                      onChange={(e) => update(r.id, "iqamaExpiry", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.iqamaExpiry} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.iqamaStatus.tone}>{r.iqamaStatus.label}</Stamp>
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <select
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.contractType || "محدد المدة"}
+                      onChange={(e) => update(r.id, "contractType", e.target.value)}
+                    >
+                      <option>محدد المدة</option>
+                      <option>غير محدد المدة</option>
+                    </select>
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.contractEnd || ""}
+                      onChange={(e) => update(r.id, "contractEnd", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.contractEnd} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.contractStatus.tone}>
+                      {r.contractType === "غير محدد المدة" && !r.contractEnd ? "عقد مفتوح" : r.contractStatus.label}
+                    </Stamp>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+        التنبيهات هنا مبنية على التواريخ المسجَّلة فقط داخل التطبيق. تأكد من مطابقتها لتواريخ منصة أبشر أعمال / مقيم بشكل دوري، خصوصًا رسوم وغرامات تجديد الإقامة والعمل النظامي.
+      </div>
+    </div>
+  );
+}
+
+/* ============ تراخيص الفروع والشهادات الصحية ============ */
+const EMPTY_BRANCH_LICENSE = {
+  crNumber: "",
+  crExpiry: "",
+  civilDefenseNumber: "",
+  civilDefenseExpiry: "",
+  municipalityNumber: "",
+  municipalityExpiry: "",
+};
+
+const EMPTY_VEHICLE = {
+  branchId: "",
+  plateNumber: "",
+  make: "",
+  istimaraExpiry: "",
+  insuranceCompany: "",
+  insurancePolicyNumber: "",
+  insuranceExpiry: "",
+};
+
+function BranchLicensesTab({ branches, setBranches, employees, setEmployees, vehicles, setVehicles }) {
+  const [filterUrgency, setFilterUrgency] = useState("");
+  const [vehicleForm, setVehicleForm] = useState(EMPTY_VEHICLE);
+  const [editingVehicleId, setEditingVehicleId] = useState(null);
+
+  const updateBranch = (id, field, value) => {
+    setBranches((prev) => prev.map((b) => (b.id === id ? { ...b, [field]: value } : b)));
+  };
+
+  const updateEmployee = (id, field, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === id ? { ...e, [field]: value } : e)));
+  };
+
+  const resetVehicleForm = () => {
+    setVehicleForm(EMPTY_VEHICLE);
+    setEditingVehicleId(null);
+  };
+
+  const submitVehicle = () => {
+    if (!vehicleForm.plateNumber || !vehicleForm.branchId) return;
+    if (editingVehicleId) {
+      setVehicles((prev) => prev.map((v) => (v.id === editingVehicleId ? { ...vehicleForm, id: editingVehicleId } : v)));
+    } else {
+      setVehicles((prev) => [...prev, { ...vehicleForm, id: uid() }]);
+    }
+    resetVehicleForm();
+  };
+
+  const editVehicle = (v) => {
+    setVehicleForm(v);
+    setEditingVehicleId(v.id);
+  };
+
+  const removeVehicle = (id) => {
+    setVehicles((prev) => prev.filter((v) => v.id !== id));
+    if (editingVehicleId === id) resetVehicleForm();
+  };
+
+  const updateVehicle = (id, field, value) => {
+    setVehicles((prev) => prev.map((v) => (v.id === id ? { ...v, [field]: value } : v)));
+  };
+
+  const branchRows = branches.map((b) => ({
+    ...b,
+    crStatus: expiryStatus(b.crExpiry),
+    civilDefenseStatus: expiryStatus(b.civilDefenseExpiry),
+    municipalityStatus: expiryStatus(b.municipalityExpiry),
+  }));
+
+  const activeEmployees = employees.filter((e) => e.status === "نشط");
+  const healthRows = activeEmployees.map((e) => ({
+    ...e,
+    healthCertStatus: expiryStatus(e.healthCertExpiry),
+    insuranceStatus: expiryStatus(e.insuranceExpiry),
+  }));
+
+  const vehicleRows = vehicles.map((v) => ({
+    ...v,
+    istimaraStatus: expiryStatus(v.istimaraExpiry),
+    vehicleInsuranceStatus: expiryStatus(v.insuranceExpiry),
+  }));
+
+  const filteredBranchRows = branchRows.filter((r) => {
+    if (!filterUrgency) return true;
+    if (filterUrgency === "cr") return r.crStatus.days !== null && r.crStatus.days <= 90;
+    if (filterUrgency === "civilDefense") return r.civilDefenseStatus.days !== null && r.civilDefenseStatus.days <= 90;
+    if (filterUrgency === "municipality") return r.municipalityStatus.days !== null && r.municipalityStatus.days <= 90;
+    return true;
+  });
+
+  const crAlerts = branchRows.filter((r) => r.crStatus.days !== null && r.crStatus.days <= 30).length;
+  const civilDefenseAlerts = branchRows.filter((r) => r.civilDefenseStatus.days !== null && r.civilDefenseStatus.days <= 30).length;
+  const municipalityAlerts = branchRows.filter((r) => r.municipalityStatus.days !== null && r.municipalityStatus.days <= 30).length;
+  const healthAlerts = healthRows.filter((r) => r.healthCertStatus.days !== null && r.healthCertStatus.days <= 30).length;
+  const insuranceAlerts = healthRows.filter((r) => r.insuranceStatus.days !== null && r.insuranceStatus.days <= 30).length;
+  const istimaraAlerts = vehicleRows.filter((r) => r.istimaraStatus.days !== null && r.istimaraStatus.days <= 30).length;
+  const vehicleInsuranceAlerts = vehicleRows.filter((r) => r.vehicleInsuranceStatus.days !== null && r.vehicleInsuranceStatus.days <= 30).length;
+
+  return (
+    <div>
+      <Header title="تراخيص الفروع" subtitle="متابعة تواريخ انتهاء السجل التجاري ورخصة الدفاع المدني ورخصة البلدية للفروع، والشهادات الصحية والتأمين الطبي للموظفين، واستمارات وتأمين سيارات الشركة" />
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+        <ReceiptCard label="سجلات تجارية تنتهي خلال ٣٠ يوم" value={fmt(crAlerts)} tone={crAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label="رخص دفاع مدني تنتهي خلال ٣٠ يوم" value={fmt(civilDefenseAlerts)} tone={civilDefenseAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label="رخص بلدية تنتهي خلال ٣٠ يوم" value={fmt(municipalityAlerts)} tone={municipalityAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label="شهادات صحية تنتهي خلال ٣٠ يوم" value={fmt(healthAlerts)} tone={healthAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label="تأمين طبي ينتهي خلال ٣٠ يوم" value={fmt(insuranceAlerts)} tone={insuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label="استمارات سيارات تنتهي خلال ٣٠ يوم" value={fmt(istimaraAlerts)} tone={istimaraAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label="تأمين سيارات ينتهي خلال ٣٠ يوم" value={fmt(vehicleInsuranceAlerts)} tone={vehicleInsuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <SectionTitle>تراخيص الفروع</SectionTitle>
+        <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
+          <option value="">عرض الكل</option>
+          <option value="cr">سجل تجاري مقترب من الانتهاء (٩٠ يوم)</option>
+          <option value="civilDefense">دفاع مدني مقترب من الانتهاء (٩٠ يوم)</option>
+          <option value="municipality">رخصة بلدية مقتربة من الانتهاء (٩٠ يوم)</option>
+        </select>
+      </div>
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginBottom: 26 }}>
+        {filteredBranchRows.length === 0 && <Empty text="لا توجد فروع مطابقة" />}
+        {filteredBranchRows.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1080 }}>
+            <thead>
+              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                {["الفرع", "رقم السجل التجاري", "انتهاء السجل التجاري", "حالة السجل التجاري", "رقم رخصة الدفاع المدني", "انتهاء الدفاع المدني", "حالة الدفاع المدني", "رقم رخصة البلدية", "انتهاء رخصة البلدية", "حالة رخصة البلدية"].map((h) => (
+                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredBranchRows.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{r.name}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
+                      value={r.crNumber || ""}
+                      onChange={(e) => updateBranch(r.id, "crNumber", e.target.value)}
+                    />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.crExpiry || ""}
+                      onChange={(e) => updateBranch(r.id, "crExpiry", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.crExpiry} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.crStatus.tone}>{r.crStatus.label}</Stamp>
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
+                      value={r.civilDefenseNumber || ""}
+                      onChange={(e) => updateBranch(r.id, "civilDefenseNumber", e.target.value)}
+                    />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.civilDefenseExpiry || ""}
+                      onChange={(e) => updateBranch(r.id, "civilDefenseExpiry", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.civilDefenseExpiry} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.civilDefenseStatus.tone}>{r.civilDefenseStatus.label}</Stamp>
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
+                      value={r.municipalityNumber || ""}
+                      onChange={(e) => updateBranch(r.id, "municipalityNumber", e.target.value)}
+                    />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.municipalityExpiry || ""}
+                      onChange={(e) => updateBranch(r.id, "municipalityExpiry", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.municipalityExpiry} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.municipalityStatus.tone}>{r.municipalityStatus.label}</Stamp>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <SectionTitle>الشهادات الصحية والتأمين الطبي للموظفين</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginTop: 10 }}>
+        {healthRows.length === 0 && <Empty text="لا يوجد موظفون نشطون" />}
+        {healthRows.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1100 }}>
+            <thead>
+              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                {["الاسم", "الفرع", "الوظيفة", "انتهاء الشهادة الصحية", "حالة الشهادة الصحية", "شركة التأمين", "رقم وثيقة التأمين", "انتهاء التأمين الطبي", "حالة التأمين الطبي"].map((h) => (
+                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {healthRows.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{r.name}</td>
+                  <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>{r.position}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.healthCertExpiry || ""}
+                      onChange={(e) => updateEmployee(r.id, "healthCertExpiry", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.healthCertExpiry} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.healthCertStatus.tone}>{r.healthCertStatus.label}</Stamp>
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
+                      value={r.insuranceCompany || ""}
+                      onChange={(e) => updateEmployee(r.id, "insuranceCompany", e.target.value)}
+                    />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
+                      value={r.insurancePolicyNumber || ""}
+                      onChange={(e) => updateEmployee(r.id, "insurancePolicyNumber", e.target.value)}
+                    />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.insuranceExpiry || ""}
+                      onChange={(e) => updateEmployee(r.id, "insuranceExpiry", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.insuranceExpiry} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.insuranceStatus.tone}>{r.insuranceStatus.label}</Stamp>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <SectionTitle>سيارات الشركة — الاستمارة والتأمين</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginTop: 10, marginBottom: 16 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
+          {editingVehicleId ? "تعديل بيانات سيارة" : "إضافة سيارة جديدة"}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <Field label="رقم اللوحة">
+            <input style={inputStyle} value={vehicleForm.plateNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, plateNumber: e.target.value })} />
+          </Field>
+          <Field label="نوع/موديل السيارة">
+            <input style={inputStyle} value={vehicleForm.make} onChange={(e) => setVehicleForm({ ...vehicleForm, make: e.target.value })} />
+          </Field>
+          <Field label="الفرع التابعة له">
+            <select style={inputStyle} value={vehicleForm.branchId} onChange={(e) => setVehicleForm({ ...vehicleForm, branchId: e.target.value })}>
+              <option value="">اختر الفرع</option>
+              {branches.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="تاريخ انتهاء الاستمارة">
+            <input type="date" style={inputStyle} value={vehicleForm.istimaraExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, istimaraExpiry: e.target.value })} />
+          </Field>
+          <Field label="شركة تأمين السيارة">
+            <input style={inputStyle} value={vehicleForm.insuranceCompany} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceCompany: e.target.value })} />
+          </Field>
+          <Field label="رقم وثيقة تأمين السيارة">
+            <input style={inputStyle} value={vehicleForm.insurancePolicyNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, insurancePolicyNumber: e.target.value })} />
+          </Field>
+          <Field label="تاريخ انتهاء تأمين السيارة">
+            <input type="date" style={inputStyle} value={vehicleForm.insuranceExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceExpiry: e.target.value })} />
+          </Field>
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <Btn onClick={submitVehicle}>{editingVehicleId ? "حفظ التعديل" : "إضافة السيارة"}</Btn>
+          {editingVehicleId && <Btn tone="secondary" onClick={resetVehicleForm}>إلغاء</Btn>}
+        </div>
+      </div>
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
+        {vehicleRows.length === 0 && <Empty text="لا توجد سيارات مسجَّلة" />}
+        {vehicleRows.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1150 }}>
+            <thead>
+              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                {["رقم اللوحة", "النوع/الموديل", "الفرع", "انتهاء الاستمارة", "حالة الاستمارة", "شركة التأمين", "رقم الوثيقة", "انتهاء تأمين السيارة", "حالة تأمين السيارة", ""].map((h) => (
+                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {vehicleRows.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                  <td style={{ padding: "9px 12px", fontWeight: 700, fontFamily: "Consolas, monospace" }}>{r.plateNumber}</td>
+                  <td style={{ padding: "9px 12px" }}>{r.make || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.istimaraExpiry || ""}
+                      onChange={(e) => updateVehicle(r.id, "istimaraExpiry", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.istimaraExpiry} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.istimaraStatus.tone}>{r.istimaraStatus.label}</Stamp>
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>{r.insuranceCompany || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>{r.insurancePolicyNumber || "—"}</td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.insuranceExpiry || ""}
+                      onChange={(e) => updateVehicle(r.id, "insuranceExpiry", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.insuranceExpiry} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.vehicleInsuranceStatus.tone}>{r.vehicleInsuranceStatus.label}</Stamp>
+                  </td>
+                  <td style={{ padding: "9px 12px", display: "flex", gap: 6 }}>
+                    <Btn small tone="secondary" onClick={() => editVehicle(r)}>تعديل</Btn>
+                    <Btn small tone="danger" onClick={() => removeVehicle(r.id)}>حذف</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+        التنبيهات هنا مبنية على التواريخ المسجَّلة فقط داخل التطبيق. تأكد من مطابقتها لمنصة بلدي وتراخيص الدفاع المدني والشهادات الصحية وشركة التأمين الطبي واستمارات المرور بشكل دوري.
+      </div>
+    </div>
+  );
+}
+
+/* ============ الكيانات والفروع ============ */
+function BranchesTab({ entities, setEntities, branches, setBranches, employees }) {
+  const [entityName, setEntityName] = useState("");
+  const [branchForm, setBranchForm] = useState({ entityId: "", name: "", city: "" });
+
+  const addEntity = () => {
+    if (!entityName.trim()) return;
+    setEntities((prev) => [...prev, { id: uid(), name: entityName.trim() }]);
+    setEntityName("");
+  };
+  const removeEntity = (id) => {
+    setEntities((prev) => prev.filter((e) => e.id !== id));
+    setBranches((prev) => prev.filter((b) => b.entityId !== id));
+  };
+  const addBranch = () => {
+    if (!branchForm.name.trim() || !branchForm.entityId) return;
+    setBranches((prev) => [...prev, { id: uid(), ...branchForm }]);
+    setBranchForm({ entityId: "", name: "", city: "" });
+  };
+  const removeBranch = (id) => setBranches((prev) => prev.filter((b) => b.id !== id));
+
+  return (
+    <div>
+      <Header title="الكيانات والفروع" subtitle="الهيكل التنظيمي للمجموعة" />
+
+      <SectionTitle>الكيانات (المؤسسات / الشركات)</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+          <input
+            style={{ ...inputStyle, flex: 1 }}
+            placeholder="اسم الكيان الجديد"
+            value={entityName}
+            onChange={(e) => setEntityName(e.target.value)}
+          />
+          <Btn onClick={addEntity}>إضافة كيان</Btn>
+        </div>
+        {entities.map((en) => (
+          <div
+            key={en.id}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 4px", borderTop: `1px dashed ${COLORS.line}` }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{en.name}</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <Stamp>{branches.filter((b) => b.entityId === en.id).length} فرع</Stamp>
+              <Btn small tone="danger" onClick={() => removeEntity(en.id)}>حذف</Btn>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <SectionTitle>الفروع</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+          <Field label="الكيان التابع له">
+            <select style={inputStyle} value={branchForm.entityId} onChange={(e) => setBranchForm({ ...branchForm, entityId: e.target.value })}>
+              <option value="">اختر الكيان</option>
+              {entities.map((en) => (
+                <option key={en.id} value={en.id}>
+                  {en.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="اسم الفرع">
+            <input style={inputStyle} value={branchForm.name} onChange={(e) => setBranchForm({ ...branchForm, name: e.target.value })} />
+          </Field>
+          <Field label="المدينة">
+            <input style={inputStyle} value={branchForm.city} onChange={(e) => setBranchForm({ ...branchForm, city: e.target.value })} />
+          </Field>
+          <div style={{ display: "flex", alignItems: "flex-end" }}>
+            <Btn onClick={addBranch}>إضافة فرع</Btn>
+          </div>
+        </div>
+
+        {branches.map((b) => (
+          <div
+            key={b.id}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 4px", borderTop: `1px dashed ${COLORS.line}` }}
+          >
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700 }}>{b.name}</div>
+              <div style={{ fontSize: 11, color: "#8a7a63" }}>{entities.find((en) => en.id === b.entityId)?.name || "—"} · {b.city}</div>
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <Stamp>{employees.filter((e) => e.branchId === b.id).length} موظف</Stamp>
+              <Btn small tone="danger" onClick={() => removeBranch(b.id)}>حذف</Btn>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============ الحضور والإجازات ============ */
+function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance }) {
+  const [leaveForm, setLeaveForm] = useState({ employeeId: "", type: "سنوية", from: "", to: "" });
+  const [attForm, setAttForm] = useState({ employeeId: "", date: "", status: "حاضر", lateMinutes: "" });
+
+  const addLeave = () => {
+    if (!leaveForm.employeeId || !leaveForm.from || !leaveForm.to) return;
+    setLeaves((prev) => [...prev, { ...leaveForm, id: uid() }]);
+    setLeaveForm({ employeeId: "", type: "سنوية", from: "", to: "" });
+  };
+  const removeLeave = (id) => setLeaves((prev) => prev.filter((l) => l.id !== id));
+
+  const addAtt = () => {
+    if (!attForm.employeeId || !attForm.date) return;
+    const record = { ...attForm, lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0 };
+    setAttendance((prev) => [...prev, { ...record, id: uid() }]);
+    setAttForm({ employeeId: "", date: "", status: "حاضر", lateMinutes: "" });
+  };
+  const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
+
+  const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
+
+  return (
+    <div>
+      <Header title="الحضور والإجازات" subtitle={SAUDI_HOLIDAYS_NOTE} />
+
+      <SectionTitle>تسجيل إجازة</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <Field label="الموظف">
+            <select style={inputStyle} value={leaveForm.employeeId} onChange={(e) => setLeaveForm({ ...leaveForm, employeeId: e.target.value })}>
+              <option value="">اختر الموظف</option>
+              {employees.map((e) => (
+                <option key={e.id} value={e.id}>{e.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="نوع الإجازة">
+            <select style={inputStyle} value={leaveForm.type} onChange={(e) => setLeaveForm({ ...leaveForm, type: e.target.value })}>
+              <option>سنوية</option>
+              <option>مرضية</option>
+              <option>طارئة</option>
+              <option>بدون راتب</option>
+              <option>أخرى</option>
+            </select>
+          </Field>
+          <Field label="من تاريخ">
+            <input type="date" style={inputStyle} value={leaveForm.from} onChange={(e) => setLeaveForm({ ...leaveForm, from: e.target.value })} />
+          </Field>
+          <Field label="إلى تاريخ">
+            <input type="date" style={inputStyle} value={leaveForm.to} onChange={(e) => setLeaveForm({ ...leaveForm, to: e.target.value })} />
+          </Field>
+          <div style={{ display: "flex", alignItems: "flex-end" }}>
+            <Btn onClick={addLeave}>تسجيل الإجازة</Btn>
+          </div>
+        </div>
+        {leaveForm.type === "بدون راتب" && (
+          <div style={{ marginTop: 10, fontSize: 11.5, color: COLORS.brick }}>
+            ملاحظة: إجازة "بدون راتب" تُخصم تلقائيًا من راتب الموظف بواقع يوم كامل عن كل يوم إجازة — يظهر الخصم في تبويب الرواتب.
+          </div>
+        )}
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
+        {leaves.length === 0 && <Empty text="لا توجد إجازات مسجّلة" />}
+        {leaves.map((l, i) => (
+          <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5 }}>
+            <div><b>{empName(l.employeeId)}</b> — {l.type}</div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span style={{ fontFamily: "Consolas, monospace" }}>{l.from} → {l.to}</span>
+              <Btn small tone="danger" onClick={() => removeLeave(l.id)}>حذف</Btn>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <SectionTitle>سجل حضور يومي</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <Field label="الموظف">
+            <select style={inputStyle} value={attForm.employeeId} onChange={(e) => setAttForm({ ...attForm, employeeId: e.target.value })}>
+              <option value="">اختر الموظف</option>
+              {employees.map((e) => (
+                <option key={e.id} value={e.id}>{e.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="التاريخ">
+            <input type="date" style={inputStyle} value={attForm.date} onChange={(e) => setAttForm({ ...attForm, date: e.target.value })} />
+          </Field>
+          <Field label="الحالة">
+            <select style={inputStyle} value={attForm.status} onChange={(e) => setAttForm({ ...attForm, status: e.target.value })}>
+              <option>حاضر</option>
+              <option>غائب</option>
+              <option>متأخر</option>
+            </select>
+          </Field>
+          {attForm.status === "متأخر" && (
+            <Field label="عدد دقائق التأخير">
+              <input
+                type="number"
+                style={inputStyle}
+                value={attForm.lateMinutes}
+                onChange={(e) => setAttForm({ ...attForm, lateMinutes: e.target.value })}
+              />
+            </Field>
+          )}
+          <div style={{ display: "flex", alignItems: "flex-end" }}>
+            <Btn onClick={addAtt}>تسجيل</Btn>
+          </div>
+        </div>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
+        {attendance.length === 0 && <Empty text="لا توجد سجلات حضور" />}
+        {attendance.slice().reverse().map((a, i) => (
+          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5 }}>
+            <div><b>{empName(a.employeeId)}</b> — {a.date}</div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>
+                {a.status}{a.status === "متأخر" && a.lateMinutes ? ` (${a.lateMinutes} د)` : ""}
+              </Stamp>
+              <Btn small tone="danger" onClick={() => removeAtt(a.id)}>حذف</Btn>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ============ الرواتب و GOSI ============ */
+function PayrollTab({ employees, branches, entities, gosiRates, attendance, leaves }) {
+  const [branchFilter, setBranchFilter] = useState("");
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+
+  const rows = employees
+    .filter((e) => e.status === "نشط")
+    .filter((e) => !branchFilter || e.branchId === branchFilter)
+    .map((e) => {
+      const salary = Number(e.salary || 0);
+      const isSaudi = e.nationality === "سعودي";
+      const empShare = isSaudi ? (salary * gosiRates.saudiEmployee) / 100 : 0;
+      const employerShare = isSaudi ? (salary * gosiRates.saudiEmployer) / 100 : (salary * gosiRates.nonSaudiEmployer) / 100;
+
+      /* احتساب الغياب والتأخير والإجازة بدون راتب لهذا الموظف خلال الشهر المختار */
+      const dailyRate = salary / 30;
+      const perMinuteRate = dailyRate / (8 * 60); /* على أساس ٨ ساعات عمل فعلية يوميًا */
+
+      const monthAttendance = attendance.filter((a) => a.employeeId === e.id && (a.date || "").startsWith(month));
+      const absentDays = monthAttendance.filter((a) => a.status === "غائب").length;
+      const lateMinutesTotal = monthAttendance
+        .filter((a) => a.status === "متأخر")
+        .reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
+
+      const unpaidLeaveDays = leaves
+        .filter((l) => l.employeeId === e.id && l.type === "بدون راتب")
+        .reduce((s, l) => s + daysOverlapInMonth(l.from, l.to, month), 0);
+
+      const absentDeduction = absentDays * dailyRate;
+      const lateDeduction = lateMinutesTotal * perMinuteRate;
+      const unpaidLeaveDeduction = unpaidLeaveDays * dailyRate;
+      const attendanceDeduction = absentDeduction + lateDeduction + unpaidLeaveDeduction;
+
+      const net = salary - empShare - attendanceDeduction;
+      return {
+        ...e,
+        salary,
+        empShare,
+        employerShare,
+        dailyRate,
+        absentDays,
+        absentDeduction,
+        lateMinutesTotal,
+        lateDeduction,
+        unpaidLeaveDays,
+        unpaidLeaveDeduction,
+        attendanceDeduction,
+        net,
+        totalCost: salary + employerShare,
+      };
+    });
+
+  const totals = rows.reduce(
+    (acc, r) => ({
+      salary: acc.salary + r.salary,
+      empShare: acc.empShare + r.empShare,
+      employerShare: acc.employerShare + r.employerShare,
+      attendanceDeduction: acc.attendanceDeduction + r.attendanceDeduction,
+      net: acc.net + r.net,
+      totalCost: acc.totalCost + r.totalCost,
+    }),
+    { salary: 0, empShare: 0, employerShare: 0, attendanceDeduction: 0, net: 0, totalCost: 0 }
+  );
+
+  return (
+    <div>
+      <Header title="الرواتب واشتراكات التأمينات (GOSI)" subtitle="النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب" />
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
+        <Field label="شهر احتساب الغياب والتأخير">
+          <input type="month" style={inputStyle} value={month} onChange={(e) => setMonth(e.target.value)} />
+        </Field>
+      </div>
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+        <ReceiptCard label="إجمالي الرواتب الأساسية" value={`${fmt(totals.salary)} ﷼`} />
+        <ReceiptCard label="حصة الموظفين GOSI (تخصم)" value={`${fmt(totals.empShare)} ﷼`} tone={COLORS.brick} />
+        <ReceiptCard label="خصومات الغياب والتأخير" value={`${fmt(totals.attendanceDeduction)} ﷼`} tone={COLORS.brick} />
+        <ReceiptCard label="حصة صاحب العمل" value={`${fmt(totals.employerShare)} ﷼`} tone={COLORS.coffee} />
+        <ReceiptCard label="إجمالي التكلفة الشهرية" value={`${fmt(totals.totalCost)} ﷼`} tone={COLORS.espresso} />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <SectionTitle>كشف الرواتب</SectionTitle>
+        <select style={{ ...inputStyle, maxWidth: 220 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
+          <option value="">كل الفروع</option>
+          {branches.map((b) => (
+            <option key={b.id} value={b.id}>{b.name}</option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
+        {rows.length === 0 && <Empty text="لا يوجد موظفون نشطون مطابقون" />}
+        {rows.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1240 }}>
+            <thead>
+              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                {[
+                  "الاسم",
+                  "الفرع",
+                  "الجنسية",
+                  "الراتب الأساسي",
+                  "حصة الموظف GOSI",
+                  "أيام غياب",
+                  "خصم الغياب",
+                  "دقائق تأخير",
+                  "خصم التأخير",
+                  "أيام إجازة بدون راتب",
+                  "خصم الإجازة",
+                  "إجمالي الخصومات",
+                  "حصة صاحب العمل",
+                  "الصافي للموظف",
+                  "تكلفة الشركة",
+                ].map((h) => (
+                  <th key={h} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit", fontWeight: 700 }}>{r.name}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{r.nationality}</td>
+                  <td style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.absentDays)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.lateMinutesTotal)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
+                  <td style={{ padding: "9px 12px" }}>{fmt(r.employerShare)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.green, fontWeight: 700 }}>{fmt(r.net)}</td>
+                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{fmt(r.totalCost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+        احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ ٣٠. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ ٤٨٠ دقيقة، على أساس ٨ ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه.
+      </div>
+    </div>
+  );
+}
+
+/* ============ نهاية الخدمة ============ */
+function EOSTab({ employees }) {
+  const [empId, setEmpId] = useState("");
+  const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10));
+  const [reason, setReason] = useState("استقالة");
+
+  const emp = employees.find((e) => e.id === empId);
+  const years = emp ? yearsBetween(emp.joinDate, endDate) : 0;
+  const salary = Number(emp?.salary || 0);
+
+  const calc = () => {
+    if (!emp || years <= 0) return { full: 0, adjusted: 0, ratio: 0 };
+    const first5 = Math.min(years, 5) * 0.5 * salary;
+    const after5 = Math.max(years - 5, 0) * 1 * salary;
+    const full = first5 + after5;
+
+    let ratio = 1;
+    let note = "";
+    if (reason === "استقالة") {
+      if (years < 2) { ratio = 0; note = "لا يستحق مكافأة (أقل من سنتين خدمة)"; }
+      else if (years < 5) { ratio = 1 / 3; note = "يستحق ثلث المكافأة (خدمة من ٢ إلى ٥ سنوات)"; }
+      else if (years < 10) { ratio = 2 / 3; note = "يستحق ثلثي المكافأة (خدمة من ٥ إلى ١٠ سنوات)"; }
+      else { ratio = 1; note = "يستحق المكافأة كاملة (خدمة ١٠ سنوات فأكثر)"; }
+    } else {
+      note = reason === "فصل من صاحب العمل" ? "يستحق المكافأة كاملة (إنهاء من صاحب العمل)" : "يستحق المكافأة كاملة";
+    }
+    return { full, adjusted: full * ratio, note };
+  };
+
+  const result = calc();
+
+  return (
+    <div>
+      <Header title="حاسبة مكافأة نهاية الخدمة" subtitle="وفق نظام العمل السعودي (المادتان ٨٤–٨٧) — نصف شهر عن كل سنة من أول ٥ سنوات، وشهر كامل عمّا زاد" />
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 20 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <Field label="الموظف">
+            <select style={inputStyle} value={empId} onChange={(e) => setEmpId(e.target.value)}>
+              <option value="">اختر الموظف</option>
+              {employees.map((e) => (
+                <option key={e.id} value={e.id}>{e.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="تاريخ انتهاء الخدمة">
+            <input type="date" style={inputStyle} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+          </Field>
+          <Field label="سبب انتهاء الخدمة">
+            <select style={inputStyle} value={reason} onChange={(e) => setReason(e.target.value)}>
+              <option>استقالة</option>
+              <option>فصل من صاحب العمل</option>
+              <option>انتهاء عقد محدد المدة</option>
+            </select>
+          </Field>
+        </div>
+        {emp && (
+          <div style={{ marginTop: 10, fontSize: 12, color: "#8a7a63" }}>
+            تاريخ التعيين: {emp.joinDate || "—"} · الراتب الأساسي: {fmt(salary)} ﷼ · مدة الخدمة التقريبية: {years.toFixed(2)} سنة
+          </div>
+        )}
+      </div>
+
+      {emp && (
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+          <ReceiptCard label="المكافأة الكاملة (نظريًا)" value={`${fmt(result.full)} ﷼`} />
+          <ReceiptCard label="المكافأة المستحقة فعليًا" value={`${fmt(result.adjusted)} ﷼`} tone={COLORS.green} sub={result.note} />
+        </div>
+      )}
+      {!emp && <Empty text="اختر موظفًا لعرض احتساب المكافأة" />}
+
+      <div style={{ marginTop: 22, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+        ملاحظة: هذا احتساب تقريبي يعتمد على الراتب الأساسي المسجَّل فقط. الاحتساب الرسمي وفق نظام العمل يشمل أحيانًا بنودًا إضافية من الأجر الشامل، وقد تختلف التفاصيل حسب نوع العقد ولائحة المنشأة — يُنصح بمراجعة مختص أو مكتب عمل قبل الاعتماد النهائي.
+      </div>
+    </div>
+  );
+}
+
+/* ============ الإعدادات ============ */
+function SettingsTab({ gosiRates, setGosiRates }) {
+  return (
+    <div>
+      <Header title="الإعدادات" subtitle="تعديل نسب التأمينات الاجتماعية (GOSI) المستخدمة في احتساب الرواتب" />
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, maxWidth: 480 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <Field label="حصة الموظف السعودي (%)">
+            <input
+              type="number"
+              step="0.01"
+              style={inputStyle}
+              value={gosiRates.saudiEmployee}
+              onChange={(e) => setGosiRates({ ...gosiRates, saudiEmployee: Number(e.target.value) })}
+            />
+          </Field>
+          <Field label="حصة صاحب العمل عن السعودي (%)">
+            <input
+              type="number"
+              step="0.01"
+              style={inputStyle}
+              value={gosiRates.saudiEmployer}
+              onChange={(e) => setGosiRates({ ...gosiRates, saudiEmployer: Number(e.target.value) })}
+            />
+          </Field>
+          <Field label="حصة صاحب العمل عن غير السعودي (%) — أخطار مهنية فقط">
+            <input
+              type="number"
+              step="0.01"
+              style={inputStyle}
+              value={gosiRates.nonSaudiEmployer}
+              onChange={(e) => setGosiRates({ ...gosiRates, nonSaudiEmployer: Number(e.target.value) })}
+            />
+          </Field>
+        </div>
+        <div style={{ marginTop: 14, fontSize: 11.5, color: "#a3927a" }}>
+          النسب أعلاه قيم افتراضية شائعة الاستخدام. نسب GOSI تتغير تدريجيًا ضمن خطة انتقالية معلَنة — يُرجى تحديثها هنا بما يطابق آخر تعميم رسمي من المؤسسة العامة للتأمينات الاجتماعية.
+        </div>
+      </div>
+      <div style={{ marginTop: 18, fontSize: 11.5, color: "#a3927a" }}>
+        جميع البيانات تُحفظ تلقائيًا محليًا في هذا التطبيق ولا تُشارك مع أي جهة خارجية.
+      </div>
+    </div>
+  );
+}
+
+/* ============ شاشة تسجيل الدخول ============ */
+function LoginScreen({ form, setForm, onSubmit, error }) {
+  return (
+    <div
+      dir="rtl"
+      style={{
+        fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+        background: COLORS.paper,
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
+        style={{
+          background: "#fff",
+          border: `1px solid ${COLORS.line}`,
+          borderRadius: 14,
+          padding: "34px 30px",
+          width: 320,
+          maxWidth: "100%",
+          boxShadow: "0 4px 18px rgba(59,42,29,0.08)",
+        }}
+      >
+        <div style={{ textAlign: "center", marginBottom: 22 }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: COLORS.espresso }}>نظام الموارد البشرية</div>
+          <div style={{ fontSize: 11.5, color: COLORS.coffee, marginTop: 4 }}>مجموعة ينبع للمقاهي · تسجيل الدخول</div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <Field label="اسم المستخدم">
+            <input
+              style={inputStyle}
+              value={form.username}
+              onChange={(e) => setForm({ ...form, username: e.target.value })}
+              autoFocus
+            />
+          </Field>
+          <Field label="كلمة المرور">
+            <input
+              type="password"
+              style={inputStyle}
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+            />
+          </Field>
+        </div>
+        {error && (
+          <div style={{ color: COLORS.brick, fontSize: 12, marginTop: 10, textAlign: "center" }}>{error}</div>
+        )}
+        <div style={{ marginTop: 18 }}>
+          <button
+            type="submit"
+            style={{
+              width: "100%",
+              background: COLORS.espresso,
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              padding: "10px 16px",
+              fontSize: 13.5,
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            دخول
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ============ حساب موظف: عرض شخصي فقط ============ */
+function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLogout }) {
+  if (!employee) {
+    return (
+      <div
+        dir="rtl"
+        style={{
+          fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+          background: COLORS.paper,
+          minHeight: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 14,
+          padding: 20,
+          textAlign: "center",
+        }}
+      >
+        <div style={{ fontSize: 14, color: COLORS.ink }}>
+          هذا الحساب غير مرتبط بسجل موظف بعد. تواصل مع الإدارة لربط الحساب.
+        </div>
+        <Btn onClick={onLogout}>تسجيل الخروج</Btn>
+      </div>
+    );
+  }
+
+  const iqamaStatus = expiryStatus(employee.iqamaExpiry);
+  const contractStatus = expiryStatus(employee.contractEnd);
+  const myLeaves = leaves.filter((l) => l.employeeId === employee.id);
+  const myAttendance = attendance.filter((a) => a.employeeId === employee.id).slice().reverse();
+
+  return (
+    <div
+      dir="rtl"
+      style={{
+        fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+        background: COLORS.paper,
+        minHeight: "100vh",
+        color: COLORS.ink,
+        padding: "26px 24px",
+      }}
+    >
+      <div style={{ maxWidth: 860, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22 }}>
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.espresso }}>مرحبًا، {employee.name}</div>
+            <div style={{ fontSize: 12, color: "#8a7a63", marginTop: 3 }}>
+              {branchName(employee.branchId)} · {employee.position}
+            </div>
+          </div>
+          <Btn tone="secondary" onClick={onLogout}>تسجيل الخروج</Btn>
+        </div>
+
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 22 }}>
+          <ReceiptCard label="الراتب الأساسي" value={`${fmt(employee.salary)} ﷼`} />
+          <ReceiptCard
+            label="الحالة الوظيفية"
+            value={employee.status}
+            tone={employee.status === "نشط" ? COLORS.green : COLORS.brick}
+          />
+          <ReceiptCard label="تاريخ التعيين" value={employee.joinDate || "—"} />
+        </div>
+
+        <SectionTitle>الإقامة والعقد</SectionTitle>
+        <div
+          style={{
+            background: "#fff",
+            border: `1px solid ${COLORS.line}`,
+            borderRadius: 10,
+            padding: 16,
+            marginBottom: 20,
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 22,
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>انتهاء الإقامة</div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>{employee.iqamaExpiry || "—"}</div>
+            <Stamp tone={iqamaStatus.tone}>{iqamaStatus.label}</Stamp>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>نوع العقد</div>
+            <div style={{ fontWeight: 700 }}>{employee.contractType || "—"}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>نهاية العقد</div>
+            <div style={{ fontWeight: 700, marginBottom: 6 }}>{employee.contractEnd || "—"}</div>
+            <Stamp tone={contractStatus.tone}>{contractStatus.label}</Stamp>
+          </div>
+        </div>
+
+        <SectionTitle>سجل الإجازات</SectionTitle>
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 20 }}>
+          {myLeaves.length === 0 && <Empty text="لا توجد إجازات مسجّلة" />}
+          {myLeaves.map((l, i) => (
+            <div
+              key={l.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                padding: "9px 14px",
+                borderTop: i ? `1px dashed ${COLORS.line}` : "none",
+                fontSize: 12.5,
+              }}
+            >
+              <div>{l.type}</div>
+              <div style={{ fontFamily: "Consolas, monospace" }}>{l.from} → {l.to}</div>
+            </div>
+          ))}
+        </div>
+
+        <SectionTitle>سجل الحضور</SectionTitle>
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
+          {myAttendance.length === 0 && <Empty text="لا توجد سجلات حضور" />}
+          {myAttendance.slice(0, 25).map((a, i) => (
+            <div
+              key={a.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                padding: "9px 14px",
+                borderTop: i ? `1px dashed ${COLORS.line}` : "none",
+                fontSize: 12.5,
+              }}
+            >
+              <div>{a.date}</div>
+              <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>{a.status}</Stamp>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ============ إدارة المستخدمين (أدمن فقط) ============ */
+function UsersTab({ users, setUsers, employees, branches }) {
+  const [form, setForm] = useState(EMPTY_USER);
+  const [editingId, setEditingId] = useState(null);
+  const [err, setErr] = useState("");
+
+  const resetForm = () => {
+    setForm(EMPTY_USER);
+    setEditingId(null);
+    setErr("");
+  };
+
+  const submit = () => {
+    if (!form.username.trim() || !form.password.trim() || !form.name.trim()) {
+      setErr("الرجاء تعبئة الاسم واسم المستخدم وكلمة المرور");
+      return;
+    }
+    const dup = users.find((u) => u.username === form.username.trim() && u.id !== editingId);
+    if (dup) {
+      setErr("اسم المستخدم مستخدم بالفعل، اختر اسمًا آخر");
+      return;
+    }
+    if (editingId) {
+      setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...form, id: editingId, username: form.username.trim() } : u)));
+    } else {
+      setUsers((prev) => [...prev, { ...form, username: form.username.trim(), id: uid() }]);
+    }
+    resetForm();
+  };
+
+  const edit = (u) => {
+    setForm(u);
+    setEditingId(u.id);
+    setErr("");
+  };
+
+  const remove = (id) => {
+    const target = users.find((u) => u.id === id);
+    if (target?.role === "admin" && users.filter((u) => u.role === "admin").length <= 1) {
+      setErr("لا يمكن حذف آخر حساب أدمن في النظام");
+      return;
+    }
+    setUsers((prev) => prev.filter((u) => u.id !== id));
+    if (editingId === id) resetForm();
+  };
+
+  return (
+    <div>
+      <Header title="المستخدمون والصلاحيات" subtitle="إدارة حسابات الدخول: أدمن، مسؤول فرع، موظف — كل حساب بباسورد خاص به" />
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
+          {editingId ? "تعديل حساب" : "إضافة حساب جديد"}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <Field label="الاسم المعروض">
+            <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </Field>
+          <Field label="اسم المستخدم">
+            <input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
+          </Field>
+          <Field label="كلمة المرور">
+            <input style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+          </Field>
+          <Field label="الدور">
+            <select
+              style={inputStyle}
+              value={form.role}
+              onChange={(e) => setForm({ ...form, role: e.target.value, branchId: "", employeeId: "" })}
+            >
+              <option value="admin">أدمن (كل الصلاحيات)</option>
+              <option value="branch_manager">مسؤول فرع</option>
+              <option value="employee">موظف</option>
+            </select>
+          </Field>
+          {form.role === "branch_manager" && (
+            <Field label="الفرع">
+              <select style={inputStyle} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
+                <option value="">اختر الفرع</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </Field>
+          )}
+          {form.role === "employee" && (
+            <Field label="الموظف المرتبط">
+              <select style={inputStyle} value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })}>
+                <option value="">اختر الموظف</option>
+                {employees.map((e) => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
+                ))}
+              </select>
+            </Field>
+          )}
+        </div>
+        {err && <div style={{ color: COLORS.brick, fontSize: 12, marginTop: 10 }}>{err}</div>}
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <Btn onClick={submit}>{editingId ? "حفظ التعديل" : "إضافة الحساب"}</Btn>
+          {editingId && <Btn tone="secondary" onClick={resetForm}>إلغاء</Btn>}
+        </div>
+      </div>
+
+      <SectionTitle>الحسابات الحالية ({fmt(users.length)})</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
+        {users.map((u, i) => (
+          <div
+            key={u.id}
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              padding: "10px 14px",
+              borderTop: i ? `1px dashed ${COLORS.line}` : "none",
+            }}
+          >
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 13 }}>
+                {u.name} <span style={{ fontWeight: 400, color: "#8a7a63" }}>({u.username})</span>
+              </div>
+              <div style={{ fontSize: 11.5, color: "#8a7a63" }}>
+                {ROLE_LABELS[u.role]}
+                {u.role === "branch_manager" && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
+                {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || "غير مرتبط"}`}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 6 }}>
+              <Btn small tone="secondary" onClick={() => edit(u)}>تعديل</Btn>
+              <Btn small tone="danger" onClick={() => remove(u.id)}>حذف</Btn>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+        تنبيه: كلمات المرور هنا وسيلة تقييد وصول بسيطة داخل الفريق وليست تشفيرًا احترافيًا (يمكن لأي شخص يملك صلاحية الأدمن رؤيتها كنص واضح). البيانات الآن تُخزَّن وتُزامَن عبر قاعدة بيانات Firestore المشتركة، فتأكد من ضبط قواعد الأمان (Rules) في مشروع Firebase لمنع الوصول العام غير المصرّح به.
+      </div>
+    </div>
+  );
+}
+
+/* ============ بوابة الدخول (تدير المستخدمين والجلسة) ============ */
+function Root() {
+  const [users, setUsers] = useState(USERS_SEED);
+  const [usersLoaded, setUsersLoaded] = useState(false);
+  const [currentUsername, setCurrentUsername] = useState(null);
+  const [authLoaded, setAuthLoaded] = useState(false);
+  const [loginForm, setLoginForm] = useState({ username: "", password: "" });
+  const [loginError, setLoginError] = useState("");
+  const [authSyncError, setAuthSyncError] = useState("");
+  const lastSyncedUsersRef = useRef("");
+
+  /* الجلسة (من هو المسجّل دخوله) تبقى محلية على كل جهاز، ما تتزامنش */
+  useEffect(() => {
+    try {
+      const sess = localStorage.getItem("hr-system-session");
+      if (sess) setCurrentUsername(sess);
+    } catch (e) {
+      /* لا توجد جلسة محفوظة */
+    }
+    setAuthLoaded(true);
+  }, []);
+
+  /* قائمة المستخدمين والصلاحيات تُزامَن لحظيًا عبر Firestore بين كل الأجهزة */
+  useEffect(() => {
+    const unsub = USERS_DOC.onSnapshot(
+      (snap) => {
+        if (snap.metadata.hasPendingWrites) return;
+        const d = snap.data();
+        if (d && Array.isArray(d.users) && d.users.length) {
+          setUsers(d.users);
+          lastSyncedUsersRef.current = JSON.stringify(d.users);
+        } else {
+          USERS_DOC.set({ users: USERS_SEED }).catch(() => {});
+        }
+        setAuthSyncError("");
+        setUsersLoaded(true);
+      },
+      (err) => {
+        setAuthSyncError("تعذر الاتصال بقاعدة البيانات المشتركة — تحقّق من اتصال الإنترنت");
+        setUsersLoaded(true);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  useEffect(() => {
+    if (!usersLoaded) return;
+    const json = JSON.stringify(users);
+    if (json === lastSyncedUsersRef.current) return;
+    USERS_DOC.set({ users })
+      .then(() => {
+        lastSyncedUsersRef.current = json;
+      })
+      .catch(() => setAuthSyncError("تعذر حفظ بيانات المستخدمين — تحقّق من الإنترنت"));
+  }, [users, usersLoaded]);
+
+  const currentUser = users.find((u) => u.username === currentUsername) || null;
+
+  const login = () => {
+    const match = users.find(
+      (u) => u.username === loginForm.username.trim() && u.password === loginForm.password
+    );
+    if (!match) {
+      setLoginError("اسم المستخدم أو كلمة المرور غير صحيحة");
+      return;
+    }
+    setCurrentUsername(match.username);
+    try {
+      localStorage.setItem("hr-system-session", match.username);
+    } catch (e) {}
+    setLoginForm({ username: "", password: "" });
+    setLoginError("");
+  };
+
+  const logout = () => {
+    setCurrentUsername(null);
+    try {
+      localStorage.removeItem("hr-system-session");
+    } catch (e) {}
+  };
+
+  if (!authLoaded || !usersLoaded) return null;
+
+  if (!currentUser) {
+    return (
+      <LoginScreen
+        form={loginForm}
+        setForm={setLoginForm}
+        onSubmit={login}
+        error={loginError || authSyncError}
+      />
+    );
+  }
+
+  return <HRApp currentUser={currentUser} users={users} setUsers={setUsers} onLogout={logout} />;
+}
+
+const rootEl = document.getElementById("root");
+const root = ReactDOM.createRoot(rootEl);
+root.render(<Root />);
+</script>
+</body>
+</html>
