@@ -206,6 +206,7 @@ const NAV = [
   { key: "licenses", label: "تراخيص الفروع", labelEn: "Branch Licenses", icon: "▤" },
   { key: "branches", label: "الكيانات والفروع", labelEn: "Entities & Branches", icon: "◫" },
   { key: "attendance", label: "الحضور والإجازات", labelEn: "Attendance & Leave", icon: "◔" },
+  { key: "leaveRequests", label: "طلبات الإجازات", labelEn: "Leave Requests", icon: "✉" },
   { key: "payroll", label: "الرواتب و GOSI", labelEn: "Payroll & GOSI", icon: "◎" },
   { key: "eos", label: "نهاية الخدمة", labelEn: "End of Service", icon: "◆" },
   { key: "reports", label: "التقارير", labelEn: "Reports", icon: "▥" },
@@ -225,6 +226,13 @@ const STATUS_LABELS_EN = { "نشط": "Active", "موقوف": "Suspended", "من�
 const NATIONALITY_LABELS_EN = { "سعودي": "Saudi", "غير سعودي": "Non-Saudi" };
 const CONTRACT_TYPE_LABELS_EN = { "محدد المدة": "Fixed-term", "غير محدد المدة": "Unlimited" };
 const LEAVE_TYPE_LABELS_EN = { "سنوية": "Annual", "مرضية": "Sick", "طارئة": "Emergency", "بدون راتب": "Unpaid", "أخرى": "Other" };
+const LEAVE_REQUEST_STATUS_LABELS_EN = {
+  "قيد المراجعة": "Pending Review",
+  "موافقة مبدئية": "Preliminary Approved",
+  "مرفوضة من مدير الكيان": "Rejected by Entity Manager",
+  "موافقة نهائية": "Final Approved",
+  "مرفوضة نهائيًا": "Finally Rejected",
+};
 const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late" };
 const PAYROLL_ITEM_TYPE_LABELS_EN = { "سلفة": "Advance", "خصم": "Deduction", "حافز": "Incentive" };
 const EOS_REASON_LABELS_EN = { "استقالة": "Resignation", "فصل من صاحب العمل": "Termination by Employer", "انتهاء عقد محدد المدة": "Fixed-term Contract End" };
@@ -418,6 +426,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [branches, setBranches] = useState(BRANCHES_SEED);
   const [employees, setEmployees] = useState([]);
   const [leaves, setLeaves] = useState([]);
+  const [leaveRequests, setLeaveRequests] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [payrollItems, setPayrollItems] = useState([]);
@@ -445,6 +454,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             branches: d.branches || BRANCHES_SEED,
             employees: d.employees || [],
             leaves: d.leaves || [],
+            leaveRequests: d.leaveRequests || [],
             attendance: d.attendance || [],
             gosiRates: d.gosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
             vehicles: d.vehicles || [],
@@ -454,6 +464,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setBranches(next.branches);
           setEmployees(next.employees);
           setLeaves(next.leaves);
+          setLeaveRequests(next.leaveRequests);
           setAttendance(next.attendance);
           setVehicles(next.vehicles);
           setGosiRates(next.gosiRates);
@@ -461,7 +472,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           lastSyncedRef.current = JSON.stringify(next);
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], attendance: [], vehicles: [], gosiRates, payrollItems: [] }).catch(() => {});
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [] }).catch(() => {});
         }
         setSyncError("");
         setLoaded(true);
@@ -477,7 +488,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   /* حفظ ومزامنة تلقائية إلى Firestore — تنعكس فورًا على كل الأجهزة المتصلة */
   useEffect(() => {
     if (!loaded) return;
-    const payload = { entities, branches, employees, leaves, attendance, gosiRates, vehicles, payrollItems };
+    const payload = { entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) return;
     const t = setTimeout(() => {
@@ -490,7 +501,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         .catch(() => setSaveMsg("تعذر الحفظ — تحقّق من الإنترنت"));
     }, 400);
     return () => clearTimeout(t);
-  }, [entities, branches, employees, leaves, attendance, gosiRates, vehicles, payrollItems, loaded]);
+  }, [entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, loaded]);
 
   const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
   const entityName = (id) => entities.find((e) => e.id === id)?.name || "—";
@@ -511,6 +522,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const scopedLeaves = isBranchManager || isEntityManager
     ? leaves.filter((l) => scopedEmployees.some((e) => e.id === l.employeeId))
     : leaves;
+  const scopedLeaveRequests = isEntityManager
+    ? leaveRequests.filter((r) => scopedEmployees.some((e) => e.id === r.employeeId))
+    : leaveRequests;
   const scopedAttendance = isBranchManager || isEntityManager
     ? attendance.filter((a) => scopedEmployees.some((e) => e.id === a.employeeId))
     : attendance;
@@ -523,14 +537,48 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     ? payrollItems.filter((p) => scopedEmployees.some((e) => e.id === p.employeeId))
     : payrollItems;
 
+  /* دورة اعتماد طلبات الإجازة: موافقة مبدئية من مدير الكيان، ثم موافقة نهائية من الأدمن/المسؤول العام */
+  const preliminaryApproveLeaveRequest = (reqId) => {
+    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة مبدئية", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
+    logActivity && logActivity("موافقة مبدئية على طلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
+  };
+  const preliminaryRejectLeaveRequest = (reqId) => {
+    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوضة من مدير الكيان", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
+    logActivity && logActivity("رفض مبدئي لطلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
+  };
+  const finalApproveLeaveRequest = (reqId) => {
+    const req = leaveRequests.find((r) => r.id === reqId);
+    if (!req) return;
+    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة نهائية", finalApprovedBy: currentUser.name, finalApprovedAt: new Date().toISOString() } : r)));
+    setLeaves((prev) => [...prev, { id: uid(), employeeId: req.employeeId, type: req.type, from: req.from, to: req.to, note: req.note || "", leaveRequestId: req.id }]);
+    logActivity && logActivity("موافقة نهائية على طلب إجازة", "leaveRequests", employees.find((e) => e.id === req.employeeId)?.name || "");
+  };
+  const finalRejectLeaveRequest = (reqId) => {
+    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوضة نهائيًا", finalApprovedBy: currentUser.name, finalApprovedAt: new Date().toISOString() } : r)));
+    logActivity && logActivity("رفض نهائي لطلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
+  };
+
   /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل */
   if (role === "employee") {
     const myEmployee = employees.find((e) => e.id === currentUser.employeeId);
+    const submitLeaveRequest = (req) => {
+      const newReq = {
+        ...req,
+        id: uid(),
+        employeeId: myEmployee?.id,
+        status: "قيد المراجعة",
+        requestedAt: new Date().toISOString(),
+      };
+      setLeaveRequests((prev) => [newReq, ...prev]);
+      logActivity && logActivity("تقديم طلب إجازة", "leaveRequests", myEmployee?.name || "");
+    };
     return (
       <EmployeeSelfView
         user={currentUser}
         employee={myEmployee}
         leaves={leaves}
+        leaveRequests={leaveRequests.filter((r) => r.employeeId === myEmployee?.id)}
+        onSubmitLeaveRequest={submitLeaveRequest}
         attendance={attendance}
         branchName={branchName}
         onLogout={onLogout}
@@ -709,6 +757,19 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             setAttendance={setAttendance}
             branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
             logActivity={logActivity}
+          />
+        )}
+        {tab === "leaveRequests" && (
+          <LeaveRequestsTab
+            employees={scopedEmployees}
+            leaveRequests={scopedLeaveRequests}
+            isEntityManager={isEntityManager}
+            isFinalApprover={isAdmin || isManager}
+            onPreliminaryApprove={preliminaryApproveLeaveRequest}
+            onPreliminaryReject={preliminaryRejectLeaveRequest}
+            onFinalApprove={finalApproveLeaveRequest}
+            onFinalReject={finalRejectLeaveRequest}
+            branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
           />
         )}
         {tab === "payroll" && (
@@ -3249,7 +3310,139 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
 }
 
 /* ============ حساب موظف: عرض شخصي فقط ============ */
-function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLogout, setUsers, logActivity }) {
+/* ============ طلبات الإجازات: موافقة مبدئية (مدير الكيان) ثم موافقة نهائية (الأدمن/المسؤول العام) ============ */
+function LeaveRequestsTab({ employees, leaveRequests, isEntityManager, isFinalApprover, onPreliminaryApprove, onPreliminaryReject, onFinalApprove, onFinalReject, branchName }) {
+  const { t } = useLang();
+  const empName = (id) => employees.find((e) => e.id === id)?.name || t("موظف محذوف", "Deleted employee");
+
+  const pendingPreliminary = leaveRequests.filter((r) => r.status === "قيد المراجعة");
+  const pendingFinal = leaveRequests.filter((r) => r.status === "موافقة مبدئية");
+  const history = leaveRequests.filter((r) => ["مرفوضة من مدير الكيان", "موافقة نهائية", "مرفوضة نهائيًا"].includes(r.status));
+
+  const statusTone = (s) =>
+    s === "موافقة نهائية" ? "green" : s === "موافقة مبدئية" ? "gold" : s === "قيد المراجعة" ? "gold" : "brick";
+
+  const RequestRow = ({ r, actions }) => (
+    <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{empName(r.employeeId)}</div>
+          <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{branchName(r.employeeId)}</div>
+          <div style={{ fontSize: 12.5, marginTop: 6 }}>
+            {trLabel(t, LEAVE_TYPE_LABELS_EN, r.type)} — <span style={{ fontFamily: "Consolas, monospace" }}>{r.from} → {r.to}</span>
+          </div>
+          {r.note && <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 4 }}>{r.note}</div>}
+        </div>
+        <Stamp tone={statusTone(r.status)}>{trLabel(t, LEAVE_REQUEST_STATUS_LABELS_EN, r.status)}</Stamp>
+      </div>
+      {actions && <div style={{ display: "flex", gap: 8, marginTop: 10 }}>{actions}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <Header title={t("طلبات الإجازات", "Leave Requests")} subtitle={t("موافقة مبدئية من مدير الكيان، ثم موافقة نهائية من الأدمن/المسؤول العام", "Preliminary approval by the entity manager, then final approval by the admin/general manager")} />
+
+      {isEntityManager && (
+        <>
+          <SectionTitle>{t("بانتظار الموافقة المبدئية", "Awaiting Preliminary Approval")} ({pendingPreliminary.length})</SectionTitle>
+          {pendingPreliminary.length === 0 && <Empty text={t("لا توجد طلبات بانتظار الموافقة المبدئية", "No requests awaiting preliminary approval")} />}
+          {pendingPreliminary.map((r) => (
+            <RequestRow
+              key={r.id}
+              r={r}
+              actions={
+                <>
+                  <Btn small onClick={() => onPreliminaryApprove(r.id)}>{t("✔ موافقة مبدئية", "✔ Preliminary Approve")}</Btn>
+                  <Btn small tone="danger" onClick={() => onPreliminaryReject(r.id)}>{t("✕ رفض", "✕ Reject")}</Btn>
+                </>
+              }
+            />
+          ))}
+        </>
+      )}
+
+      {isFinalApprover && (
+        <>
+          <SectionTitle>{t("بانتظار الموافقة النهائية", "Awaiting Final Approval")} ({pendingFinal.length})</SectionTitle>
+          {pendingFinal.length === 0 && <Empty text={t("لا توجد طلبات بانتظار الموافقة النهائية", "No requests awaiting final approval")} />}
+          {pendingFinal.map((r) => (
+            <RequestRow
+              key={r.id}
+              r={r}
+              actions={
+                <>
+                  <Btn small onClick={() => onFinalApprove(r.id)}>{t("✔ موافقة نهائية", "✔ Final Approve")}</Btn>
+                  <Btn small tone="danger" onClick={() => onFinalReject(r.id)}>{t("✕ رفض", "✕ Reject")}</Btn>
+                </>
+              }
+            />
+          ))}
+          {!isEntityManager && (
+            <>
+              <SectionTitle>{t("بانتظار الموافقة المبدئية (لدى مدير الكيان)", "Awaiting Preliminary Approval (with Entity Manager)")} ({pendingPreliminary.length})</SectionTitle>
+              {pendingPreliminary.length === 0 && <Empty text={t("لا توجد طلبات", "No requests")} />}
+              {pendingPreliminary.map((r) => <RequestRow key={r.id} r={r} />)}
+            </>
+          )}
+        </>
+      )}
+
+      <SectionTitle>{t("السجل", "History")} ({history.length})</SectionTitle>
+      {history.length === 0 && <Empty text={t("لا يوجد سجل بعد", "No history yet")} />}
+      {history.map((r) => <RequestRow key={r.id} r={r} />)}
+    </div>
+  );
+}
+
+
+function LeaveRequestForm({ onSubmit, t }) {
+  const [form, setForm] = useState({ type: "سنوية", from: "", to: "", note: "" });
+  const [sent, setSent] = useState(false);
+
+  const submit = () => {
+    if (!form.from || !form.to) return;
+    onSubmit && onSubmit(form);
+    setForm({ type: "سنوية", from: "", to: "", note: "" });
+    setSent(true);
+    setTimeout(() => setSent(false), 2500);
+  };
+
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+        <Field label={t("نوع الإجازة", "Leave Type")}>
+          <select style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+            <option value="سنوية">{t("سنوية", "Annual")}</option>
+            <option value="مرضية">{t("مرضية", "Sick")}</option>
+            <option value="طارئة">{t("طارئة", "Emergency")}</option>
+            <option value="بدون راتب">{t("بدون راتب", "Unpaid")}</option>
+            <option value="أخرى">{t("أخرى", "Other")}</option>
+          </select>
+        </Field>
+        <Field label={t("من تاريخ", "From")}>
+          <input type="date" style={inputStyle} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} />
+        </Field>
+        <Field label={t("إلى تاريخ", "To")}>
+          <input type="date" style={inputStyle} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} />
+        </Field>
+        <Field label={t("ملاحظة (اختياري)", "Note (optional)")}>
+          <input style={inputStyle} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
+        </Field>
+        <div style={{ display: "flex", alignItems: "flex-end" }}>
+          <Btn onClick={submit}>{t("إرسال الطلب", "Submit Request")}</Btn>
+        </div>
+      </div>
+      {sent && (
+        <div style={{ marginTop: 10, fontSize: 12, color: COLORS.green }}>
+          {t("تم إرسال طلبك — بانتظار الموافقة المبدئية من مدير الكيان ثم الموافقة النهائية.", "Your request has been sent — awaiting preliminary approval from the entity manager, then final approval.")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, branchName, onLogout, setUsers, logActivity }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   if (!employee) {
@@ -3406,6 +3599,28 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
             <div style={{ fontWeight: 700, marginBottom: 6 }}>{employee.contractEnd || "—"}</div>
             <Stamp tone={contractStatus.tone}>{contractStatus.label}</Stamp>
           </div>
+        </div>
+
+        <SectionTitle>{t("طلب إجازة جديد", "New Leave Request")}</SectionTitle>
+        <LeaveRequestForm onSubmit={onSubmitLeaveRequest} t={t} />
+
+        <SectionTitle>{t("طلباتي", "My Requests")}</SectionTitle>
+        <div style={{ marginBottom: 20 }}>
+          {(!leaveRequests || leaveRequests.length === 0) && (
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+              <Empty text={t("لا توجد طلبات إجازة مقدَّمة", "No leave requests submitted")} />
+            </div>
+          )}
+          {(leaveRequests || []).map((r) => (
+            <div key={r.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div style={{ fontSize: 12.5 }}>
+                {trLabel(t, LEAVE_TYPE_LABELS_EN, r.type)} — <span style={{ fontFamily: "Consolas, monospace" }}>{r.from} → {r.to}</span>
+              </div>
+              <Stamp tone={r.status === "موافقة نهائية" ? "green" : r.status.includes("مرفوضة") ? "brick" : "gold"}>
+                {trLabel(t, LEAVE_REQUEST_STATUS_LABELS_EN, r.status)}
+              </Stamp>
+            </div>
+          ))}
         </div>
 
         <SectionTitle>{t("سجل الإجازات", "Leave Record")}</SectionTitle>
