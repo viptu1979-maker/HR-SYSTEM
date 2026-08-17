@@ -673,6 +673,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             entityOfBranch={entityOfBranch}
             leaves={scopedLeaves}
             logActivity={logActivity}
+            canEditWeeklyOff={isAdmin || isEntityManager}
           />
         )}
         {tab === "iqamas" && (
@@ -873,7 +874,7 @@ function expiryStatus(dateStr, t) {
   return { label: tr(`سارية (${days} يوم متبقي)`, `Valid (${days} days left)`), tone: "green", days };
 }
 
-function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch, leaves, logActivity }) {
+function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch, leaves, logActivity, canEditWeeklyOff = true }) {
   const { t } = useLang();
   const [form, setForm] = useState(EMPTY_EMP);
   const [editingId, setEditingId] = useState(null);
@@ -922,6 +923,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, govFees: { ...(e.govFees || {}), ...fees } } : e)));
     setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, govFees: { ...(prev.govFees || {}), ...fees } } : prev));
     logActivity && logActivity("تعديل رسوم حكومية", "employees", employees.find((e) => e.id === empId)?.name || "");
+  };
+
+  const updateWeeklyOff = (empId, day) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, weeklyOffDay: day } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, weeklyOffDay: day } : prev));
+    logActivity && logActivity("تحديد الإجازة الأسبوعية", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${day}`);
   };
 
   const removeCareerEntry = (empId, entryId) => {
@@ -981,13 +988,6 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
               <option value="نشط">{t("نشط", "Active")}</option>
               <option value="موقوف">{t("موقوف", "Suspended")}</option>
               <option value="منتهي الخدمة">{t("منتهي الخدمة", "Terminated")}</option>
-            </select>
-          </Field>
-          <Field label={t("الإجازة الأسبوعية", "Weekly Off Day")}>
-            <select style={inputStyle} value={form.weeklyOffDay || "الجمعة"} onChange={(e) => setForm({ ...form, weeklyOffDay: e.target.value })}>
-              {WEEK_DAYS.map((d) => (
-                <option key={d} value={d}>{t(d, WEEK_DAYS_EN[d])}</option>
-              ))}
             </select>
           </Field>
         </div>
@@ -1103,6 +1103,8 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           onAddCareerEntry={addCareerEntry}
           onRemoveCareerEntry={removeCareerEntry}
           onUpdateGovFees={updateGovFees}
+          onUpdateWeeklyOff={updateWeeklyOff}
+          canEditWeeklyOff={canEditWeeklyOff}
           onClose={() => setProfileEmp(null)}
         />
       )}
@@ -1111,7 +1113,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onUpdateWeeklyOff, canEditWeeklyOff = true, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const feesRefs = {
@@ -1242,7 +1244,24 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
             <InfoRow label={t("المسمى الوظيفي", "Job Title")} value={emp.position} />
             <InfoRow label={t("تاريخ التعيين", "Hire Date")} value={emp.joinDate} />
             <InfoRow label={t("رقم الجوال", "Mobile Number")} value={emp.phone} />
-            <InfoRow label={t("الإجازة الأسبوعية", "Weekly Off Day")} value={t(emp.weeklyOffDay || "الجمعة", WEEK_DAYS_EN[emp.weeklyOffDay] || "Friday")} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
+              <span style={{ color: "#a3927a" }}>{t("الإجازة الأسبوعية", "Weekly Off Day")}</span>
+              {canEditWeeklyOff ? (
+                <select
+                  style={{ ...inputStyle, padding: "4px 8px", fontSize: 12.5, width: 140 }}
+                  value={emp.weeklyOffDay || "الجمعة"}
+                  onChange={(e) => onUpdateWeeklyOff && onUpdateWeeklyOff(emp.id, e.target.value)}
+                >
+                  {WEEK_DAYS.map((d) => (
+                    <option key={d} value={d}>{t(d, WEEK_DAYS_EN[d])}</option>
+                  ))}
+                </select>
+              ) : (
+                <span style={{ fontWeight: 700, color: COLORS.espresso }}>
+                  {t(emp.weeklyOffDay || "الجمعة", WEEK_DAYS_EN[emp.weeklyOffDay] || "Friday")}
+                </span>
+              )}
+            </div>
           </Section>
 
           <Section title={t("الراتب", "Salary")}>
@@ -3274,6 +3293,7 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
   const contractStatus = expiryStatus(employee.contractEnd, t);
   const myLeaves = leaves.filter((l) => l.employeeId === employee.id);
   const myAttendance = attendance.filter((a) => a.employeeId === employee.id).slice().reverse();
+  const myLeaveBal = leaveBalanceInfo(employee, leaves);
 
   return (
     <div
@@ -3318,7 +3338,46 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
             tone={employee.status === "نشط" ? COLORS.green : COLORS.brick}
           />
           <ReceiptCard label={t("تاريخ التعيين", "Hire Date")} value={employee.joinDate || "—"} />
+          <ReceiptCard
+            label={t("الإجازة الأسبوعية", "Weekly Off Day")}
+            value={t(employee.weeklyOffDay || "الجمعة", WEEK_DAYS_EN[employee.weeklyOffDay] || "Friday")}
+          />
         </div>
+
+        <SectionTitle>{t("رصيد الإجازة السنوية", "Annual Leave Balance")}</SectionTitle>
+        {myLeaveBal && (
+          <div
+            style={{
+              background: "#fff",
+              border: `1px solid ${COLORS.line}`,
+              borderRadius: 10,
+              padding: 16,
+              marginBottom: 20,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 22,
+            }}
+          >
+            <div>
+              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("الاستحقاق السنوي", "Annual Entitlement")}</div>
+              <div style={{ fontWeight: 700 }}>{fmt(myLeaveBal.perYear)} {t("يوم", "days")}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("الرصيد المتراكم", "Accrued to Date")}</div>
+              <div style={{ fontWeight: 700 }}>{fmt(myLeaveBal.accrued)} {t("يوم", "days")}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("المستخدم", "Used")}</div>
+              <div style={{ fontWeight: 700 }}>{fmt(myLeaveBal.usedDays)} {t("يوم", "days")}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("الرصيد المتبقي", "Remaining Balance")}</div>
+              <div style={{ fontWeight: 800, color: myLeaveBal.balance < 0 ? COLORS.brick : COLORS.green }}>
+                {fmt(myLeaveBal.balance)} {t("يوم", "days")}
+              </div>
+            </div>
+          </div>
+        )}
 
         <SectionTitle>{t("الإقامة والعقد", "Iqama & Contract")}</SectionTitle>
         <div
