@@ -12,6 +12,13 @@
 <style>
   html, body { margin: 0; padding: 0; }
   * { box-sizing: border-box; }
+  @media print {
+    body * { visibility: hidden; }
+    .print-section, .print-section * { visibility: visible; }
+    .print-section { position: absolute; left: 0; top: 0; width: 100%; padding: 16px; }
+    .no-print { display: none !important; }
+    .print-only-title { display: block !important; font-size: 18px; font-weight: 700; margin-bottom: 12px; }
+  }
 </style>
 </head>
 <body>
@@ -34,6 +41,7 @@ const { useState, useEffect, useMemo, useRef, useContext, createContext } = Reac
 const db = window.__hrDb;
 const DATA_DOC = db.collection("hrSystem").doc("data");
 const USERS_DOC = db.collection("hrSystem").doc("users");
+const LOG_DOC = db.collection("hrSystem").doc("activityLog");
 
 /* ============ اللغة (عربي/إنجليزي) ============ */
 const LangContext = createContext({ lang: "ar", dir: "rtl", t: (ar) => ar, toggleLang: () => {} });
@@ -126,6 +134,7 @@ const NAV = [
   { key: "attendance", label: "الحضور والإجازات", labelEn: "Attendance & Leave", icon: "◔" },
   { key: "payroll", label: "الرواتب و GOSI", labelEn: "Payroll & GOSI", icon: "◎" },
   { key: "eos", label: "نهاية الخدمة", labelEn: "End of Service", icon: "◆" },
+  { key: "reports", label: "التقارير", labelEn: "Reports", icon: "▥" },
   { key: "settings", label: "الإعدادات", labelEn: "Settings", icon: "⚙" },
 ];
 
@@ -134,8 +143,8 @@ const USERS_SEED = [
   { id: "u1", username: "admin", password: "admin123", role: "admin", name: "المدير العام", branchId: "", employeeId: "" },
 ];
 
-const ROLE_LABELS = { admin: "أدمن", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", employee: "موظف" };
-const ROLE_LABELS_EN = { admin: "Admin", entity_manager: "Entity Manager", branch_manager: "Branch Manager", employee: "Employee" };
+const ROLE_LABELS = { admin: "أدمن", manager: "مسؤول عام", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", employee: "موظف" };
+const ROLE_LABELS_EN = { admin: "Admin", manager: "General Manager", entity_manager: "Entity Manager", branch_manager: "Branch Manager", employee: "Employee" };
 
 /* ترجمة نصوص العرض فقط لقيم مخزّنة بالعربي (الحالة/الجنسية/إلخ) — القيمة المخزّنة في البيانات تفضل عربي دايمًا */
 const STATUS_LABELS_EN = { "نشط": "Active", "موقوف": "Suspended", "منتهي الخدمة": "Terminated" };
@@ -143,6 +152,7 @@ const NATIONALITY_LABELS_EN = { "سعودي": "Saudi", "غير سعودي": "Non
 const CONTRACT_TYPE_LABELS_EN = { "محدد المدة": "Fixed-term", "غير محدد المدة": "Unlimited" };
 const LEAVE_TYPE_LABELS_EN = { "سنوية": "Annual", "مرضية": "Sick", "طارئة": "Emergency", "بدون راتب": "Unpaid", "أخرى": "Other" };
 const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late" };
+const PAYROLL_ITEM_TYPE_LABELS_EN = { "سلفة": "Advance", "خصم": "Deduction", "حافز": "Incentive" };
 const EOS_REASON_LABELS_EN = { "استقالة": "Resignation", "فصل من صاحب العمل": "Termination by Employer", "انتهاء عقد محدد المدة": "Fixed-term Contract End" };
 function trLabel(t, dict, v) {
   return t(v, dict[v] || v);
@@ -152,7 +162,8 @@ const EMPTY_USER = { username: "", password: "", role: "employee", name: "", bra
 
 function navForRole(role) {
   if (role === "admin") return [...NAV, { key: "users", label: "المستخدمون", labelEn: "Users", icon: "◑" }];
-  if (role === "entity_manager") return NAV; // كل التبويبات، بدون تبويب المستخدمين (حصري للأدمن العام)
+  if (role === "manager") return NAV.filter((n) => n.key !== "reports"); // كل التبويبات فيما عدا التقارير، وبدون تبويب المستخدمين
+  if (role === "entity_manager") return NAV.filter((n) => n.key !== "reports"); // كل التبويبات عدا التقارير (سجل الدخول حصري للأدمن العام) وبدون تبويب المستخدمين
   if (role === "branch_manager")
     return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "payroll", "eos"].includes(n.key));
   return [];
@@ -279,10 +290,11 @@ function Btn({ children, onClick, tone = "primary", small, type = "button" }) {
 }
 
 /* ============ التطبيق الرئيسي ============ */
-function HRApp({ currentUser, users, setUsers, onLogout }) {
+function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivity }) {
   const { t } = useLang();
   const role = currentUser.role;
   const isAdmin = role === "admin";
+  const isManager = role === "manager";
   const isEntityManager = role === "entity_manager";
   const isBranchManager = role === "branch_manager";
   const navItems = navForRole(role);
@@ -293,6 +305,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
   const [leaves, setLeaves] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [vehicles, setVehicles] = useState([]);
+  const [payrollItems, setPayrollItems] = useState([]);
   const [gosiRates, setGosiRates] = useState({
     saudiEmployee: 9.75,
     saudiEmployer: 11.75,
@@ -319,6 +332,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
             attendance: d.attendance || [],
             gosiRates: d.gosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
             vehicles: d.vehicles || [],
+            payrollItems: d.payrollItems || [],
           };
           setEntities(next.entities);
           setBranches(next.branches);
@@ -327,10 +341,11 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
           setAttendance(next.attendance);
           setVehicles(next.vehicles);
           setGosiRates(next.gosiRates);
+          setPayrollItems(next.payrollItems);
           lastSyncedRef.current = JSON.stringify(next);
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], attendance: [], vehicles: [], gosiRates }).catch(() => {});
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], attendance: [], vehicles: [], gosiRates, payrollItems: [] }).catch(() => {});
         }
         setSyncError("");
         setLoaded(true);
@@ -346,7 +361,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
   /* حفظ ومزامنة تلقائية إلى Firestore — تنعكس فورًا على كل الأجهزة المتصلة */
   useEffect(() => {
     if (!loaded) return;
-    const payload = { entities, branches, employees, leaves, attendance, gosiRates, vehicles };
+    const payload = { entities, branches, employees, leaves, attendance, gosiRates, vehicles, payrollItems };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) return;
     const t = setTimeout(() => {
@@ -359,7 +374,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
         .catch(() => setSaveMsg("تعذر الحفظ — تحقّق من الإنترنت"));
     }, 400);
     return () => clearTimeout(t);
-  }, [entities, branches, employees, leaves, attendance, gosiRates, vehicles, loaded]);
+  }, [entities, branches, employees, leaves, attendance, gosiRates, vehicles, payrollItems, loaded]);
 
   const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
   const entityName = (id) => entities.find((e) => e.id === id)?.name || "—";
@@ -388,6 +403,9 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
     : isEntityManager
     ? vehicles.filter((v) => scopedBranches.some((b) => b.id === v.branchId))
     : vehicles;
+  const scopedPayrollItems = isBranchManager || isEntityManager
+    ? payrollItems.filter((p) => scopedEmployees.some((e) => e.id === p.employeeId))
+    : payrollItems;
 
   /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل */
   if (role === "employee") {
@@ -510,6 +528,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
             branches={scopedBranches}
             entities={scopedEntities}
             entityOfBranch={entityOfBranch}
+            logActivity={logActivity}
           />
         )}
         {tab === "iqamas" && (
@@ -525,14 +544,14 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
             setVehicles={setVehicles}
           />
         )}
-        {(isAdmin || isEntityManager) && tab === "branches" && (
+        {(isAdmin || isManager || isEntityManager) && tab === "branches" && (
           <BranchesTab
             entities={scopedEntities}
             setEntities={setEntities}
             branches={scopedBranches}
             setBranches={setBranches}
             employees={scopedEmployees}
-            canManageEntities={isAdmin}
+            canManageEntities={isAdmin || isManager}
           />
         )}
         {tab === "attendance" && (
@@ -543,6 +562,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
             attendance={scopedAttendance}
             setAttendance={setAttendance}
             branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
+            logActivity={logActivity}
           />
         )}
         {tab === "payroll" && (
@@ -553,12 +573,18 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
             gosiRates={gosiRates}
             attendance={scopedAttendance}
             leaves={scopedLeaves}
+            payrollItems={scopedPayrollItems}
+            setPayrollItems={setPayrollItems}
+            logActivity={logActivity}
           />
         )}
         {tab === "eos" && <EOSTab employees={scopedEmployees} />}
-        {(isAdmin || isEntityManager) && tab === "settings" && <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} />}
+        {isAdmin && tab === "reports" && (
+          <ReportsTab activityLog={activityLog} users={users} />
+        )}
+        {(isAdmin || isManager || isEntityManager) && tab === "settings" && <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} />}
         {isAdmin && tab === "users" && (
-          <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} />
+          <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} logActivity={logActivity} />
         )}
       </main>
     </div>
@@ -625,8 +651,8 @@ function Header({ title, subtitle, action }) {
     </div>
   );
 }
-function SectionTitle({ children }) {
-  return <div style={{ fontSize: 13.5, fontWeight: 700, color: COLORS.coffee, margin: "18px 0 8px" }}>{children}</div>;
+function SectionTitle({ children, className }) {
+  return <div className={className} style={{ fontSize: 13.5, fontWeight: 700, color: COLORS.coffee, margin: "18px 0 8px" }}>{children}</div>;
 }
 function Empty({ text }) {
   return <div style={{ padding: 26, textAlign: "center", color: "#a3927a", fontSize: 13 }}>{text}</div>;
@@ -688,7 +714,7 @@ function expiryStatus(dateStr, t) {
   return { label: tr(`سارية (${days} يوم متبقي)`, `Valid (${days} days left)`), tone: "green", days };
 }
 
-function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch }) {
+function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch, logActivity }) {
   const { t } = useLang();
   const [form, setForm] = useState(EMPTY_EMP);
   const [editingId, setEditingId] = useState(null);
@@ -703,8 +729,10 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     if (!form.name || !form.branchId) return;
     if (editingId) {
       setEmployees((prev) => prev.map((e) => (e.id === editingId ? { ...form, id: editingId } : e)));
+      logActivity && logActivity("تعديل موظف", "employees", form.name);
     } else {
       setEmployees((prev) => [...prev, { ...form, id: uid() }]);
+      logActivity && logActivity("إضافة موظف", "employees", form.name);
     }
     resetForm();
   };
@@ -715,7 +743,9 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
   };
 
   const remove = (id) => {
+    const target = employees.find((e) => e.id === id);
     setEmployees((prev) => prev.filter((e) => e.id !== id));
+    logActivity && logActivity("حذف موظف", "employees", target?.name || id);
     if (editingId === id) resetForm();
   };
 
@@ -1495,7 +1525,7 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
 }
 
 /* ============ الحضور والإجازات ============ */
-function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance }) {
+function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance, logActivity }) {
   const { t } = useLang();
   const [leaveForm, setLeaveForm] = useState({ employeeId: "", type: "سنوية", from: "", to: "" });
   const [attForm, setAttForm] = useState({ employeeId: "", date: "", status: "حاضر", lateMinutes: "" });
@@ -1503,6 +1533,7 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
   const addLeave = () => {
     if (!leaveForm.employeeId || !leaveForm.from || !leaveForm.to) return;
     setLeaves((prev) => [...prev, { ...leaveForm, id: uid() }]);
+    logActivity && logActivity("تسجيل إجازة", "attendance", empName(leaveForm.employeeId));
     setLeaveForm({ employeeId: "", type: "سنوية", from: "", to: "" });
   };
   const removeLeave = (id) => setLeaves((prev) => prev.filter((l) => l.id !== id));
@@ -1511,6 +1542,7 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
     if (!attForm.employeeId || !attForm.date) return;
     const record = { ...attForm, lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0 };
     setAttendance((prev) => [...prev, { ...record, id: uid() }]);
+    logActivity && logActivity("تسجيل حضور", "attendance", empName(attForm.employeeId));
     setAttForm({ employeeId: "", date: "", status: "حاضر", lateMinutes: "" });
   };
   const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
@@ -1628,10 +1660,20 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
 }
 
 /* ============ الرواتب و GOSI ============ */
-function PayrollTab({ employees, branches, entities, gosiRates, attendance, leaves }) {
+function PayrollTab({ employees, branches, entities, gosiRates, attendance, leaves, payrollItems, setPayrollItems, logActivity }) {
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", month: new Date().toISOString().slice(0, 7), note: "" });
+
+  const addItem = () => {
+    if (!itemForm.employeeId || !itemForm.amount || Number(itemForm.amount) <= 0) return;
+    setPayrollItems((prev) => [...prev, { ...itemForm, amount: Number(itemForm.amount), id: uid() }]);
+    logActivity && logActivity(`تسجيل ${itemForm.type}`, "payroll", `${empName(itemForm.employeeId)} — ${fmt(Number(itemForm.amount))} ﷼`);
+    setItemForm({ employeeId: "", type: itemForm.type, amount: "", month: itemForm.month, note: "" });
+  };
+  const removeItem = (id) => setPayrollItems((prev) => prev.filter((p) => p.id !== id));
+  const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
 
   const rows = employees
     .filter((e) => e.status === "نشط")
@@ -1661,7 +1703,13 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
       const unpaidLeaveDeduction = unpaidLeaveDays * dailyRate;
       const attendanceDeduction = absentDeduction + lateDeduction + unpaidLeaveDeduction;
 
-      const net = salary - empShare - attendanceDeduction;
+      /* السلف والخصومات والحوافز المسجّلة لهذا الموظف في الشهر المختار */
+      const monthItems = payrollItems.filter((p) => p.employeeId === e.id && p.month === month);
+      const advances = monthItems.filter((p) => p.type === "سلفة").reduce((s, p) => s + Number(p.amount || 0), 0);
+      const extraDeductions = monthItems.filter((p) => p.type === "خصم").reduce((s, p) => s + Number(p.amount || 0), 0);
+      const incentives = monthItems.filter((p) => p.type === "حافز").reduce((s, p) => s + Number(p.amount || 0), 0);
+
+      const net = salary - empShare - attendanceDeduction - advances - extraDeductions + incentives;
       return {
         ...e,
         salary,
@@ -1675,6 +1723,9 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
         unpaidLeaveDays,
         unpaidLeaveDeduction,
         attendanceDeduction,
+        advances,
+        extraDeductions,
+        incentives,
         net,
         totalCost: salary + employerShare,
       };
@@ -1686,10 +1737,13 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
       empShare: acc.empShare + r.empShare,
       employerShare: acc.employerShare + r.employerShare,
       attendanceDeduction: acc.attendanceDeduction + r.attendanceDeduction,
+      advances: acc.advances + r.advances,
+      extraDeductions: acc.extraDeductions + r.extraDeductions,
+      incentives: acc.incentives + r.incentives,
       net: acc.net + r.net,
       totalCost: acc.totalCost + r.totalCost,
     }),
-    { salary: 0, empShare: 0, employerShare: 0, attendanceDeduction: 0, net: 0, totalCost: 0 }
+    { salary: 0, empShare: 0, employerShare: 0, attendanceDeduction: 0, advances: 0, extraDeductions: 0, incentives: 0, net: 0, totalCost: 0 }
   );
 
   return (
@@ -1706,20 +1760,87 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
         <ReceiptCard label={t("إجمالي الرواتب الأساسية", "Total Basic Salaries")} value={`${fmt(totals.salary)} ﷼`} />
         <ReceiptCard label={t("حصة الموظفين GOSI (تخصم)", "Employees' GOSI Share (deducted)")} value={`${fmt(totals.empShare)} ﷼`} tone={COLORS.brick} />
         <ReceiptCard label={t("خصومات الغياب والتأخير", "Absence & Lateness Deductions")} value={`${fmt(totals.attendanceDeduction)} ﷼`} tone={COLORS.brick} />
+        <ReceiptCard label={t("السلف", "Advances")} value={`${fmt(totals.advances)} ﷼`} tone={COLORS.brick} />
+        <ReceiptCard label={t("خصومات أخرى", "Other Deductions")} value={`${fmt(totals.extraDeductions)} ﷼`} tone={COLORS.brick} />
+        <ReceiptCard label={t("الحوافز", "Incentives")} value={`${fmt(totals.incentives)} ﷼`} tone={COLORS.green} />
         <ReceiptCard label={t("حصة صاحب العمل", "Employer's Share")} value={`${fmt(totals.employerShare)} ﷼`} tone={COLORS.coffee} />
         <ReceiptCard label={t("إجمالي التكلفة الشهرية", "Total Monthly Cost")} value={`${fmt(totals.totalCost)} ﷼`} tone={COLORS.espresso} />
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <SectionTitle>{t("كشف الرواتب", "Payroll Sheet")}</SectionTitle>
-        <select style={{ ...inputStyle, maxWidth: 220 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
-          <option value="">{t("كل الفروع", "All Branches")}</option>
-          {branches.map((b) => (
-            <option key={b.id} value={b.id}>{b.name}</option>
-          ))}
-        </select>
+      <SectionTitle className="no-print">{t("تسجيل سلفة / خصم / حافز", "Register Advance / Deduction / Incentive")}</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }} className="no-print">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <Field label={t("الموظف", "Employee")}>
+            <select style={inputStyle} value={itemForm.employeeId} onChange={(e) => setItemForm({ ...itemForm, employeeId: e.target.value })}>
+              <option value="">{t("اختر الموظف", "Select employee")}</option>
+              {employees.map((e) => (
+                <option key={e.id} value={e.id}>{e.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t("النوع", "Type")}>
+            <select style={inputStyle} value={itemForm.type} onChange={(e) => setItemForm({ ...itemForm, type: e.target.value })}>
+              <option value="سلفة">{t("سلفة", "Advance")}</option>
+              <option value="خصم">{t("خصم", "Deduction")}</option>
+              <option value="حافز">{t("حافز", "Incentive")}</option>
+            </select>
+          </Field>
+          <Field label={t("المبلغ", "Amount")}>
+            <input type="number" style={inputStyle} value={itemForm.amount} onChange={(e) => setItemForm({ ...itemForm, amount: e.target.value })} />
+          </Field>
+          <Field label={t("شهر الاستحقاق", "Applicable Month")}>
+            <input type="month" style={inputStyle} value={itemForm.month} onChange={(e) => setItemForm({ ...itemForm, month: e.target.value })} />
+          </Field>
+          <Field label={t("ملاحظة / السبب", "Note / Reason")}>
+            <input type="text" style={inputStyle} value={itemForm.note} onChange={(e) => setItemForm({ ...itemForm, note: e.target.value })} />
+          </Field>
+          <div style={{ display: "flex", alignItems: "flex-end" }}>
+            <Btn onClick={addItem}>{t("تسجيل", "Register")}</Btn>
+          </div>
+        </div>
+        <div style={{ marginTop: 10, fontSize: 11.5, color: "#a3927a" }}>
+          {t(
+            'السلفة والخصم يُطرحان من صافي راتب الموظف في "شهر الاستحقاق" المحدد، والحافز يُضاف إليه. يظهر أثر كل قيد في جدول كشف الرواتب أدناه عند اختيار نفس الشهر.',
+            'Advances and deductions are subtracted from the employee\'s net salary in the selected "applicable month", and incentives are added to it. The effect of each entry appears in the payroll table below when that same month is selected.'
+          )}
+        </div>
+      </div>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }} className="no-print">
+        {payrollItems.length === 0 && <Empty text={t("لا توجد قيود سلف أو خصومات أو حوافز مسجّلة", "No advances, deductions, or incentives registered")} />}
+        {payrollItems.slice().reverse().map((p, i) => (
+          <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5 }}>
+            <div>
+              <b>{empName(p.employeeId)}</b> — {p.note || t("بدون ملاحظة", "No note")}
+              <span style={{ color: "#a3927a", fontFamily: "Consolas, monospace" }}> · {p.month}</span>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <Stamp tone={p.type === "حافز" ? "green" : "brick"}>
+                {trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, p.type)}
+              </Stamp>
+              <span style={{ fontFamily: "Consolas, monospace", fontWeight: 700 }}>{fmt(p.amount)} ﷼</span>
+              <Btn small tone="danger" onClick={() => removeItem(p.id)}>{t("حذف", "Delete")}</Btn>
+            </div>
+          </div>
+        ))}
       </div>
 
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }} className="no-print">
+        <SectionTitle>{t("كشف الرواتب", "Payroll Sheet")}</SectionTitle>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <select style={{ ...inputStyle, maxWidth: 220 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
+            <option value="">{t("كل الفروع", "All Branches")}</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+          <Btn onClick={() => window.print()}>{t("🖶 طباعة كشف الرواتب", "🖶 Print Payroll Sheet")}</Btn>
+        </div>
+      </div>
+
+      <div className="print-section">
+        <div style={{ display: "none" }} className="print-only-title">
+          {t(`كشف الرواتب — ${month}`, `Payroll Sheet — ${month}`)}
+        </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {rows.length === 0 && <Empty text={t("لا يوجد موظفون نشطون مطابقون", "No matching active employees")} />}
         {rows.length > 0 && (
@@ -1738,7 +1859,10 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
                   t("خصم التأخير", "Lateness Deduction"),
                   t("أيام إجازة بدون راتب", "Unpaid Leave Days"),
                   t("خصم الإجازة", "Leave Deduction"),
-                  t("إجمالي الخصومات", "Total Deductions"),
+                  t("إجمالي خصومات الحضور", "Total Attendance Deductions"),
+                  t("السلف", "Advances"),
+                  t("خصومات أخرى", "Other Deductions"),
+                  t("الحوافز", "Incentives"),
                   t("حصة صاحب العمل", "Employer Share"),
                   t("الصافي للموظف", "Net for Employee"),
                   t("تكلفة الشركة", "Company Cost"),
@@ -1762,6 +1886,9 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
                   <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.incentives)}</td>
                   <td style={{ padding: "9px 12px" }}>{fmt(r.employerShare)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.green, fontWeight: 700 }}>{fmt(r.net)}</td>
                   <td style={{ padding: "9px 12px", fontWeight: 700 }}>{fmt(r.totalCost)}</td>
@@ -1771,11 +1898,12 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
           </table>
         )}
       </div>
+      </div>
 
-      <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+      <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }} className="no-print">
         {t(
-          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ ٣٠. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ ٤٨٠ دقيقة، على أساس ٨ ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه.',
-          'Deduction calculation: Daily rate = Basic salary ÷ 30. Absence deduction = absent days × daily rate. Lateness deduction = late minutes × (daily rate ÷ 480 minutes, based on an 8-hour workday). Unpaid leave deduction = leave days × daily rate. Figures are based on records from the "Attendance & Leave" tab for the month selected above.'
+          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ ٣٠. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ ٤٨٠ دقيقة، على أساس ٨ ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه. الصافي للموظف = الراتب − حصة GOSI − خصومات الحضور − السلف − الخصومات الأخرى + الحوافز، لكل قيود السلف/الخصومات/الحوافز المسجّلة بنفس الشهر المختار أعلاه.',
+          'Deduction calculation: Daily rate = Basic salary ÷ 30. Absence deduction = absent days × daily rate. Lateness deduction = late minutes × (daily rate ÷ 480 minutes, based on an 8-hour workday). Unpaid leave deduction = leave days × daily rate. Figures are based on records from the "Attendance & Leave" tab for the month selected above. Net for employee = Salary − GOSI share − attendance deductions − advances − other deductions + incentives, using advance/deduction/incentive entries registered for the same month selected above.'
         )}
       </div>
     </div>
@@ -2231,7 +2359,7 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
 }
 
 /* ============ إدارة المستخدمين (أدمن فقط) ============ */
-function UsersTab({ users, setUsers, employees, branches, entities }) {
+function UsersTab({ users, setUsers, employees, branches, entities, logActivity }) {
   const { t } = useLang();
   const [form, setForm] = useState(EMPTY_USER);
   const [editingId, setEditingId] = useState(null);
@@ -2255,8 +2383,10 @@ function UsersTab({ users, setUsers, employees, branches, entities }) {
     }
     if (editingId) {
       setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...form, id: editingId, username: form.username.trim() } : u)));
+      logActivity && logActivity("تعديل مستخدم", "users", form.username.trim());
     } else {
       setUsers((prev) => [...prev, { ...form, username: form.username.trim(), id: uid() }]);
+      logActivity && logActivity("إضافة مستخدم", "users", form.username.trim());
     }
     resetForm();
   };
@@ -2302,6 +2432,7 @@ function UsersTab({ users, setUsers, employees, branches, entities }) {
               onChange={(e) => setForm({ ...form, role: e.target.value, branchId: "", employeeId: "", entityId: "" })}
             >
               <option value="admin">{t("أدمن (كل الصلاحيات)", "Admin (full access)")}</option>
+              <option value="manager">{t("مسؤول (كل الصلاحيات ما عدا التقارير والمستخدمين)", "Manager (full access except Reports & Users)")}</option>
               <option value="entity_manager">{t("مدير كيان", "Entity Manager")}</option>
               <option value="branch_manager">{t("مسؤول فرع", "Branch Manager")}</option>
               <option value="employee">{t("موظف", "Employee")}</option>
@@ -2387,6 +2518,108 @@ function UsersTab({ users, setUsers, employees, branches, entities }) {
   );
 }
 
+/* ============ التقارير (سجل الدخول والعمليات — أدمن فقط) ============ */
+function ACTION_TONE(action) {
+  if (action === "دخول") return "green";
+  if (action === "خروج") return "gold";
+  if (action.startsWith("حذف")) return "brick";
+  return "gold";
+}
+
+function ReportsTab({ activityLog, users }) {
+  const { t } = useLang();
+  const [userFilter, setUserFilter] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
+  const fmtDT = (iso) => {
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    return d.toLocaleString(t("ar-SA", "en-US"), { dateStyle: "medium", timeStyle: "short" });
+  };
+
+  const rows = activityLog
+    .filter((e) => !userFilter || e.username === userFilter)
+    .filter((e) => !fromDate || (e.timestamp || "").slice(0, 10) >= fromDate)
+    .filter((e) => !toDate || (e.timestamp || "").slice(0, 10) <= toDate)
+    .slice()
+    .reverse();
+
+  const uniqueUsers = Array.from(new Set(activityLog.map((e) => e.username))).map(
+    (u) => activityLog.find((e) => e.username === u)
+  );
+
+  const loginCount = rows.filter((r) => r.action === "دخول").length;
+
+  return (
+    <div>
+      <Header title={t("تقرير الدخول والعمليات", "Login & Activity Report")} subtitle={t("سجلّ بمن دخل النظام ومتى وماذا فعل، مبني على آخر ٥٠٠ عملية", "A log of who accessed the system, when, and what they did — based on the last 500 actions")} />
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }} className="no-print">
+        <Field label={t("المستخدم", "User")}>
+          <select style={inputStyle} value={userFilter} onChange={(e) => setUserFilter(e.target.value)}>
+            <option value="">{t("كل المستخدمين", "All Users")}</option>
+            {uniqueUsers.map((u) => (
+              <option key={u.username} value={u.username}>{u.userName} ({u.username})</option>
+            ))}
+          </select>
+        </Field>
+        <Field label={t("من تاريخ", "From Date")}>
+          <input type="date" style={inputStyle} value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+        </Field>
+        <Field label={t("إلى تاريخ", "To Date")}>
+          <input type="date" style={inputStyle} value={toDate} onChange={(e) => setToDate(e.target.value)} />
+        </Field>
+        <Btn onClick={() => window.print()}>{t("🖶 طباعة التقرير", "🖶 Print Report")}</Btn>
+      </div>
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }} className="no-print">
+        <ReceiptCard label={t("عدد عمليات الدخول", "Login Count")} value={fmt(loginCount)} />
+        <ReceiptCard label={t("عدد العمليات المعروضة", "Actions Shown")} value={fmt(rows.length)} tone={COLORS.coffee} />
+      </div>
+
+      <div className="print-section">
+        <div style={{ display: "none" }} className="print-only-title">
+          {t("تقرير الدخول والعمليات", "Login & Activity Report")}
+        </div>
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
+          {rows.length === 0 && <Empty text={t("لا توجد عمليات مسجّلة مطابقة", "No matching recorded actions")} />}
+          {rows.length > 0 && (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                  {[
+                    t("التاريخ والوقت", "Date & Time"),
+                    t("المستخدم", "User"),
+                    t("الدور", "Role"),
+                    t("العملية", "Action"),
+                    t("التفاصيل", "Details"),
+                  ].map((h, i) => (
+                    <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                    <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{fmtDT(r.timestamp)}</td>
+                    <td style={{ padding: "9px 12px", fontWeight: 700 }}>{r.userName} <span style={{ color: "#a3927a", fontWeight: 400 }}>({r.username})</span></td>
+                    <td style={{ padding: "9px 12px" }}>{t(ROLE_LABELS[r.role], ROLE_LABELS_EN[r.role]) || "—"}</td>
+                    <td style={{ padding: "9px 12px" }}>
+                      <Stamp tone={ACTION_TONE(r.action)}>{r.action}</Stamp>
+                    </td>
+                    <td style={{ padding: "9px 12px" }}>{r.targetLabel || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ============ بوابة الدخول (تدير المستخدمين والجلسة) ============ */
 function Root() {
   const [users, setUsers] = useState(USERS_SEED);
@@ -2397,6 +2630,9 @@ function Root() {
   const [loginError, setLoginError] = useState("");
   const [authSyncError, setAuthSyncError] = useState("");
   const lastSyncedUsersRef = useRef("");
+  const [activityLog, setActivityLog] = useState([]);
+  const [logLoaded, setLogLoaded] = useState(false);
+  const lastSyncedLogRef = useRef("");
 
   /* الجلسة (من هو المسجّل دخوله) تبقى محلية على كل جهاز، ما تتزامنش */
   useEffect(() => {
@@ -2443,6 +2679,42 @@ function Root() {
       .catch(() => setAuthSyncError("تعذر حفظ بيانات المستخدمين — تحقّق من الإنترنت"));
   }, [users, usersLoaded]);
 
+  /* سجلّ الدخول والعمليات (من دخل البرنامج وماذا فعل) — يتزامن لحظيًا بين كل الأجهزة */
+  useEffect(() => {
+    const unsub = LOG_DOC.onSnapshot(
+      (snap) => {
+        if (snap.metadata.hasPendingWrites) return;
+        const d = snap.data();
+        const list = d && Array.isArray(d.entries) ? d.entries : [];
+        setActivityLog(list);
+        lastSyncedLogRef.current = JSON.stringify(list);
+        setLogLoaded(true);
+      },
+      (err) => {
+        setLogLoaded(true);
+      }
+    );
+    return () => unsub();
+  }, []);
+
+  /* تسجيل حدث جديد في سجلّ العمليات (نكتب مباشرة على Firestore عشان يشتغل حتى لو الحدث حصل قبل تحميل HRApp، زي الدخول) */
+  const logActivity = (user, action, targetType, targetLabel) => {
+    const entry = {
+      id: uid(),
+      username: user?.username || "—",
+      userName: user?.name || user?.username || "—",
+      role: user?.role || "",
+      action,
+      targetType: targetType || "",
+      targetLabel: targetLabel || "",
+      timestamp: new Date().toISOString(),
+    };
+    const next = [...activityLog, entry].slice(-500); /* الاحتفاظ بآخر ٥٠٠ عملية فقط لتفادي تضخّم القاعدة */
+    setActivityLog(next);
+    lastSyncedLogRef.current = JSON.stringify(next);
+    LOG_DOC.set({ entries: next }).catch(() => {});
+  };
+
   const currentUser = users.find((u) => u.username === currentUsername) || null;
 
   const login = () => {
@@ -2459,9 +2731,11 @@ function Root() {
     } catch (e) {}
     setLoginForm({ username: "", password: "" });
     setLoginError("");
+    logActivity(match, "دخول", "", "");
   };
 
   const logout = () => {
+    if (currentUser) logActivity(currentUser, "خروج", "", "");
     setCurrentUsername(null);
     try {
       localStorage.removeItem("hr-system-session");
@@ -2481,7 +2755,16 @@ function Root() {
     );
   }
 
-  return <HRApp currentUser={currentUser} users={users} setUsers={setUsers} onLogout={logout} />;
+  return (
+    <HRApp
+      currentUser={currentUser}
+      users={users}
+      setUsers={setUsers}
+      onLogout={logout}
+      activityLog={activityLog}
+      logActivity={(action, targetType, targetLabel) => logActivity(currentUser, action, targetType, targetLabel)}
+    />
+  );
 }
 
 const rootEl = document.getElementById("root");
