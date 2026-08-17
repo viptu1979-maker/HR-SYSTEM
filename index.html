@@ -906,6 +906,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     logActivity && logActivity("إضافة حدث مسار وظيفي", "employees", employees.find((e) => e.id === empId)?.name || "");
   };
 
+  const updateGovFees = (empId, fees) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, govFees: { ...(e.govFees || {}), ...fees } } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, govFees: { ...(prev.govFees || {}), ...fees } } : prev));
+    logActivity && logActivity("تعديل رسوم حكومية", "employees", employees.find((e) => e.id === empId)?.name || "");
+  };
+
   const removeCareerEntry = (empId, entryId) => {
     setEmployees((prev) =>
       prev.map((e) => (e.id === empId ? { ...e, careerHistory: (e.careerHistory || []).filter((h) => h.id !== entryId) } : e))
@@ -1077,6 +1083,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           leaves={leaves || []}
           onAddCareerEntry={addCareerEntry}
           onRemoveCareerEntry={removeCareerEntry}
+          onUpdateGovFees={updateGovFees}
           onClose={() => setProfileEmp(null)}
         />
       )}
@@ -1085,9 +1092,15 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
+  const [feesForm, setFeesForm] = useState({
+    iqamaRenewal: emp.govFees?.iqamaRenewal ?? "",
+    workPermit: emp.govFees?.workPermit ?? 100,
+    dependentsLevy: emp.govFees?.dependentsLevy ?? 800,
+    other: emp.govFees?.other ?? "",
+  });
 
   const branchName = branches.find((b) => b.id === emp.branchId)?.name || "—";
   const iqamaSt = expiryStatus(emp.iqamaExpiry, t);
@@ -1106,6 +1119,22 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
     if (!careerForm.title || !careerForm.date) return;
     onAddCareerEntry(emp.id, careerForm);
     setCareerForm({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
+  };
+
+  const feesTotal =
+    Number(feesForm.iqamaRenewal || 0) +
+    Number(feesForm.workPermit || 0) +
+    Number(feesForm.dependentsLevy || 0) +
+    Number(feesForm.other || 0);
+
+  const saveFees = () => {
+    onUpdateGovFees &&
+      onUpdateGovFees(emp.id, {
+        iqamaRenewal: Number(feesForm.iqamaRenewal || 0),
+        workPermit: Number(feesForm.workPermit || 0),
+        dependentsLevy: Number(feesForm.dependentsLevy || 0),
+        other: Number(feesForm.other || 0),
+      });
   };
 
   const Section = ({ title, children }) => (
@@ -1209,6 +1238,54 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
                   {emp.contractType === "غير محدد المدة" && !emp.contractEnd ? t("عقد مفتوح", "Open-ended") : contractSt.label}
                 </Stamp>
               </div>
+            </div>
+          </Section>
+
+          <Section title={t("الرسوم الحكومية", "Government Fees")}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 10 }}>
+              <Field label={t("رسوم تجديد الإقامة (﷼)", "Iqama Renewal Fee (SAR)")}>
+                <input
+                  type="number"
+                  style={inputStyle}
+                  value={feesForm.iqamaRenewal}
+                  onChange={(e) => setFeesForm({ ...feesForm, iqamaRenewal: e.target.value })}
+                  onBlur={saveFees}
+                />
+              </Field>
+              <Field label={t("رسوم رخصة العمل (﷼)", "Work Permit Fee (SAR)")}>
+                <input
+                  type="number"
+                  style={inputStyle}
+                  value={feesForm.workPermit}
+                  onChange={(e) => setFeesForm({ ...feesForm, workPermit: e.target.value })}
+                  onBlur={saveFees}
+                />
+              </Field>
+              <Field label={t("المقابل المالي للعمالة (﷼)", "Expat Levy (SAR)")}>
+                <input
+                  type="number"
+                  style={inputStyle}
+                  value={feesForm.dependentsLevy}
+                  onChange={(e) => setFeesForm({ ...feesForm, dependentsLevy: e.target.value })}
+                  onBlur={saveFees}
+                />
+              </Field>
+              <Field label={t("رسوم أخرى (﷼)", "Other Fees (SAR)")}>
+                <input
+                  type="number"
+                  style={inputStyle}
+                  value={feesForm.other}
+                  onChange={(e) => setFeesForm({ ...feesForm, other: e.target.value })}
+                  onBlur={saveFees}
+                />
+              </Field>
+            </div>
+            <div style={{ background: COLORS.paperDark, borderRadius: 8, padding: "10px 12px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span style={{ fontSize: 12.5, color: "#a3927a" }}>{t("إجمالي الرسوم الحكومية", "Total Government Fees")}</span>
+              <span style={{ fontWeight: 800, fontSize: 14, color: COLORS.brick }}>{fmt(feesTotal)} ﷼</span>
+            </div>
+            <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 6 }}>
+              {t("القيم بتتحفظ تلقائيًا عند الخروج من كل خانة.", "Values save automatically when you leave each field.")}
             </div>
           </Section>
 
