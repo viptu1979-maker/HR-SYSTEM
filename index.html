@@ -134,8 +134,8 @@ const USERS_SEED = [
   { id: "u1", username: "admin", password: "admin123", role: "admin", name: "المدير العام", branchId: "", employeeId: "" },
 ];
 
-const ROLE_LABELS = { admin: "أدمن", branch_manager: "مسؤول فرع", employee: "موظف" };
-const ROLE_LABELS_EN = { admin: "Admin", branch_manager: "Branch Manager", employee: "Employee" };
+const ROLE_LABELS = { admin: "أدمن", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", employee: "موظف" };
+const ROLE_LABELS_EN = { admin: "Admin", entity_manager: "Entity Manager", branch_manager: "Branch Manager", employee: "Employee" };
 
 /* ترجمة نصوص العرض فقط لقيم مخزّنة بالعربي (الحالة/الجنسية/إلخ) — القيمة المخزّنة في البيانات تفضل عربي دايمًا */
 const STATUS_LABELS_EN = { "نشط": "Active", "موقوف": "Suspended", "منتهي الخدمة": "Terminated" };
@@ -148,10 +148,11 @@ function trLabel(t, dict, v) {
   return t(v, dict[v] || v);
 }
 
-const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "" };
+const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "" };
 
 function navForRole(role) {
   if (role === "admin") return [...NAV, { key: "users", label: "المستخدمون", labelEn: "Users", icon: "◑" }];
+  if (role === "entity_manager") return NAV; // كل التبويبات، بدون تبويب المستخدمين (حصري للأدمن العام)
   if (role === "branch_manager")
     return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "payroll", "eos"].includes(n.key));
   return [];
@@ -282,6 +283,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
   const { t } = useLang();
   const role = currentUser.role;
   const isAdmin = role === "admin";
+  const isEntityManager = role === "entity_manager";
   const isBranchManager = role === "branch_manager";
   const navItems = navForRole(role);
   const [tab, setTab] = useState(navItems[0]?.key || "dash");
@@ -363,16 +365,29 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
   const entityName = (id) => entities.find((e) => e.id === id)?.name || "—";
   const entityOfBranch = (branchId) => branches.find((b) => b.id === branchId)?.entityId;
 
-  /* نطاق البيانات حسب الصلاحية: مسؤول الفرع يشوف فرعه فقط */
-  const scopedBranches = isBranchManager ? branches.filter((b) => b.id === currentUser.branchId) : branches;
-  const scopedEmployees = isBranchManager ? employees.filter((e) => e.branchId === currentUser.branchId) : employees;
-  const scopedLeaves = isBranchManager
+  /* نطاق البيانات حسب الصلاحية: مسؤول الفرع يشوف فرعه فقط، مدير الكيان يشوف كل فروع كيانه فقط */
+  const scopedEntities = isEntityManager ? entities.filter((e) => e.id === currentUser.entityId) : entities;
+  const scopedBranches = isBranchManager
+    ? branches.filter((b) => b.id === currentUser.branchId)
+    : isEntityManager
+    ? branches.filter((b) => b.entityId === currentUser.entityId)
+    : branches;
+  const scopedEmployees = isBranchManager
+    ? employees.filter((e) => e.branchId === currentUser.branchId)
+    : isEntityManager
+    ? employees.filter((e) => scopedBranches.some((b) => b.id === e.branchId))
+    : employees;
+  const scopedLeaves = isBranchManager || isEntityManager
     ? leaves.filter((l) => scopedEmployees.some((e) => e.id === l.employeeId))
     : leaves;
-  const scopedAttendance = isBranchManager
+  const scopedAttendance = isBranchManager || isEntityManager
     ? attendance.filter((a) => scopedEmployees.some((e) => e.id === a.employeeId))
     : attendance;
-  const scopedVehicles = isBranchManager ? vehicles.filter((v) => v.branchId === currentUser.branchId) : vehicles;
+  const scopedVehicles = isBranchManager
+    ? vehicles.filter((v) => v.branchId === currentUser.branchId)
+    : isEntityManager
+    ? vehicles.filter((v) => scopedBranches.some((b) => b.id === v.branchId))
+    : vehicles;
 
   /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل */
   if (role === "employee") {
@@ -456,6 +471,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
           <div style={{ fontSize: 10.5, color: COLORS.goldLight, marginTop: 2, marginBottom: 10 }}>
             {t(ROLE_LABELS[role], ROLE_LABELS_EN[role])}
             {isBranchManager && ` · ${branchName(currentUser.branchId)}`}
+            {isEntityManager && ` · ${entityName(currentUser.entityId)}`}
           </div>
           <button
             onClick={onLogout}
@@ -479,7 +495,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
       <main style={{ flex: 1, padding: "26px 30px", maxWidth: 1180 }}>
         {tab === "dash" && (
           <Dashboard
-            entities={entities}
+            entities={scopedEntities}
             branches={scopedBranches}
             employees={scopedEmployees}
             leaves={scopedLeaves}
@@ -492,7 +508,7 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
             employees={scopedEmployees}
             setEmployees={setEmployees}
             branches={scopedBranches}
-            entities={entities}
+            entities={scopedEntities}
             entityOfBranch={entityOfBranch}
           />
         )}
@@ -509,8 +525,15 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
             setVehicles={setVehicles}
           />
         )}
-        {isAdmin && tab === "branches" && (
-          <BranchesTab entities={entities} setEntities={setEntities} branches={branches} setBranches={setBranches} employees={employees} />
+        {(isAdmin || isEntityManager) && tab === "branches" && (
+          <BranchesTab
+            entities={scopedEntities}
+            setEntities={setEntities}
+            branches={scopedBranches}
+            setBranches={setBranches}
+            employees={scopedEmployees}
+            canManageEntities={isAdmin}
+          />
         )}
         {tab === "attendance" && (
           <AttendanceTab
@@ -533,9 +556,9 @@ function HRApp({ currentUser, users, setUsers, onLogout }) {
           />
         )}
         {tab === "eos" && <EOSTab employees={scopedEmployees} />}
-        {isAdmin && tab === "settings" && <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} />}
+        {(isAdmin || isEntityManager) && tab === "settings" && <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} />}
         {isAdmin && tab === "users" && (
-          <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} />
+          <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} />
         )}
       </main>
     </div>
@@ -1373,10 +1396,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
 }
 
 /* ============ الكيانات والفروع ============ */
-function BranchesTab({ entities, setEntities, branches, setBranches, employees }) {
+function BranchesTab({ entities, setEntities, branches, setBranches, employees, canManageEntities = true }) {
   const { t } = useLang();
   const [entityName, setEntityName] = useState("");
-  const [branchForm, setBranchForm] = useState({ entityId: "", name: "", city: "" });
+  const [branchForm, setBranchForm] = useState({ entityId: entities.length === 1 ? entities[0].id : "", name: "", city: "" });
 
   const addEntity = () => {
     if (!entityName.trim()) return;
@@ -1400,15 +1423,17 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees }
 
       <SectionTitle>{t("الكيانات (المؤسسات / الشركات)", "Entities (Establishments / Companies)")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          <input
-            style={{ ...inputStyle, flex: 1 }}
-            placeholder={t("اسم الكيان الجديد", "New entity name")}
-            value={entityName}
-            onChange={(e) => setEntityName(e.target.value)}
-          />
-          <Btn onClick={addEntity}>{t("إضافة كيان", "Add Entity")}</Btn>
-        </div>
+        {canManageEntities && (
+          <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+            <input
+              style={{ ...inputStyle, flex: 1 }}
+              placeholder={t("اسم الكيان الجديد", "New entity name")}
+              value={entityName}
+              onChange={(e) => setEntityName(e.target.value)}
+            />
+            <Btn onClick={addEntity}>{t("إضافة كيان", "Add Entity")}</Btn>
+          </div>
+        )}
         {entities.map((en) => (
           <div
             key={en.id}
@@ -1417,7 +1442,9 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees }
             <div style={{ fontSize: 13, fontWeight: 600 }}>{en.name}</div>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <Stamp>{branches.filter((b) => b.entityId === en.id).length} {t("فرع", "branches")}</Stamp>
-              <Btn small tone="danger" onClick={() => removeEntity(en.id)}>{t("حذف", "Delete")}</Btn>
+              {canManageEntities && (
+                <Btn small tone="danger" onClick={() => removeEntity(en.id)}>{t("حذف", "Delete")}</Btn>
+              )}
             </div>
           </div>
         ))}
@@ -2204,7 +2231,7 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
 }
 
 /* ============ إدارة المستخدمين (أدمن فقط) ============ */
-function UsersTab({ users, setUsers, employees, branches }) {
+function UsersTab({ users, setUsers, employees, branches, entities }) {
   const { t } = useLang();
   const [form, setForm] = useState(EMPTY_USER);
   const [editingId, setEditingId] = useState(null);
@@ -2272,13 +2299,24 @@ function UsersTab({ users, setUsers, employees, branches }) {
             <select
               style={inputStyle}
               value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value, branchId: "", employeeId: "" })}
+              onChange={(e) => setForm({ ...form, role: e.target.value, branchId: "", employeeId: "", entityId: "" })}
             >
               <option value="admin">{t("أدمن (كل الصلاحيات)", "Admin (full access)")}</option>
+              <option value="entity_manager">{t("مدير كيان", "Entity Manager")}</option>
               <option value="branch_manager">{t("مسؤول فرع", "Branch Manager")}</option>
               <option value="employee">{t("موظف", "Employee")}</option>
             </select>
           </Field>
+          {form.role === "entity_manager" && (
+            <Field label={t("الكيان", "Entity")}>
+              <select style={inputStyle} value={form.entityId} onChange={(e) => setForm({ ...form, entityId: e.target.value })}>
+                <option value="">{t("اختر الكيان", "Select entity")}</option>
+                {entities.map((en) => (
+                  <option key={en.id} value={en.id}>{en.name}</option>
+                ))}
+              </select>
+            </Field>
+          )}
           {form.role === "branch_manager" && (
             <Field label={t("الفرع", "Branch")}>
               <select style={inputStyle} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
@@ -2326,6 +2364,7 @@ function UsersTab({ users, setUsers, employees, branches }) {
               </div>
               <div style={{ fontSize: 11.5, color: "#8a7a63" }}>
                 {t(ROLE_LABELS[u.role], ROLE_LABELS_EN[u.role])}
+                {u.role === "entity_manager" && ` · ${entities.find((en) => en.id === u.entityId)?.name || "—"}`}
                 {u.role === "branch_manager" && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
                 {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
               </div>
