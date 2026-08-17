@@ -570,6 +570,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             employees={scopedEmployees}
             branches={scopedBranches}
             entities={entities}
+            entityOfBranch={entityOfBranch}
             gosiRates={gosiRates}
             attendance={scopedAttendance}
             leaves={scopedLeaves}
@@ -830,18 +831,25 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         </div>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }} className="no-print">
         <SectionTitle>{t("قائمة الموظفين", "Employee List")} ({fmt(list.length)})</SectionTitle>
-        <select style={{ ...inputStyle, maxWidth: 220 }} value={filterBranch} onChange={(e) => setFilterBranch(e.target.value)}>
-          <option value="">{t("كل الفروع", "All Branches")}</option>
-          {branches.map((b) => (
-            <option key={b.id} value={b.id}>
-              {b.name}
-            </option>
-          ))}
-        </select>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <select style={{ ...inputStyle, maxWidth: 220 }} value={filterBranch} onChange={(e) => setFilterBranch(e.target.value)}>
+            <option value="">{t("كل الفروع", "All Branches")}</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+          </select>
+          <Btn onClick={() => window.print()}>{t("🖶 طباعة القائمة", "🖶 Print List")}</Btn>
+        </div>
       </div>
 
+      <div className="print-section">
+        <div style={{ display: "none" }} className="print-only-title">
+          {t("قائمة الموظفين", "Employee List")}
+        </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
         {list.length === 0 && <Empty text={t("لا يوجد موظفون مطابقون", "No matching employees")} />}
         {list.length > 0 && (
@@ -876,7 +884,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
                   <td style={{ padding: "9px 12px" }}>
                     <Stamp tone={e.status === "نشط" ? "green" : e.status === "موقوف" ? "gold" : "brick"}>{trLabel(t, STATUS_LABELS_EN, e.status)}</Stamp>
                   </td>
-                  <td style={{ padding: "9px 12px", display: "flex", gap: 6 }}>
+                  <td style={{ padding: "9px 12px", display: "flex", gap: 6 }} className="no-print">
                     <Btn small tone="secondary" onClick={() => edit(e)}>{t("تعديل", "Edit")}</Btn>
                     <Btn small tone="danger" onClick={() => remove(e.id)}>{t("حذف", "Delete")}</Btn>
                   </td>
@@ -885,6 +893,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
             </tbody>
           </table>
         )}
+      </div>
       </div>
     </div>
   );
@@ -927,15 +936,22 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
         <ReceiptCard label={t("إجمالي الموظفين النشطين", "Total Active Employees")} value={fmt(rows.length)} />
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }} className="no-print">
         <SectionTitle>{t("جدول المتابعة", "Tracking Table")}</SectionTitle>
-        <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
-          <option value="">{t("عرض الكل", "Show All")}</option>
-          <option value="iqama">{t("إقامات مقتربة من الانتهاء (٩٠ يوم)", "Iqamas nearing expiry (90 days)")}</option>
-          <option value="contract">{t("عقود مقتربة من الانتهاء (٩٠ يوم)", "Contracts nearing expiry (90 days)")}</option>
-        </select>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
+            <option value="">{t("عرض الكل", "Show All")}</option>
+            <option value="iqama">{t("إقامات مقتربة من الانتهاء (٩٠ يوم)", "Iqamas nearing expiry (90 days)")}</option>
+            <option value="contract">{t("عقود مقتربة من الانتهاء (٩٠ يوم)", "Contracts nearing expiry (90 days)")}</option>
+          </select>
+          <Btn onClick={() => window.print()}>{t("🖶 طباعة الجدول", "🖶 Print Table")}</Btn>
+        </div>
       </div>
 
+      <div className="print-section">
+        <div style={{ display: "none" }} className="print-only-title">
+          {t("الإقامات والعقود", "Iqamas & Contracts")}
+        </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {filtered.length === 0 && <Empty text={t("لا توجد بيانات مطابقة", "No matching data")} />}
         {filtered.length > 0 && (
@@ -1006,8 +1022,9 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
           </table>
         )}
       </div>
+      </div>
 
-      <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+      <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }} className="no-print">
         {t(
           "التنبيهات هنا مبنية على التواريخ المسجَّلة فقط داخل التطبيق. تأكد من مطابقتها لتواريخ منصة أبشر أعمال / مقيم بشكل دوري، خصوصًا رسوم وغرامات تجديد الإقامة والعمل النظامي.",
           "These alerts are based only on dates recorded in this app. Verify them regularly against Absher Business / Muqeem, especially iqama renewal fees and compliance fines."
@@ -1032,6 +1049,7 @@ const EMPTY_VEHICLE = {
   plateNumber: "",
   make: "",
   istimaraExpiry: "",
+  periodicInspectionExpiry: "",
   insuranceCompany: "",
   insurancePolicyNumber: "",
   insuranceExpiry: "",
@@ -1097,6 +1115,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
   const vehicleRows = vehicles.map((v) => ({
     ...v,
     istimaraStatus: expiryStatus(v.istimaraExpiry, t),
+    periodicInspectionStatus: expiryStatus(v.periodicInspectionExpiry, t),
     vehicleInsuranceStatus: expiryStatus(v.insuranceExpiry, t),
   }));
 
@@ -1114,6 +1133,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
   const healthAlerts = healthRows.filter((r) => r.healthCertStatus.days !== null && r.healthCertStatus.days <= 30).length;
   const insuranceAlerts = healthRows.filter((r) => r.insuranceStatus.days !== null && r.insuranceStatus.days <= 30).length;
   const istimaraAlerts = vehicleRows.filter((r) => r.istimaraStatus.days !== null && r.istimaraStatus.days <= 30).length;
+  const periodicInspectionAlerts = vehicleRows.filter((r) => r.periodicInspectionStatus.days !== null && r.periodicInspectionStatus.days <= 30).length;
   const vehicleInsuranceAlerts = vehicleRows.filter((r) => r.vehicleInsuranceStatus.days !== null && r.vehicleInsuranceStatus.days <= 30).length;
 
   return (
@@ -1121,8 +1141,8 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
       <Header
         title={t("تراخيص الفروع", "Branch Licenses")}
         subtitle={t(
-          "متابعة تواريخ انتهاء السجل التجاري ورخصة الدفاع المدني ورخصة البلدية للفروع، والشهادات الصحية والتأمين الطبي للموظفين، واستمارات وتأمين سيارات الشركة",
-          "Track commercial register, civil defense, and municipality license expiry for branches, employee health certificates & medical insurance, and company vehicle registration & insurance"
+          "متابعة تواريخ انتهاء السجل التجاري ورخصة الدفاع المدني ورخصة البلدية للفروع، والشهادات الصحية والتأمين الطبي للموظفين، واستمارات وفحص دوري وتأمين سيارات الشركة",
+          "Track commercial register, civil defense, and municipality license expiry for branches, employee health certificates & medical insurance, and company vehicle registration, periodic inspection & insurance"
         )}
       />
 
@@ -1133,6 +1153,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
         <ReceiptCard label={t("شهادات صحية تنتهي خلال ٣٠ يوم", "Health certificates expiring in 30 days")} value={fmt(healthAlerts)} tone={healthAlerts > 0 ? COLORS.brick : COLORS.green} />
         <ReceiptCard label={t("تأمين طبي ينتهي خلال ٣٠ يوم", "Medical insurance expiring in 30 days")} value={fmt(insuranceAlerts)} tone={insuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
         <ReceiptCard label={t("استمارات سيارات تنتهي خلال ٣٠ يوم", "Vehicle registrations expiring in 30 days")} value={fmt(istimaraAlerts)} tone={istimaraAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("فحص دوري ينتهي خلال ٣٠ يوم", "Periodic inspections expiring in 30 days")} value={fmt(periodicInspectionAlerts)} tone={periodicInspectionAlerts > 0 ? COLORS.brick : COLORS.green} />
         <ReceiptCard label={t("تأمين سيارات ينتهي خلال ٣٠ يوم", "Vehicle insurance expiring in 30 days")} value={fmt(vehicleInsuranceAlerts)} tone={vehicleInsuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
       </div>
 
@@ -1334,6 +1355,9 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
           <Field label={t("تاريخ انتهاء الاستمارة", "Registration Expiry")}>
             <input type="date" style={inputStyle} value={vehicleForm.istimaraExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, istimaraExpiry: e.target.value })} />
           </Field>
+          <Field label={t("تاريخ انتهاء الفحص الدوري", "Periodic Inspection Expiry")}>
+            <input type="date" style={inputStyle} value={vehicleForm.periodicInspectionExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, periodicInspectionExpiry: e.target.value })} />
+          </Field>
           <Field label={t("شركة تأمين السيارة", "Vehicle Insurance Company")}>
             <input style={inputStyle} value={vehicleForm.insuranceCompany} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceCompany: e.target.value })} />
           </Field>
@@ -1353,7 +1377,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {vehicleRows.length === 0 && <Empty text={t("لا توجد سيارات مسجَّلة", "No registered vehicles")} />}
         {vehicleRows.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1150 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1350 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 {[
@@ -1362,6 +1386,8 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   t("الفرع", "Branch"),
                   t("انتهاء الاستمارة", "Registration Expiry"),
                   t("حالة الاستمارة", "Registration Status"),
+                  t("انتهاء الفحص الدوري", "Periodic Inspection Expiry"),
+                  t("حالة الفحص الدوري", "Periodic Inspection Status"),
                   t("شركة التأمين", "Insurance Company"),
                   t("رقم الوثيقة", "Policy Number"),
                   t("انتهاء تأمين السيارة", "Insurance Expiry"),
@@ -1389,6 +1415,18 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   </td>
                   <td style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.istimaraStatus.tone}>{r.istimaraStatus.label}</Stamp>
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <input
+                      type="date"
+                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                      value={r.periodicInspectionExpiry || ""}
+                      onChange={(e) => updateVehicle(r.id, "periodicInspectionExpiry", e.target.value)}
+                    />
+                    <HijriNote dateStr={r.periodicInspectionExpiry} />
+                  </td>
+                  <td style={{ padding: "9px 12px" }}>
+                    <Stamp tone={r.periodicInspectionStatus.tone}>{r.periodicInspectionStatus.label}</Stamp>
                   </td>
                   <td style={{ padding: "9px 12px" }}>{r.insuranceCompany || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{r.insurancePolicyNumber || "—"}</td>
@@ -1660,11 +1698,12 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
 }
 
 /* ============ الرواتب و GOSI ============ */
-function PayrollTab({ employees, branches, entities, gosiRates, attendance, leaves, payrollItems, setPayrollItems, logActivity }) {
+function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, leaves, payrollItems, setPayrollItems, logActivity }) {
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", month: new Date().toISOString().slice(0, 7), note: "" });
+  const [payslip, setPayslip] = useState(null);
 
   const addItem = () => {
     if (!itemForm.employeeId || !itemForm.amount || Number(itemForm.amount) <= 0) return;
@@ -1837,6 +1876,7 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
         </div>
       </div>
 
+      {!payslip && (
       <div className="print-section">
         <div style={{ display: "none" }} className="print-only-title">
           {t(`كشف الرواتب — ${month}`, `Payroll Sheet — ${month}`)}
@@ -1866,6 +1906,7 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
                   t("حصة صاحب العمل", "Employer Share"),
                   t("الصافي للموظف", "Net for Employee"),
                   t("تكلفة الشركة", "Company Cost"),
+                  "",
                 ].map((h, i) => (
                   <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
                 ))}
@@ -1892,6 +1933,9 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
                   <td style={{ padding: "9px 12px" }}>{fmt(r.employerShare)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.green, fontWeight: 700 }}>{fmt(r.net)}</td>
                   <td style={{ padding: "9px 12px", fontWeight: 700 }}>{fmt(r.totalCost)}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }} className="no-print">
+                    <Btn small onClick={() => setPayslip({ ...r, __month: month })}>{t("🖶 قسيمة الراتب", "🖶 Payslip")}</Btn>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1899,6 +1943,169 @@ function PayrollTab({ employees, branches, entities, gosiRates, attendance, leav
         )}
       </div>
       </div>
+      )}
+
+      {payslip && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(36,24,17,0.55)",
+            zIndex: 60,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 12,
+              maxWidth: 640,
+              width: "100%",
+              maxHeight: "92vh",
+              overflow: "auto",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div
+              className="no-print"
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "14px 20px",
+                borderBottom: `1px solid ${COLORS.line}`,
+                position: "sticky",
+                top: 0,
+                background: "#fff",
+                zIndex: 2,
+                borderRadius: "12px 12px 0 0",
+              }}
+            >
+              <div style={{ fontWeight: 700, color: COLORS.espresso }}>{t("قسيمة راتب — معاينة", "Payslip — Preview")}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn small onClick={() => window.print()}>{t("🖶 طباعة", "🖶 Print")}</Btn>
+                <Btn small tone="secondary" onClick={() => setPayslip(null)}>{t("إغلاق ✕", "Close ✕")}</Btn>
+              </div>
+            </div>
+
+            <div className="print-section" style={{ padding: 28 }}>
+              <div style={{ textAlign: "center", marginBottom: 18, borderBottom: `2px solid ${COLORS.gold}`, paddingBottom: 14 }}>
+                <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.espresso }}>
+                  {(entityOfBranch && entities.find((en) => en.id === entityOfBranch(payslip.branchId))?.name) || t("مجموعة ينبع للمقاهي", "Yanbu Cafés Group")}
+                </div>
+                <div style={{ fontSize: 13, color: "#8a7a63", marginTop: 4 }}>
+                  {branches.find((b) => b.id === payslip.branchId)?.name || "—"}
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.gold, marginTop: 10 }}>
+                  {t("قسيمة راتب", "Salary Slip")} — {payslip.__month}
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 20px", fontSize: 12.5, marginBottom: 20 }}>
+                <div><b>{t("اسم الموظف", "Employee Name")}:</b> {payslip.name}</div>
+                <div><b>{t("المسمى الوظيفي", "Job Title")}:</b> {payslip.position || "—"}</div>
+                <div><b>{t("رقم الهوية/الإقامة", "National ID/Iqama No.")}:</b> {payslip.nationalId || "—"}</div>
+                <div><b>{t("الجنسية", "Nationality")}:</b> {trLabel(t, NATIONALITY_LABELS_EN, payslip.nationality)}</div>
+                <div><b>{t("الفرع", "Branch")}:</b> {branches.find((b) => b.id === payslip.branchId)?.name || "—"}</div>
+                <div><b>{t("تاريخ التعيين", "Hire Date")}:</b> {payslip.joinDate || "—"}</div>
+              </div>
+
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 14 }}>
+                <thead>
+                  <tr style={{ background: COLORS.paperDark }}>
+                    <th colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: COLORS.green }}>{t("الاستحقاقات", "Earnings")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ padding: "6px 12px" }}>{t("الراتب الأساسي", "Basic Salary")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.salary)} ﷼</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: "6px 12px" }}>{t("الحوافز", "Incentives")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.incentives)} ﷼</td>
+                  </tr>
+                  <tr style={{ borderTop: `1px solid ${COLORS.line}`, fontWeight: 700 }}>
+                    <td style={{ padding: "6px 12px" }}>{t("إجمالي الاستحقاقات", "Total Earnings")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.salary + payslip.incentives)} ﷼</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 14 }}>
+                <thead>
+                  <tr style={{ background: COLORS.paperDark }}>
+                    <th colSpan={2} style={{ padding: "8px 12px", textAlign: "right", color: COLORS.brick }}>{t("الخصومات", "Deductions")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style={{ padding: "6px 12px" }}>{t("حصة الموظف GOSI", "Employee GOSI Share")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.empShare)} ﷼</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: "6px 12px" }}>{t(`خصم الغياب (${fmt(payslip.absentDays)} يوم)`, `Absence Deduction (${fmt(payslip.absentDays)} days)`)}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.absentDeduction)} ﷼</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: "6px 12px" }}>{t(`خصم التأخير (${fmt(payslip.lateMinutesTotal)} د)`, `Lateness Deduction (${fmt(payslip.lateMinutesTotal)} min)`)}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.lateDeduction)} ﷼</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: "6px 12px" }}>{t(`خصم إجازة بدون راتب (${fmt(payslip.unpaidLeaveDays)} يوم)`, `Unpaid Leave Deduction (${fmt(payslip.unpaidLeaveDays)} days)`)}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.unpaidLeaveDeduction)} ﷼</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: "6px 12px" }}>{t("السلف", "Advances")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.advances)} ﷼</td>
+                  </tr>
+                  <tr>
+                    <td style={{ padding: "6px 12px" }}>{t("خصومات أخرى", "Other Deductions")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.extraDeductions)} ﷼</td>
+                  </tr>
+                  <tr style={{ borderTop: `1px solid ${COLORS.line}`, fontWeight: 700 }}>
+                    <td style={{ padding: "6px 12px" }}>{t("إجمالي الخصومات", "Total Deductions")}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>
+                      {fmt(payslip.empShare + payslip.attendanceDeduction + payslip.advances + payslip.extraDeductions)} ﷼
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <div
+                style={{
+                  background: COLORS.greenBg,
+                  border: `1px solid ${COLORS.green}`,
+                  borderRadius: 8,
+                  padding: "12px 16px",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 24,
+                }}
+              >
+                <div style={{ fontWeight: 700, color: COLORS.espresso }}>{t("صافي الراتب المستحق", "Net Salary Payable")}</div>
+                <div style={{ fontWeight: 800, fontSize: 17, color: COLORS.green, fontFamily: "Consolas, monospace" }}>{fmt(payslip.net)} ﷼</div>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40, fontSize: 12 }}>
+                <div style={{ textAlign: "center", width: "45%" }}>
+                  <div style={{ borderTop: `1px solid ${COLORS.ink}`, paddingTop: 6 }}>{t("توقيع الموظف", "Employee Signature")}</div>
+                </div>
+                <div style={{ textAlign: "center", width: "45%" }}>
+                  <div style={{ borderTop: `1px solid ${COLORS.ink}`, paddingTop: 6 }}>{t("توقيع الإدارة المالية", "Finance Signature")}</div>
+                </div>
+              </div>
+              <div style={{ marginTop: 20, fontSize: 10, color: "#a3927a", textAlign: "center" }}>
+                {t(`تاريخ الإصدار: ${new Date().toLocaleDateString("ar-SA")}`, `Issue Date: ${new Date().toLocaleDateString("en-US")}`)}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }} className="no-print">
         {t(
@@ -1975,14 +2182,49 @@ function EOSTab({ employees }) {
       </div>
 
       {emp && (
-        <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-          <ReceiptCard label={t("المكافأة الكاملة (نظريًا)", "Full Bonus (Theoretical)")} value={`${fmt(result.full)} ﷼`} />
-          <ReceiptCard label={t("المكافأة المستحقة فعليًا", "Actual Bonus Due")} value={`${fmt(result.adjusted)} ﷼`} tone={COLORS.green} sub={result.note} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 4, marginBottom: 4 }} className="no-print">
+          <div />
+          <Btn onClick={() => window.print()}>{t("🖶 طباعة مستند التسوية", "🖶 Print Settlement Document")}</Btn>
         </div>
       )}
-      {!emp && <Empty text={t("اختر موظفًا لعرض احتساب المكافأة", "Select an employee to see the bonus calculation")} />}
 
-      <div style={{ marginTop: 22, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+      <div className="print-section">
+        <div style={{ display: "none" }} className="print-only-title">
+          {t("مستند تسوية نهاية الخدمة", "End of Service Settlement Document")}
+        </div>
+        {emp && (
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+            <ReceiptCard label={t("المكافأة الكاملة (نظريًا)", "Full Bonus (Theoretical)")} value={`${fmt(result.full)} ﷼`} />
+            <ReceiptCard label={t("المكافأة المستحقة فعليًا", "Actual Bonus Due")} value={`${fmt(result.adjusted)} ﷼`} tone={COLORS.green} sub={result.note} />
+          </div>
+        )}
+        {emp && (
+          <div style={{ marginTop: 16, background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, fontSize: 12.5 }}>
+            <div style={{ fontWeight: 700, marginBottom: 10, color: COLORS.espresso }}>{t("بيانات الموظف", "Employee Details")}</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 20px" }}>
+              <div><b>{t("الاسم", "Name")}:</b> {emp.name}</div>
+              <div><b>{t("رقم الهوية/الإقامة", "National ID/Iqama No.")}:</b> {emp.nationalId || "—"}</div>
+              <div><b>{t("تاريخ التعيين", "Hire Date")}:</b> {emp.joinDate || "—"}</div>
+              <div><b>{t("تاريخ انتهاء الخدمة", "Service End Date")}:</b> {endDate}</div>
+              <div><b>{t("مدة الخدمة", "Length of Service")}:</b> {years.toFixed(2)} {t("سنة", "years")}</div>
+              <div><b>{t("سبب انتهاء الخدمة", "Reason")}:</b> {trLabel(t, EOS_REASON_LABELS_EN, reason)}</div>
+              <div><b>{t("الراتب الأساسي", "Basic Salary")}:</b> {fmt(salary)} ﷼</div>
+              <div><b>{t("المكافأة المستحقة", "Bonus Due")}:</b> {fmt(result.adjusted)} ﷼</div>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
+              <div style={{ textAlign: "center", width: "45%" }}>
+                <div style={{ borderTop: `1px solid ${COLORS.ink}`, paddingTop: 6 }}>{t("توقيع الموظف", "Employee Signature")}</div>
+              </div>
+              <div style={{ textAlign: "center", width: "45%" }}>
+                <div style={{ borderTop: `1px solid ${COLORS.ink}`, paddingTop: 6 }}>{t("توقيع الإدارة", "Management Signature")}</div>
+              </div>
+            </div>
+          </div>
+        )}
+        {!emp && <Empty text={t("اختر موظفًا لعرض احتساب المكافأة", "Select an employee to see the bonus calculation")} />}
+      </div>
+
+      <div style={{ marginTop: 22, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }} className="no-print">
         {t(
           "ملاحظة: هذا احتساب تقريبي يعتمد على الراتب الأساسي المسجَّل فقط. الاحتساب الرسمي وفق نظام العمل يشمل أحيانًا بنودًا إضافية من الأجر الشامل، وقد تختلف التفاصيل حسب نوع العقد ولائحة المنشأة — يُنصح بمراجعة مختص أو مكتب عمل قبل الاعتماد النهائي.",
           "Note: this is an approximate calculation based only on the recorded basic salary. The official calculation under labor law sometimes includes additional items from total wages, and details may vary by contract type and company policy — consult a specialist or labor office before final approval."
