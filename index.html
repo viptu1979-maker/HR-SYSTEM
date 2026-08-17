@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>نظام الموارد البشرية — مجموعة ينبع للمقاهي</title>
+<title>نظام الموارد البشرية — مؤسسة ديرة فارس للتجارة</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -13,12 +13,86 @@
   html, body { margin: 0; padding: 0; }
   * { box-sizing: border-box; }
   @media print {
+    @page { size: A4 landscape; margin: 12mm 10mm; }
+
+    html, body {
+      background: #fff !important;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
     body * { visibility: hidden; }
     .print-section, .print-section * { visibility: visible; }
-    .print-section { position: absolute; left: 0; top: 0; width: 100%; padding: 16px; }
+    .print-section {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      padding: 0;
+      background: #fff !important;
+      box-shadow: none !important;
+      border-radius: 0 !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }
+    .print-section table { overflow: visible !important; }
     .no-print { display: none !important; }
-    .print-only-title { display: block !important; font-size: 18px; font-weight: 700; margin-bottom: 12px; }
+
+    /* رأس التقرير المطبوع: يحل محل شريط المتصفح (بدون رابط/تاريخ/رقم صفحة تلقائي) */
+    .print-only-title {
+      display: flex !important;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 2px;
+      font-size: 17px;
+      font-weight: 800;
+      color: #3B2A1D;
+      margin-bottom: 4px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid #B8863B;
+    }
+    .print-only-title .print-brand {
+      font-size: 11px;
+      font-weight: 600;
+      color: #8a7a63;
+    }
+    .print-only-meta {
+      display: flex !important;
+      justify-content: space-between;
+      font-size: 10.5px;
+      color: #8a7a63;
+      margin: 6px 0 14px 0;
+    }
+
+    /* الجدول: حدود واضحة، تكرار الترويسة، منع قطع الصفوف بين الصفحات */
+    .print-section table {
+      width: 100% !important;
+      min-width: 0 !important;
+      border-collapse: collapse !important;
+      font-size: 10px !important;
+    }
+    .print-section table thead { display: table-header-group; }
+    .print-section table tr { page-break-inside: avoid; }
+    .print-section table th,
+    .print-section table td {
+      border: 1px solid #D8CBAE !important;
+      padding: 5px 7px !important;
+      font-family: inherit !important;
+    }
+    .print-section table th {
+      background: #EAE1CE !important;
+    }
+
+    /* تذييل رقم الصفحة داخل محتوى الطباعة نفسه (وليس تذييل المتصفح) */
+    .print-footer-note {
+      display: block !important;
+      margin-top: 10px;
+      font-size: 9.5px;
+      color: #a3927a;
+      text-align: left;
+    }
   }
+  .print-footer-note { display: none; }
 </style>
 </head>
 <body>
@@ -314,6 +388,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [loaded, setLoaded] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [syncError, setSyncError] = useState("");
+  const [showChangePassword, setShowChangePassword] = useState(false);
   const lastSyncedRef = useRef("");
 
   /* الاستماع لحظيًا لبيانات النظام من Firestore — أي تعديل من أي جهاز يوصل هنا فورًا */
@@ -418,6 +493,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         attendance={attendance}
         branchName={branchName}
         onLogout={onLogout}
+        setUsers={setUsers}
+        logActivity={logActivity}
       />
     );
   }
@@ -447,7 +524,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         <div style={{ marginBottom: 26, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 0.3 }}>{t("نظام الموارد البشرية", "HR System")}</div>
-            <div style={{ fontSize: 11, color: COLORS.goldLight, marginTop: 3 }}>{t("مجموعة ينبع للمقاهي · السعودية", "Yanbu Cafés Group · Saudi Arabia")}</div>
+            <div style={{ fontSize: 11, color: COLORS.goldLight, marginTop: 3 }}>{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
           </div>
           <LangToggle style={{ background: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.25)", color: "#F5EBDC", flexShrink: 0 }} />
         </div>
@@ -492,6 +569,22 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             {isEntityManager && ` · ${entityName(currentUser.entityId)}`}
           </div>
           <button
+            onClick={() => setShowChangePassword(true)}
+            style={{
+              width: "100%",
+              background: "transparent",
+              border: "1px solid rgba(216,168,90,0.4)",
+              color: "#D9CBB2",
+              borderRadius: 6,
+              padding: "7px 10px",
+              fontSize: 12,
+              cursor: "pointer",
+              marginBottom: 8,
+            }}
+          >
+            {t("🔑 تغيير كلمة المرور", "🔑 Change Password")}
+          </button>
+          <button
             onClick={onLogout}
             style={{
               width: "100%",
@@ -508,6 +601,15 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           </button>
         </div>
       </aside>
+
+      {showChangePassword && (
+        <ChangePasswordModal
+          currentUser={currentUser}
+          setUsers={setUsers}
+          logActivity={logActivity}
+          onClose={() => setShowChangePassword(false)}
+        />
+      )}
 
       {/* المحتوى */}
       <main style={{ flex: 1, padding: "26px 30px", maxWidth: 1180 }}>
@@ -848,7 +950,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 
       <div className="print-section">
         <div style={{ display: "none" }} className="print-only-title">
+          <div className="print-brand">{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
           {t("قائمة الموظفين", "Employee List")}
+        </div>
+        <div style={{ display: "none" }} className="print-only-meta">
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{list.length} {t("موظف", "employees")}</span>
         </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
         {list.length === 0 && <Empty text={t("لا يوجد موظفون مطابقون", "No matching employees")} />}
@@ -950,7 +1057,12 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
 
       <div className="print-section">
         <div style={{ display: "none" }} className="print-only-title">
+          <div className="print-brand">{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
           {t("الإقامات والعقود", "Iqamas & Contracts")}
+        </div>
+        <div style={{ display: "none" }} className="print-only-meta">
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{filtered.length} {t("سجل", "records")}</span>
         </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {filtered.length === 0 && <Empty text={t("لا توجد بيانات مطابقة", "No matching data")} />}
@@ -1879,7 +1991,12 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       {!payslip && (
       <div className="print-section">
         <div style={{ display: "none" }} className="print-only-title">
+          <div className="print-brand">{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
           {t(`كشف الرواتب — ${month}`, `Payroll Sheet — ${month}`)}
+        </div>
+        <div style={{ display: "none" }} className="print-only-meta">
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{branches.find((b) => b.id === branchFilter)?.name || t("كل الفروع", "All Branches")} · {rows.length} {t("موظف", "employees")}</span>
         </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {rows.length === 0 && <Empty text={t("لا يوجد موظفون نشطون مطابقون", "No matching active employees")} />}
@@ -1994,7 +2111,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
             <div className="print-section" style={{ padding: 28 }}>
               <div style={{ textAlign: "center", marginBottom: 18, borderBottom: `2px solid ${COLORS.gold}`, paddingBottom: 14 }}>
                 <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.espresso }}>
-                  {(entityOfBranch && entities.find((en) => en.id === entityOfBranch(payslip.branchId))?.name) || t("مجموعة ينبع للمقاهي", "Yanbu Cafés Group")}
+                  {(entityOfBranch && entities.find((en) => en.id === entityOfBranch(payslip.branchId))?.name) || t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}
                 </div>
                 <div style={{ fontSize: 13, color: "#8a7a63", marginTop: 4 }}>
                   {branches.find((b) => b.id === payslip.branchId)?.name || "—"}
@@ -2190,7 +2307,12 @@ function EOSTab({ employees }) {
 
       <div className="print-section">
         <div style={{ display: "none" }} className="print-only-title">
+          <div className="print-brand">{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
           {t("مستند تسوية نهاية الخدمة", "End of Service Settlement Document")}
+        </div>
+        <div style={{ display: "none" }} className="print-only-meta">
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{emp ? (emp.name || "") : ""}</span>
         </div>
         {emp && (
           <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
@@ -2372,6 +2494,158 @@ function NYSkyline() {
   );
 }
 
+/* ============ نافذة تغيير كلمة المرور (لكل مستخدم لحسابه الخاص) ============ */
+function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity }) {
+  const { t } = useLang();
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState(false);
+
+  const submit = () => {
+    setError("");
+    if (!oldPassword.trim() || !newPassword.trim() || !confirmPassword.trim()) {
+      setError(t("الرجاء تعبئة جميع الحقول", "Please fill in all fields"));
+      return;
+    }
+    if (oldPassword !== currentUser.password) {
+      setError(t("كلمة المرور الحالية غير صحيحة", "Current password is incorrect"));
+      return;
+    }
+    if (!/^[A-Za-z]{2}\d+$/.test(newPassword)) {
+      setError(t("كلمة المرور يجب أن تبدأ بحرفين إنجليزيين ثم أرقام فقط (مثال: ab1234)", "Password must start with 2 English letters followed by numbers only (e.g. ab1234)"));
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError(t("كلمة المرور الجديدة وتأكيدها غير متطابقين", "New password and confirmation do not match"));
+      return;
+    }
+    if (newPassword === oldPassword) {
+      setError(t("كلمة المرور الجديدة يجب أن تختلف عن الحالية", "New password must be different from the current one"));
+      return;
+    }
+    setUsers((prev) => prev.map((u) => (u.username === currentUser.username ? { ...u, password: newPassword } : u)));
+    logActivity && logActivity("تغيير كلمة المرور", "users", currentUser.username);
+    setSuccess(true);
+    setOldPassword("");
+    setNewPassword("");
+    setConfirmPassword("");
+  };
+
+  return (
+    <div
+      className="no-print"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(36,24,17,0.55)",
+        zIndex: 70,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 12,
+          maxWidth: 380,
+          width: "100%",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+          padding: 22,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 15 }}>{t("تغيير كلمة المرور", "Change Password")}</div>
+          <button
+            onClick={onClose}
+            style={{ background: "transparent", border: "none", fontSize: 18, cursor: "pointer", color: "#8a7a63", lineHeight: 1 }}
+          >
+            ✕
+          </button>
+        </div>
+
+        {success ? (
+          <div>
+            <div
+              style={{
+                background: COLORS.greenBg,
+                color: COLORS.green,
+                padding: "10px 12px",
+                borderRadius: 8,
+                fontSize: 13,
+                marginBottom: 16,
+              }}
+            >
+              {t("تم تغيير كلمة المرور بنجاح ✓", "Password changed successfully ✓")}
+            </div>
+            <div style={{ display: "flex" }}>
+              <div style={{ flex: 1 }}>
+                <Btn onClick={onClose}>{t("إغلاق", "Close")}</Btn>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <Field label={t("كلمة المرور الحالية", "Current Password")}>
+              <input
+                type="password"
+                style={inputStyle}
+                value={oldPassword}
+                onChange={(e) => setOldPassword(e.target.value)}
+                autoFocus
+              />
+            </Field>
+            <Field label={t("كلمة المرور الجديدة", "New Password")}>
+              <input
+                type="password"
+                style={inputStyle}
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                placeholder={t("مثال: ab1234", "e.g. ab1234")}
+              />
+              <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 3 }}>
+                {t("حرفين ثم أرقام فقط، مثال: ab1234", "2 letters then numbers only, e.g. ab1234")}
+              </div>
+            </Field>
+            <Field label={t("تأكيد كلمة المرور الجديدة", "Confirm New Password")}>
+              <input
+                type="password"
+                style={inputStyle}
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+              />
+            </Field>
+            {error && (
+              <div
+                style={{
+                  background: COLORS.brickBg,
+                  color: COLORS.brick,
+                  padding: "8px 12px",
+                  borderRadius: 8,
+                  fontSize: 12.5,
+                }}
+              >
+                {error}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+              <div style={{ flex: 1 }}>
+                <Btn onClick={submit}>{t("حفظ", "Save")}</Btn>
+              </div>
+              <div style={{ flex: 1 }}>
+                <Btn tone="secondary" onClick={onClose}>{t("إلغاء", "Cancel")}</Btn>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({ form, setForm, onSubmit, error }) {
   const { t } = useLang();
   return (
@@ -2409,7 +2683,7 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
       >
         <div style={{ textAlign: "center", marginBottom: 22 }}>
           <div style={{ fontSize: 20, fontWeight: 800, color: COLORS.espresso }}>{t("نظام الموارد البشرية", "HR System")}</div>
-          <div style={{ fontSize: 11.5, color: COLORS.coffee, marginTop: 4 }}>{t("مجموعة ينبع للمقاهي · تسجيل الدخول", "Yanbu Cafés Group · Sign In")}</div>
+          <div style={{ fontSize: 11.5, color: COLORS.coffee, marginTop: 4 }}>{t("مؤسسة ديرة فارس للتجارة · تسجيل الدخول", "Deerat Fares Trading Est. · Sign In")}</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Field label={t("اسم المستخدم", "Username")}>
@@ -2459,8 +2733,9 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
 }
 
 /* ============ حساب موظف: عرض شخصي فقط ============ */
-function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLogout }) {
+function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLogout, setUsers, logActivity }) {
   const { t } = useLang();
+  const [showChangePassword, setShowChangePassword] = useState(false);
   if (!employee) {
     return (
       <div
@@ -2481,8 +2756,19 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
         <div style={{ fontSize: 14, color: COLORS.ink }}>
           {t("هذا الحساب غير مرتبط بسجل موظف بعد. تواصل مع الإدارة لربط الحساب.", "This account isn't linked to an employee record yet. Contact management to link the account.")}
         </div>
-        <Btn onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
+        <div style={{ display: "flex", gap: 8 }}>
+          <Btn tone="secondary" onClick={() => setShowChangePassword(true)}>{t("🔑 تغيير كلمة المرور", "🔑 Change Password")}</Btn>
+          <Btn onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
+        </div>
         <LangToggle />
+        {showChangePassword && (
+          <ChangePasswordModal
+            currentUser={user}
+            setUsers={setUsers}
+            logActivity={logActivity}
+            onClose={() => setShowChangePassword(false)}
+          />
+        )}
       </div>
     );
   }
@@ -2513,9 +2799,19 @@ function EmployeeSelfView({ user, employee, leaves, attendance, branchName, onLo
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <LangToggle />
+            <Btn tone="secondary" onClick={() => setShowChangePassword(true)}>{t("🔑 تغيير كلمة المرور", "🔑 Change Password")}</Btn>
             <Btn tone="secondary" onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
           </div>
         </div>
+
+        {showChangePassword && (
+          <ChangePasswordModal
+            currentUser={user}
+            setUsers={setUsers}
+            logActivity={logActivity}
+            onClose={() => setShowChangePassword(false)}
+          />
+        )}
 
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 22 }}>
           <ReceiptCard label={t("الراتب الأساسي", "Basic Salary")} value={`${fmt(employee.salary)} ﷼`} />
@@ -2822,7 +3118,12 @@ function ReportsTab({ activityLog, users }) {
 
       <div className="print-section">
         <div style={{ display: "none" }} className="print-only-title">
+          <div className="print-brand">{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
           {t("تقرير الدخول والعمليات", "Login & Activity Report")}
+        </div>
+        <div style={{ display: "none" }} className="print-only-meta">
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{rows.length} {t("عملية", "actions")}</span>
         </div>
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
           {rows.length === 0 && <Empty text={t("لا توجد عمليات مسجّلة مطابقة", "No matching recorded actions")} />}
