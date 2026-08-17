@@ -273,6 +273,45 @@ function daysOverlapInMonth(from, to, monthStr) {
   return Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
 }
 
+/* رصيد الإجازة السنوية: تراكم شهري حسب مدة الخدمة الفعلية منذ آخر تاريخ ذكرى تعيين
+   ٢١ يوم/سنة (تزيد لـ ٣٠ بعد ٥ سنوات خدمة) وفق نظام العمل السعودي، ناقص المستخدم فعليًا من إجازات "سنوية" خلال سنة الخدمة الحالية */
+function leaveBalanceInfo(emp, leaves) {
+  if (!emp || !emp.joinDate) return null;
+  const join = new Date(emp.joinDate + "T00:00:00");
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (isNaN(join) || join > today) return null;
+
+  const serviceYears = yearsBetween(emp.joinDate, today.toISOString().slice(0, 10));
+  const perYear = serviceYears >= 5 ? 30 : 21;
+
+  let anniv = new Date(join);
+  anniv.setFullYear(today.getFullYear());
+  if (anniv > today) anniv.setFullYear(anniv.getFullYear() - 1);
+
+  let months = (today.getFullYear() - anniv.getFullYear()) * 12 + (today.getMonth() - anniv.getMonth());
+  if (today.getDate() < anniv.getDate()) months -= 1;
+  months = Math.max(0, Math.min(12, months));
+
+  const accrued = (perYear / 12) * months;
+  const usedDays = (leaves || [])
+    .filter((l) => l.employeeId === emp.id && l.type === "سنوية" && l.from && new Date(l.from) >= anniv && new Date(l.from) <= today)
+    .reduce((s, l) => {
+      const d = Math.round((new Date(l.to) - new Date(l.from)) / 86400000) + 1;
+      return s + (d > 0 ? d : 0);
+    }, 0);
+  const balance = accrued - usedDays;
+
+  return {
+    perYear,
+    anniversaryDate: anniv.toISOString().slice(0, 10),
+    monthsCompleted: months,
+    accrued: Math.round(accrued * 10) / 10,
+    usedDays,
+    balance: Math.round(balance * 10) / 10,
+  };
+}
+
 /* ============ مكونات عامة بطابع "الإيصال/الدفتر" ============ */
 function Stamp({ children, tone = "gold" }) {
   const bg = tone === "gold" ? COLORS.goldLight : tone === "green" ? COLORS.greenBg : COLORS.brickBg;
@@ -630,6 +669,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             branches={scopedBranches}
             entities={scopedEntities}
             entityOfBranch={entityOfBranch}
+            leaves={scopedLeaves}
             logActivity={logActivity}
           />
         )}
@@ -777,6 +817,7 @@ const EMPTY_EMP = {
   contractType: "محدد المدة",
   contractStart: "",
   contractEnd: "",
+  careerHistory: [],
 };
 
 /* تحويل تاريخ ميلادي إلى هجري للعرض جنب حقل التاريخ (بدون اتصال إنترنت، عبر Intl المدمجة في المتصفح) */
@@ -817,11 +858,12 @@ function expiryStatus(dateStr, t) {
   return { label: tr(`سارية (${days} يوم متبقي)`, `Valid (${days} days left)`), tone: "green", days };
 }
 
-function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch, logActivity }) {
+function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch, leaves, logActivity }) {
   const { t } = useLang();
   const [form, setForm] = useState(EMPTY_EMP);
   const [editingId, setEditingId] = useState(null);
   const [filterBranch, setFilterBranch] = useState("");
+  const [profileEmp, setProfileEmp] = useState(null);
 
   const resetForm = () => {
     setForm(EMPTY_EMP);
@@ -850,6 +892,22 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     setEmployees((prev) => prev.filter((e) => e.id !== id));
     logActivity && logActivity("حذف موظف", "employees", target?.name || id);
     if (editingId === id) resetForm();
+  };
+
+  const addCareerEntry = (empId, entry) => {
+    const newEntry = { ...entry, id: uid() };
+    setEmployees((prev) =>
+      prev.map((e) => (e.id === empId ? { ...e, careerHistory: [...(e.careerHistory || []), newEntry] } : e))
+    );
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, careerHistory: [...(prev.careerHistory || []), newEntry] } : prev));
+    logActivity && logActivity("إضافة حدث مسار وظيفي", "employees", employees.find((e) => e.id === empId)?.name || "");
+  };
+
+  const removeCareerEntry = (empId, entryId) => {
+    setEmployees((prev) =>
+      prev.map((e) => (e.id === empId ? { ...e, careerHistory: (e.careerHistory || []).filter((h) => h.id !== entryId) } : e))
+    );
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, careerHistory: (prev.careerHistory || []).filter((h) => h.id !== entryId) } : prev));
   };
 
   const list = employees.filter((e) => !filterBranch || e.branchId === filterBranch);
@@ -982,7 +1040,13 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
             <tbody>
               {list.map((e) => (
                 <tr key={e.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
-                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{e.name}</td>
+                  <td
+                    style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.brick, cursor: "pointer", textDecoration: "underline dotted" }}
+                    onClick={() => setProfileEmp(e)}
+                    title={t("عرض الملف الكامل", "View full profile")}
+                  >
+                    {e.name}
+                  </td>
                   <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === e.branchId)?.name || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{e.position}</td>
                   <td style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, e.nationality)}</td>
@@ -1001,6 +1065,206 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           </table>
         )}
       </div>
+      </div>
+
+      {profileEmp && (
+        <EmployeeProfileModal
+          emp={employees.find((e) => e.id === profileEmp.id) || profileEmp}
+          branches={branches}
+          leaves={leaves || []}
+          onAddCareerEntry={addCareerEntry}
+          onRemoveCareerEntry={removeCareerEntry}
+          onClose={() => setProfileEmp(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ============ الملف الشخصي الكامل للموظف ============ */
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onClose }) {
+  const { t } = useLang();
+  const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
+
+  const branchName = branches.find((b) => b.id === emp.branchId)?.name || "—";
+  const iqamaSt = expiryStatus(emp.iqamaExpiry, t);
+  const contractSt = expiryStatus(emp.contractEnd, t);
+  const empLeaves = (leaves || []).filter((l) => l.employeeId === emp.id);
+  const leaveDays = (l) => {
+    if (!l.from || !l.to) return 0;
+    const d = Math.round((new Date(l.to) - new Date(l.from)) / 86400000) + 1;
+    return d > 0 ? d : 0;
+  };
+  const totalLeaveDays = empLeaves.reduce((s, l) => s + leaveDays(l), 0);
+  const leaveBal = leaveBalanceInfo(emp, leaves);
+  const career = [...(emp.careerHistory || [])].sort((a, b) => (a.date < b.date ? 1 : -1));
+
+  const addCareer = () => {
+    if (!careerForm.title || !careerForm.date) return;
+    onAddCareerEntry(emp.id, careerForm);
+    setCareerForm({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
+  };
+
+  const Section = ({ title, children }) => (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: COLORS.coffee, marginBottom: 10, borderBottom: `1px dashed ${COLORS.line}`, paddingBottom: 6 }}>
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+
+  const InfoRow = ({ label, value }) => (
+    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "5px 0" }}>
+      <span style={{ color: "#a3927a" }}>{label}</span>
+      <span style={{ fontWeight: 700, color: COLORS.espresso }}>{value || "—"}</span>
+    </div>
+  );
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(36,24,17,0.55)",
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 12,
+          maxWidth: 680,
+          width: "100%",
+          maxHeight: "92vh",
+          overflow: "auto",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+        }}
+        onClick={(ev) => ev.stopPropagation()}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            padding: "14px 20px",
+            borderBottom: `1px solid ${COLORS.line}`,
+            position: "sticky",
+            top: 0,
+            background: "#fff",
+            zIndex: 2,
+            borderRadius: "12px 12px 0 0",
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 800, color: COLORS.espresso, fontSize: 15 }}>{emp.name}</div>
+            <div style={{ fontSize: 11.5, color: "#a3927a" }}>{emp.position} — {branchName}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <Stamp tone={emp.status === "نشط" ? "green" : emp.status === "موقوف" ? "gold" : "brick"}>
+              {trLabel(t, STATUS_LABELS_EN, emp.status)}
+            </Stamp>
+            <Btn small tone="secondary" onClick={onClose}>{t("إغلاق ✕", "Close ✕")}</Btn>
+          </div>
+        </div>
+
+        <div style={{ padding: 20 }}>
+          <Section title={t("البيانات الأساسية", "Basic Information")}>
+            <InfoRow label={t("رقم الهوية / الإقامة", "National ID / Iqama No.")} value={emp.nationalId} />
+            <InfoRow label={t("الجنسية", "Nationality")} value={trLabel(t, NATIONALITY_LABELS_EN, emp.nationality)} />
+            <InfoRow label={t("الفرع", "Branch")} value={branchName} />
+            <InfoRow label={t("المسمى الوظيفي", "Job Title")} value={emp.position} />
+            <InfoRow label={t("تاريخ التعيين", "Hire Date")} value={emp.joinDate} />
+            <InfoRow label={t("رقم الجوال", "Mobile Number")} value={emp.phone} />
+          </Section>
+
+          <Section title={t("الراتب", "Salary")}>
+            <InfoRow label={t("الراتب الأساسي", "Basic Salary")} value={`${fmt(emp.salary)} ﷼`} />
+          </Section>
+
+          <Section title={t("الإقامة والعقد", "Iqama & Contract")}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0" }}>
+              <span style={{ fontSize: 12.5, color: "#a3927a" }}>{t("تاريخ انتهاء الإقامة", "Iqama Expiry")}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: 12.5 }}>{emp.iqamaExpiry || "—"}</span>
+                <Stamp tone={iqamaSt.tone}>{iqamaSt.label}</Stamp>
+              </div>
+            </div>
+            <InfoRow label={t("المهنة على الإقامة", "Profession on Iqama")} value={emp.iqamaProfession} />
+            <InfoRow label={t("نوع العقد", "Contract Type")} value={trLabel(t, CONTRACT_TYPE_LABELS_EN, emp.contractType)} />
+            <InfoRow label={t("بداية العقد", "Contract Start")} value={emp.contractStart} />
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0" }}>
+              <span style={{ fontSize: 12.5, color: "#a3927a" }}>{t("نهاية العقد", "Contract End")}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={{ fontWeight: 700, fontSize: 12.5 }}>{emp.contractEnd || "—"}</span>
+                <Stamp tone={contractSt.tone}>
+                  {emp.contractType === "غير محدد المدة" && !emp.contractEnd ? t("عقد مفتوح", "Open-ended") : contractSt.label}
+                </Stamp>
+              </div>
+            </div>
+          </Section>
+
+          <Section title={`${t("المسار الوظيفي", "Career Path")} (${career.length})`}>
+            <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+              <input type="date" style={{ ...inputStyle, maxWidth: 140 }} value={careerForm.date} onChange={(e) => setCareerForm({ ...careerForm, date: e.target.value })} />
+              <input
+                style={{ ...inputStyle, maxWidth: 200 }}
+                placeholder={t("مثال: ترقية إلى مشرف فرع", "e.g. Promoted to Branch Supervisor")}
+                value={careerForm.title}
+                onChange={(e) => setCareerForm({ ...careerForm, title: e.target.value })}
+              />
+              <input
+                style={{ ...inputStyle, maxWidth: 200 }}
+                placeholder={t("ملاحظة (اختياري)", "Note (optional)")}
+                value={careerForm.note}
+                onChange={(e) => setCareerForm({ ...careerForm, note: e.target.value })}
+              />
+              <Btn small onClick={addCareer}>{t("إضافة", "Add")}</Btn>
+            </div>
+            {career.length === 0 && <Empty text={t("لا يوجد سجل مسار وظيفي بعد", "No career history recorded yet")} />}
+            {career.map((h) => (
+              <div key={h.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: `1px dashed ${COLORS.line}` }}>
+                <div>
+                  <div style={{ fontSize: 12.5, fontWeight: 700, color: COLORS.espresso }}>{h.title}</div>
+                  {h.note && <div style={{ fontSize: 11, color: "#a3927a" }}>{h.note}</div>}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11, color: "#a3927a" }}>{h.date}</span>
+                  <Btn small tone="danger" onClick={() => onRemoveCareerEntry(emp.id, h.id)}>{t("حذف", "Delete")}</Btn>
+                </div>
+              </div>
+            ))}
+          </Section>
+
+          <Section title={`${t("الإجازات", "Leaves")} — ${t(`إجمالي ${totalLeaveDays} يوم`, `Total ${totalLeaveDays} days`)}`}>
+            {leaveBal && (
+              <div style={{ background: COLORS.paperDark, borderRadius: 8, padding: "10px 12px", marginBottom: 10, display: "flex", flexWrap: "wrap", gap: "4px 18px" }}>
+                <span style={{ fontSize: 12 }}>{t("الاستحقاق السنوي", "Annual Entitlement")}: <b>{fmt(leaveBal.perYear)} {t("يوم", "days")}</b></span>
+                <span style={{ fontSize: 12 }}>{t("الرصيد المتراكم", "Accrued to Date")}: <b>{fmt(leaveBal.accrued)} {t("يوم", "days")}</b></span>
+                <span style={{ fontSize: 12 }}>{t("المستخدم (سنة الخدمة الحالية)", "Used (Current Service Year)")}: <b>{fmt(leaveBal.usedDays)} {t("يوم", "days")}</b></span>
+                <span style={{ fontSize: 12, color: leaveBal.balance < 0 ? COLORS.brick : COLORS.green }}>
+                  {t("الرصيد المتبقي", "Remaining Balance")}: <b>{fmt(leaveBal.balance)} {t("يوم", "days")}</b>
+                </span>
+                <span style={{ fontSize: 10.5, color: "#a3927a", width: "100%" }}>
+                  {t(`محسوب منذ ذكرى التعيين ${leaveBal.anniversaryDate} (${leaveBal.monthsCompleted} شهر مكتمل)`, `Calculated since anniversary ${leaveBal.anniversaryDate} (${leaveBal.monthsCompleted} completed months)`)}
+                </span>
+              </div>
+            )}
+            {empLeaves.length === 0 && <Empty text={t("لا توجد إجازات مسجّلة لهذا الموظف", "No leaves recorded for this employee")} />}
+            {empLeaves.map((l, i) => (
+              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: `1px dashed ${COLORS.line}` }}>
+                <Stamp tone="gold">{trLabel(t, LEAVE_TYPE_LABELS_EN, l.type)}</Stamp>
+                <span style={{ fontSize: 12.5 }}>{l.from} → {l.to}</span>
+                <span style={{ fontSize: 11.5, color: "#a3927a" }}>{t(`${leaveDays(l)} يوم`, `${leaveDays(l)} days`)}</span>
+              </div>
+            ))}
+          </Section>
+        </div>
       </div>
     </div>
   );
@@ -1678,7 +1942,7 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
 function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance, logActivity }) {
   const { t } = useLang();
   const [leaveForm, setLeaveForm] = useState({ employeeId: "", type: "سنوية", from: "", to: "" });
-  const [attForm, setAttForm] = useState({ employeeId: "", date: "", status: "حاضر", lateMinutes: "" });
+  const [attForm, setAttForm] = useState({ employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
 
   const addLeave = () => {
     if (!leaveForm.employeeId || !leaveForm.from || !leaveForm.to) return;
@@ -1690,10 +1954,14 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
 
   const addAtt = () => {
     if (!attForm.employeeId || !attForm.date) return;
-    const record = { ...attForm, lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0 };
+    const record = {
+      ...attForm,
+      lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0,
+      overtimeHours: Number(attForm.overtimeHours || 0),
+    };
     setAttendance((prev) => [...prev, { ...record, id: uid() }]);
     logActivity && logActivity("تسجيل حضور", "attendance", empName(attForm.employeeId));
-    setAttForm({ employeeId: "", date: "", status: "حاضر", lateMinutes: "" });
+    setAttForm({ employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   };
   const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
 
@@ -1755,6 +2023,50 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
         ))}
       </div>
 
+      <SectionTitle>{t("أرصدة الإجازة السنوية", "Annual Leave Balances")}</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
+        {employees.length === 0 && <Empty text={t("لا يوجد موظفون", "No employees")} />}
+        {employees.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                {[
+                  t("الاسم", "Name"),
+                  t("الاستحقاق السنوي", "Annual Entitlement"),
+                  t("الرصيد المتراكم", "Accrued"),
+                  t("المستخدم", "Used"),
+                  t("المتبقي", "Remaining"),
+                ].map((h, i) => (
+                  <th key={i} style={{ padding: "8px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {employees.map((e) => {
+                const bal = leaveBalanceInfo(e, leaves);
+                return (
+                  <tr key={e.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                    <td style={{ padding: "8px 12px", fontWeight: 700 }}>{e.name}</td>
+                    <td style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.perYear)} ${t("يوم", "days")}` : "—"}</td>
+                    <td style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.accrued)} ${t("يوم", "days")}` : "—"}</td>
+                    <td style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.usedDays)} ${t("يوم", "days")}` : "—"}</td>
+                    <td style={{ padding: "8px 12px", fontWeight: 700, color: bal && bal.balance < 0 ? COLORS.brick : COLORS.green }}>
+                      {bal ? `${fmt(bal.balance)} ${t("يوم", "days")}` : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <div style={{ marginBottom: 24, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+        {t(
+          "احتساب رصيد الإجازة: الاستحقاق السنوي ٢١ يوم (يزيد لـ ٣٠ يوم بعد ٥ سنوات خدمة). يتراكم الرصيد شهريًا حسب عدد الأشهر المكتملة منذ آخر ذكرى تعيين، ويُخصم منه أيام الإجازة \"السنوية\" المسجَّلة خلال سنة الخدمة الحالية فقط. هذا احتساب تقريبي وفق نظام العمل السعودي — يُنصح بمراجعته دوريًا.",
+          "Leave balance calculation: Annual entitlement is 21 days (30 after 5 years of service). Balance accrues monthly based on completed months since the last hire anniversary, minus 'Annual' leave days taken during the current service year only. This is an approximate calculation per Saudi labor law — review periodically."
+        )}
+      </div>
+
       <SectionTitle>{t("سجل حضور يومي", "Daily Attendance Log")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
@@ -1786,6 +2098,15 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
               />
             </Field>
           )}
+          <Field label={t("ساعات العمل الإضافي", "Overtime Hours")}>
+            <input
+              type="number"
+              step="0.5"
+              style={inputStyle}
+              value={attForm.overtimeHours}
+              onChange={(e) => setAttForm({ ...attForm, overtimeHours: e.target.value })}
+            />
+          </Field>
           <div style={{ display: "flex", alignItems: "flex-end" }}>
             <Btn onClick={addAtt}>{t("تسجيل", "Register")}</Btn>
           </div>
@@ -1800,6 +2121,9 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
               <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>
                 {trLabel(t, ATTENDANCE_STATUS_LABELS_EN, a.status)}{a.status === "متأخر" && a.lateMinutes ? ` (${a.lateMinutes} ${t("د", "min")})` : ""}
               </Stamp>
+              {Number(a.overtimeHours || 0) > 0 && (
+                <Stamp tone="green">{t(`إضافي ${a.overtimeHours} س`, `OT ${a.overtimeHours}h`)}</Stamp>
+              )}
               <Btn small tone="danger" onClick={() => removeAtt(a.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
@@ -1854,13 +2178,18 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const unpaidLeaveDeduction = unpaidLeaveDays * dailyRate;
       const attendanceDeduction = absentDeduction + lateDeduction + unpaidLeaveDeduction;
 
+      /* الوقت الإضافي: ساعات الإضافي المسجّلة هذا الشهر × سعر الساعة × ١٫٥ (وفق نظام العمل السعودي) */
+      const hourlyRate = dailyRate / 8;
+      const overtimeHours = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0), 0);
+      const overtimePay = overtimeHours * hourlyRate * 1.5;
+
       /* السلف والخصومات والحوافز المسجّلة لهذا الموظف في الشهر المختار */
       const monthItems = payrollItems.filter((p) => p.employeeId === e.id && p.month === month);
       const advances = monthItems.filter((p) => p.type === "سلفة").reduce((s, p) => s + Number(p.amount || 0), 0);
       const extraDeductions = monthItems.filter((p) => p.type === "خصم").reduce((s, p) => s + Number(p.amount || 0), 0);
       const incentives = monthItems.filter((p) => p.type === "حافز").reduce((s, p) => s + Number(p.amount || 0), 0);
 
-      const net = salary - empShare - attendanceDeduction - advances - extraDeductions + incentives;
+      const net = salary - empShare - attendanceDeduction - advances - extraDeductions + incentives + overtimePay;
       return {
         ...e,
         salary,
@@ -1874,11 +2203,13 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         unpaidLeaveDays,
         unpaidLeaveDeduction,
         attendanceDeduction,
+        overtimeHours,
+        overtimePay,
         advances,
         extraDeductions,
         incentives,
         net,
-        totalCost: salary + employerShare,
+        totalCost: salary + employerShare + overtimePay,
       };
     });
 
@@ -1888,13 +2219,14 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       empShare: acc.empShare + r.empShare,
       employerShare: acc.employerShare + r.employerShare,
       attendanceDeduction: acc.attendanceDeduction + r.attendanceDeduction,
+      overtimePay: acc.overtimePay + r.overtimePay,
       advances: acc.advances + r.advances,
       extraDeductions: acc.extraDeductions + r.extraDeductions,
       incentives: acc.incentives + r.incentives,
       net: acc.net + r.net,
       totalCost: acc.totalCost + r.totalCost,
     }),
-    { salary: 0, empShare: 0, employerShare: 0, attendanceDeduction: 0, advances: 0, extraDeductions: 0, incentives: 0, net: 0, totalCost: 0 }
+    { salary: 0, empShare: 0, employerShare: 0, attendanceDeduction: 0, overtimePay: 0, advances: 0, extraDeductions: 0, incentives: 0, net: 0, totalCost: 0 }
   );
 
   return (
@@ -1913,6 +2245,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         <ReceiptCard label={t("خصومات الغياب والتأخير", "Absence & Lateness Deductions")} value={`${fmt(totals.attendanceDeduction)} ﷼`} tone={COLORS.brick} />
         <ReceiptCard label={t("السلف", "Advances")} value={`${fmt(totals.advances)} ﷼`} tone={COLORS.brick} />
         <ReceiptCard label={t("خصومات أخرى", "Other Deductions")} value={`${fmt(totals.extraDeductions)} ﷼`} tone={COLORS.brick} />
+        <ReceiptCard label={t("قيمة الوقت الإضافي", "Overtime Pay")} value={`${fmt(totals.overtimePay)} ﷼`} tone={COLORS.green} />
         <ReceiptCard label={t("الحوافز", "Incentives")} value={`${fmt(totals.incentives)} ﷼`} tone={COLORS.green} />
         <ReceiptCard label={t("حصة صاحب العمل", "Employer's Share")} value={`${fmt(totals.employerShare)} ﷼`} tone={COLORS.coffee} />
         <ReceiptCard label={t("إجمالي التكلفة الشهرية", "Total Monthly Cost")} value={`${fmt(totals.totalCost)} ﷼`} tone={COLORS.espresso} />
@@ -2017,6 +2350,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   t("أيام إجازة بدون راتب", "Unpaid Leave Days"),
                   t("خصم الإجازة", "Leave Deduction"),
                   t("إجمالي خصومات الحضور", "Total Attendance Deductions"),
+                  t("ساعات إضافي", "Overtime Hours"),
+                  t("قيمة الإضافي", "Overtime Pay"),
                   t("السلف", "Advances"),
                   t("خصومات أخرى", "Other Deductions"),
                   t("الحوافز", "Incentives"),
@@ -2044,6 +2379,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.overtimeHours)}</td>
+                  <td style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.overtimePay)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
                   <td style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.incentives)}</td>
@@ -2145,9 +2482,13 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                     <td style={{ padding: "6px 12px" }}>{t("الحوافز", "Incentives")}</td>
                     <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.incentives)} ﷼</td>
                   </tr>
+                  <tr>
+                    <td style={{ padding: "6px 12px" }}>{t(`الوقت الإضافي (${fmt(payslip.overtimeHours)} ساعة)`, `Overtime (${fmt(payslip.overtimeHours)} hrs)`)}</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.overtimePay)} ﷼</td>
+                  </tr>
                   <tr style={{ borderTop: `1px solid ${COLORS.line}`, fontWeight: 700 }}>
                     <td style={{ padding: "6px 12px" }}>{t("إجمالي الاستحقاقات", "Total Earnings")}</td>
-                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.salary + payslip.incentives)} ﷼</td>
+                    <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.salary + payslip.incentives + payslip.overtimePay)} ﷼</td>
                   </tr>
                 </tbody>
               </table>
@@ -2226,8 +2567,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }} className="no-print">
         {t(
-          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ ٣٠. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ ٤٨٠ دقيقة، على أساس ٨ ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه. الصافي للموظف = الراتب − حصة GOSI − خصومات الحضور − السلف − الخصومات الأخرى + الحوافز، لكل قيود السلف/الخصومات/الحوافز المسجّلة بنفس الشهر المختار أعلاه.',
-          'Deduction calculation: Daily rate = Basic salary ÷ 30. Absence deduction = absent days × daily rate. Lateness deduction = late minutes × (daily rate ÷ 480 minutes, based on an 8-hour workday). Unpaid leave deduction = leave days × daily rate. Figures are based on records from the "Attendance & Leave" tab for the month selected above. Net for employee = Salary − GOSI share − attendance deductions − advances − other deductions + incentives, using advance/deduction/incentive entries registered for the same month selected above.'
+          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ ٣٠. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ ٤٨٠ دقيقة، على أساس ٨ ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. احتساب الوقت الإضافي: سعر الساعة = راتب اليوم ÷ ٨، وقيمة الإضافي = ساعات الإضافي المسجّلة × سعر الساعة × ١٫٥ (وفق نظام العمل السعودي). البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه. الصافي للموظف = الراتب − حصة GOSI − خصومات الحضور − السلف − الخصومات الأخرى + الحوافز + قيمة الوقت الإضافي.',
+          'Deduction calculation: Daily rate = Basic salary ÷ 30. Absence deduction = absent days × daily rate. Lateness deduction = late minutes × (daily rate ÷ 480 minutes, based on an 8-hour workday). Unpaid leave deduction = leave days × daily rate. Overtime calculation: Hourly rate = daily rate ÷ 8, and overtime pay = registered overtime hours × hourly rate × 1.5 (per Saudi labor law). Figures are based on records from the "Attendance & Leave" tab for the month selected above. Net for employee = Salary − GOSI share − attendance deductions − advances − other deductions + incentives + overtime pay.'
         )}
       </div>
     </div>
