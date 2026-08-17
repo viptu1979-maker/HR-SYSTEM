@@ -1245,37 +1245,57 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 10 }}>
               <Field label={t("رسوم تجديد الإقامة (﷼)", "Iqama Renewal Fee (SAR)")}>
                 <input
-                  type="number"
-                  style={inputStyle}
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
+                  style={{ ...inputStyle, textAlign: "right" }}
                   value={feesForm.iqamaRenewal}
-                  onChange={(e) => setFeesForm({ ...feesForm, iqamaRenewal: e.target.value })}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/[^0-9.]/g, "");
+                    setFeesForm({ ...feesForm, iqamaRenewal: v });
+                  }}
                   onBlur={saveFees}
                 />
               </Field>
               <Field label={t("رسوم رخصة العمل (﷼)", "Work Permit Fee (SAR)")}>
                 <input
-                  type="number"
-                  style={inputStyle}
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
+                  style={{ ...inputStyle, textAlign: "right" }}
                   value={feesForm.workPermit}
-                  onChange={(e) => setFeesForm({ ...feesForm, workPermit: e.target.value })}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/[^0-9.]/g, "");
+                    setFeesForm({ ...feesForm, workPermit: v });
+                  }}
                   onBlur={saveFees}
                 />
               </Field>
               <Field label={t("المقابل المالي للعمالة (﷼)", "Expat Levy (SAR)")}>
                 <input
-                  type="number"
-                  style={inputStyle}
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
+                  style={{ ...inputStyle, textAlign: "right" }}
                   value={feesForm.dependentsLevy}
-                  onChange={(e) => setFeesForm({ ...feesForm, dependentsLevy: e.target.value })}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/[^0-9.]/g, "");
+                    setFeesForm({ ...feesForm, dependentsLevy: v });
+                  }}
                   onBlur={saveFees}
                 />
               </Field>
               <Field label={t("رسوم أخرى (﷼)", "Other Fees (SAR)")}>
                 <input
-                  type="number"
-                  style={inputStyle}
+                  type="text"
+                  inputMode="decimal"
+                  dir="ltr"
+                  style={{ ...inputStyle, textAlign: "right" }}
                   value={feesForm.other}
-                  onChange={(e) => setFeesForm({ ...feesForm, other: e.target.value })}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(/[^0-9.]/g, "");
+                    setFeesForm({ ...feesForm, other: v });
+                  }}
                   onBlur={saveFees}
                 />
               </Field>
