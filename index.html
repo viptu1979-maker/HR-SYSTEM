@@ -821,6 +821,18 @@ const EMPTY_EMP = {
   contractStart: "",
   contractEnd: "",
   careerHistory: [],
+  weeklyOffDay: "الجمعة",
+};
+
+const WEEK_DAYS = ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"];
+const WEEK_DAYS_EN = {
+  "السبت": "Saturday",
+  "الأحد": "Sunday",
+  "الاثنين": "Monday",
+  "الثلاثاء": "Tuesday",
+  "الأربعاء": "Wednesday",
+  "الخميس": "Thursday",
+  "الجمعة": "Friday",
 };
 
 /* تحويل تاريخ ميلادي إلى هجري للعرض جنب حقل التاريخ (بدون اتصال إنترنت، عبر Intl المدمجة في المتصفح) */
@@ -969,6 +981,13 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
               <option value="نشط">{t("نشط", "Active")}</option>
               <option value="موقوف">{t("موقوف", "Suspended")}</option>
               <option value="منتهي الخدمة">{t("منتهي الخدمة", "Terminated")}</option>
+            </select>
+          </Field>
+          <Field label={t("الإجازة الأسبوعية", "Weekly Off Day")}>
+            <select style={inputStyle} value={form.weeklyOffDay || "الجمعة"} onChange={(e) => setForm({ ...form, weeklyOffDay: e.target.value })}>
+              {WEEK_DAYS.map((d) => (
+                <option key={d} value={d}>{t(d, WEEK_DAYS_EN[d])}</option>
+              ))}
             </select>
           </Field>
         </div>
@@ -1223,6 +1242,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
             <InfoRow label={t("المسمى الوظيفي", "Job Title")} value={emp.position} />
             <InfoRow label={t("تاريخ التعيين", "Hire Date")} value={emp.joinDate} />
             <InfoRow label={t("رقم الجوال", "Mobile Number")} value={emp.phone} />
+            <InfoRow label={t("الإجازة الأسبوعية", "Weekly Off Day")} value={t(emp.weeklyOffDay || "الجمعة", WEEK_DAYS_EN[emp.weeklyOffDay] || "Friday")} />
           </Section>
 
           <Section title={t("الراتب", "Salary")}>
