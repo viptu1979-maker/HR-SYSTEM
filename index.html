@@ -300,7 +300,8 @@ function leaveBalanceInfo(emp, leaves) {
       const d = Math.round((new Date(l.to) - new Date(l.from)) / 86400000) + 1;
       return s + (d > 0 ? d : 0);
     }, 0);
-  const balance = accrued - usedDays;
+  const adjustment = Number(emp.leaveAdjustment || 0);
+  const balance = accrued - usedDays + adjustment;
 
   return {
     perYear,
@@ -308,6 +309,7 @@ function leaveBalanceInfo(emp, leaves) {
     monthsCompleted: months,
     accrued: Math.round(accrued * 10) / 10,
     usedDays,
+    adjustment,
     balance: Math.round(balance * 10) / 10,
   };
 }
@@ -699,6 +701,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         {tab === "attendance" && (
           <AttendanceTab
             employees={scopedEmployees}
+            setEmployees={setEmployees}
             leaves={scopedLeaves}
             setLeaves={setLeaves}
             attendance={scopedAttendance}
@@ -1247,6 +1250,11 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
                 <span style={{ fontSize: 12 }}>{t("الاستحقاق السنوي", "Annual Entitlement")}: <b>{fmt(leaveBal.perYear)} {t("يوم", "days")}</b></span>
                 <span style={{ fontSize: 12 }}>{t("الرصيد المتراكم", "Accrued to Date")}: <b>{fmt(leaveBal.accrued)} {t("يوم", "days")}</b></span>
                 <span style={{ fontSize: 12 }}>{t("المستخدم (سنة الخدمة الحالية)", "Used (Current Service Year)")}: <b>{fmt(leaveBal.usedDays)} {t("يوم", "days")}</b></span>
+                {leaveBal.adjustment !== 0 && (
+                  <span style={{ fontSize: 12 }}>
+                    {t("تسوية يدوية", "Manual Adjustment")}: <b>{leaveBal.adjustment > 0 ? "+" : ""}{fmt(leaveBal.adjustment)} {t("يوم", "days")}</b>
+                  </span>
+                )}
                 <span style={{ fontSize: 12, color: leaveBal.balance < 0 ? COLORS.brick : COLORS.green }}>
                   {t("الرصيد المتبقي", "Remaining Balance")}: <b>{fmt(leaveBal.balance)} {t("يوم", "days")}</b>
                 </span>
@@ -1939,7 +1947,7 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
 }
 
 /* ============ الحضور والإجازات ============ */
-function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance, logActivity }) {
+function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance, setAttendance, logActivity }) {
   const { t } = useLang();
   const [leaveForm, setLeaveForm] = useState({ employeeId: "", type: "سنوية", from: "", to: "" });
   const [attForm, setAttForm] = useState({ employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
@@ -2024,6 +2032,12 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
       </div>
 
       <SectionTitle>{t("أرصدة الإجازة السنوية", "Annual Leave Balances")}</SectionTitle>
+      <div style={{ marginBottom: 10, fontSize: 11.5, color: "#a3927a" }}>
+        {t(
+          "عمود \"تسوية يدوية\" يسمح بإضافة أو خصم أيام يدويًا (مثلاً رصيد افتتاحي عند بدء النظام، أو تصحيح رصيد). أضف رقم موجب للزيادة أو سالب للخصم، ثم اضغط خارج الحقل ليُحفظ تلقائيًا.",
+          "The \"Manual Adjustment\" column lets you add or subtract days manually (e.g. an opening balance when starting the system, or a balance correction). Enter a positive number to add or negative to subtract; it saves automatically when you click away."
+        )}
+      </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
         {employees.length === 0 && <Empty text={t("لا يوجد موظفون", "No employees")} />}
         {employees.length > 0 && (
@@ -2035,6 +2049,7 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
                   t("الاستحقاق السنوي", "Annual Entitlement"),
                   t("الرصيد المتراكم", "Accrued"),
                   t("المستخدم", "Used"),
+                  t("تسوية يدوية", "Manual Adjustment"),
                   t("المتبقي", "Remaining"),
                 ].map((h, i) => (
                   <th key={i} style={{ padding: "8px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
@@ -2050,6 +2065,21 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
                     <td style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.perYear)} ${t("يوم", "days")}` : "—"}</td>
                     <td style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.accrued)} ${t("يوم", "days")}` : "—"}</td>
                     <td style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.usedDays)} ${t("يوم", "days")}` : "—"}</td>
+                    <td style={{ padding: "8px 12px" }}>
+                      <input
+                        type="number"
+                        step="0.5"
+                        defaultValue={e.leaveAdjustment || 0}
+                        style={{ ...inputStyle, width: 90, padding: "4px 8px" }}
+                        onBlur={(ev) => {
+                          const val = Number(ev.target.value || 0);
+                          if (val === Number(e.leaveAdjustment || 0)) return;
+                          setEmployees &&
+                            setEmployees((prev) => prev.map((emp) => (emp.id === e.id ? { ...emp, leaveAdjustment: val } : emp)));
+                          logActivity && logActivity("تسوية رصيد إجازة", "attendance", `${e.name}: ${val}`);
+                        }}
+                      />
+                    </td>
                     <td style={{ padding: "8px 12px", fontWeight: 700, color: bal && bal.balance < 0 ? COLORS.brick : COLORS.green }}>
                       {bal ? `${fmt(bal.balance)} ${t("يوم", "days")}` : "—"}
                     </td>
@@ -2062,8 +2092,8 @@ function AttendanceTab({ employees, leaves, setLeaves, attendance, setAttendance
       </div>
       <div style={{ marginBottom: 24, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
         {t(
-          "احتساب رصيد الإجازة: الاستحقاق السنوي ٢١ يوم (يزيد لـ ٣٠ يوم بعد ٥ سنوات خدمة). يتراكم الرصيد شهريًا حسب عدد الأشهر المكتملة منذ آخر ذكرى تعيين، ويُخصم منه أيام الإجازة \"السنوية\" المسجَّلة خلال سنة الخدمة الحالية فقط. هذا احتساب تقريبي وفق نظام العمل السعودي — يُنصح بمراجعته دوريًا.",
-          "Leave balance calculation: Annual entitlement is 21 days (30 after 5 years of service). Balance accrues monthly based on completed months since the last hire anniversary, minus 'Annual' leave days taken during the current service year only. This is an approximate calculation per Saudi labor law — review periodically."
+          "احتساب رصيد الإجازة: الاستحقاق السنوي ٢١ يوم (يزيد لـ ٣٠ يوم بعد ٥ سنوات خدمة). يتراكم الرصيد شهريًا حسب عدد الأشهر المكتملة منذ آخر ذكرى تعيين، ويُخصم منه أيام الإجازة \"السنوية\" المسجَّلة خلال سنة الخدمة الحالية فقط، ثم تُضاف/تُخصم أي تسوية يدوية أدخلتها. هذا احتساب تقريبي وفق نظام العمل السعودي — يُنصح بمراجعته دوريًا.",
+          "Leave balance calculation: Annual entitlement is 21 days (30 after 5 years of service). Balance accrues monthly based on completed months since the last hire anniversary, minus 'Annual' leave days taken during the current service year only, then any manual adjustment you entered is added or subtracted. This is an approximate calculation per Saudi labor law — review periodically."
         )}
       </div>
 
