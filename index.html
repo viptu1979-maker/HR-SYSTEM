@@ -251,12 +251,12 @@ function navForRole(role) {
   return [];
 }
 
-const SAUDI_HOLIDAYS_NOTE = "٢١ يوم إجازة سنوية (تزيد لـ ٣٠ يوم بعد ٥ سنوات خدمة) وفق نظام العمل السعودي";
+const SAUDI_HOLIDAYS_NOTE = "21 يوم إجازة سنوية (تزيد لـ 30 يوم بعد 5 سنوات خدمة) وفق نظام العمل السعودي";
 const SAUDI_HOLIDAYS_NOTE_EN = "21 days of annual leave (increasing to 30 days after 5 years of service) per Saudi labor law";
 
 function fmt(n) {
-  if (n === "" || n === null || n === undefined || isNaN(n)) return "٠";
-  return Number(n).toLocaleString("ar-SA", { maximumFractionDigits: 2 });
+  if (n === "" || n === null || n === undefined || isNaN(n)) return "0";
+  return Number(n).toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
 function yearsBetween(start, end) {
@@ -282,7 +282,7 @@ function daysOverlapInMonth(from, to, monthStr) {
 }
 
 /* رصيد الإجازة السنوية: تراكم شهري حسب مدة الخدمة الفعلية منذ آخر تاريخ ذكرى تعيين
-   ٢١ يوم/سنة (تزيد لـ ٣٠ بعد ٥ سنوات خدمة) وفق نظام العمل السعودي، ناقص المستخدم فعليًا من إجازات "سنوية" خلال سنة الخدمة الحالية */
+   21 يوم/سنة (تزيد لـ 30 بعد 5 سنوات خدمة) وفق نظام العمل السعودي، ناقص المستخدم فعليًا من إجازات "سنوية" خلال سنة الخدمة الحالية */
 function leaveBalanceInfo(emp, leaves) {
   if (!emp || !emp.joinDate) return null;
   const join = new Date(emp.joinDate + "T00:00:00");
@@ -1101,7 +1101,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           {t("قائمة الموظفين", "Employee List")}
         </div>
         <div style={{ display: "none" }} className="print-only-meta">
-          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
           <span>{list.length} {t("موظف", "employees")}</span>
         </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
@@ -1516,8 +1516,8 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
       <Header title={t("الإقامات والعقود", "Iqamas & Contracts")} subtitle={t("متابعة تواريخ انتهاء الإقامات وعقود العمل لتفادي الغرامات وتجديد العقود في وقتها", "Track iqama and contract expiry dates to avoid fines and renew on time")} />
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
-        <ReceiptCard label={t("إقامات تنتهي خلال ٣٠ يوم", "Iqamas expiring within 30 days")} value={fmt(iqamaAlerts)} tone={iqamaAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("عقود تنتهي خلال ٣٠ يوم", "Contracts expiring within 30 days")} value={fmt(contractAlerts)} tone={contractAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("إقامات تنتهي خلال 30 يوم", "Iqamas expiring within 30 days")} value={fmt(iqamaAlerts)} tone={iqamaAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("عقود تنتهي خلال 30 يوم", "Contracts expiring within 30 days")} value={fmt(contractAlerts)} tone={contractAlerts > 0 ? COLORS.brick : COLORS.green} />
         <ReceiptCard label={t("إجمالي الموظفين النشطين", "Total Active Employees")} value={fmt(rows.length)} />
       </div>
 
@@ -1526,8 +1526,8 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
             <option value="">{t("عرض الكل", "Show All")}</option>
-            <option value="iqama">{t("إقامات مقتربة من الانتهاء (٩٠ يوم)", "Iqamas nearing expiry (90 days)")}</option>
-            <option value="contract">{t("عقود مقتربة من الانتهاء (٩٠ يوم)", "Contracts nearing expiry (90 days)")}</option>
+            <option value="iqama">{t("إقامات مقتربة من الانتهاء (90 يوم)", "Iqamas nearing expiry (90 days)")}</option>
+            <option value="contract">{t("عقود مقتربة من الانتهاء (90 يوم)", "Contracts nearing expiry (90 days)")}</option>
           </select>
           <Btn onClick={() => window.print()}>{t("🖶 طباعة الجدول", "🖶 Print Table")}</Btn>
         </div>
@@ -1539,7 +1539,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
           {t("الإقامات والعقود", "Iqamas & Contracts")}
         </div>
         <div style={{ display: "none" }} className="print-only-meta">
-          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
           <span>{filtered.length} {t("سجل", "records")}</span>
         </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
@@ -1737,23 +1737,23 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
       />
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
-        <ReceiptCard label={t("سجلات تجارية تنتهي خلال ٣٠ يوم", "Commercial registers expiring in 30 days")} value={fmt(crAlerts)} tone={crAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("رخص دفاع مدني تنتهي خلال ٣٠ يوم", "Civil defense licenses expiring in 30 days")} value={fmt(civilDefenseAlerts)} tone={civilDefenseAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("رخص بلدية تنتهي خلال ٣٠ يوم", "Municipality licenses expiring in 30 days")} value={fmt(municipalityAlerts)} tone={municipalityAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("شهادات صحية تنتهي خلال ٣٠ يوم", "Health certificates expiring in 30 days")} value={fmt(healthAlerts)} tone={healthAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("تأمين طبي ينتهي خلال ٣٠ يوم", "Medical insurance expiring in 30 days")} value={fmt(insuranceAlerts)} tone={insuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("استمارات سيارات تنتهي خلال ٣٠ يوم", "Vehicle registrations expiring in 30 days")} value={fmt(istimaraAlerts)} tone={istimaraAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("فحص دوري ينتهي خلال ٣٠ يوم", "Periodic inspections expiring in 30 days")} value={fmt(periodicInspectionAlerts)} tone={periodicInspectionAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("تأمين سيارات ينتهي خلال ٣٠ يوم", "Vehicle insurance expiring in 30 days")} value={fmt(vehicleInsuranceAlerts)} tone={vehicleInsuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("سجلات تجارية تنتهي خلال 30 يوم", "Commercial registers expiring in 30 days")} value={fmt(crAlerts)} tone={crAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("رخص دفاع مدني تنتهي خلال 30 يوم", "Civil defense licenses expiring in 30 days")} value={fmt(civilDefenseAlerts)} tone={civilDefenseAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("رخص بلدية تنتهي خلال 30 يوم", "Municipality licenses expiring in 30 days")} value={fmt(municipalityAlerts)} tone={municipalityAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("شهادات صحية تنتهي خلال 30 يوم", "Health certificates expiring in 30 days")} value={fmt(healthAlerts)} tone={healthAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("تأمين طبي ينتهي خلال 30 يوم", "Medical insurance expiring in 30 days")} value={fmt(insuranceAlerts)} tone={insuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("استمارات سيارات تنتهي خلال 30 يوم", "Vehicle registrations expiring in 30 days")} value={fmt(istimaraAlerts)} tone={istimaraAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("فحص دوري ينتهي خلال 30 يوم", "Periodic inspections expiring in 30 days")} value={fmt(periodicInspectionAlerts)} tone={periodicInspectionAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("تأمين سيارات ينتهي خلال 30 يوم", "Vehicle insurance expiring in 30 days")} value={fmt(vehicleInsuranceAlerts)} tone={vehicleInsuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <SectionTitle>{t("تراخيص الفروع", "Branch Licenses")}</SectionTitle>
         <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
           <option value="">{t("عرض الكل", "Show All")}</option>
-          <option value="cr">{t("سجل تجاري مقترب من الانتهاء (٩٠ يوم)", "Commercial register nearing expiry (90 days)")}</option>
-          <option value="civilDefense">{t("دفاع مدني مقترب من الانتهاء (٩٠ يوم)", "Civil defense nearing expiry (90 days)")}</option>
-          <option value="municipality">{t("رخصة بلدية مقتربة من الانتهاء (٩٠ يوم)", "Municipality license nearing expiry (90 days)")}</option>
+          <option value="cr">{t("سجل تجاري مقترب من الانتهاء (90 يوم)", "Commercial register nearing expiry (90 days)")}</option>
+          <option value="civilDefense">{t("دفاع مدني مقترب من الانتهاء (90 يوم)", "Civil defense nearing expiry (90 days)")}</option>
+          <option value="municipality">{t("رخصة بلدية مقتربة من الانتهاء (90 يوم)", "Municipality license nearing expiry (90 days)")}</option>
         </select>
       </div>
 
@@ -2298,7 +2298,7 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
       </div>
       <div style={{ marginBottom: 24, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
         {t(
-          "احتساب رصيد الإجازة: الاستحقاق السنوي ٢١ يوم (يزيد لـ ٣٠ يوم بعد ٥ سنوات خدمة). يتراكم الرصيد شهريًا حسب عدد الأشهر المكتملة منذ آخر ذكرى تعيين، ويُخصم منه أيام الإجازة \"السنوية\" المسجَّلة خلال سنة الخدمة الحالية فقط، ثم تُضاف/تُخصم أي تسوية يدوية أدخلتها. هذا احتساب تقريبي وفق نظام العمل السعودي — يُنصح بمراجعته دوريًا.",
+          "احتساب رصيد الإجازة: الاستحقاق السنوي 21 يوم (يزيد لـ 30 يوم بعد 5 سنوات خدمة). يتراكم الرصيد شهريًا حسب عدد الأشهر المكتملة منذ آخر ذكرى تعيين، ويُخصم منه أيام الإجازة \"السنوية\" المسجَّلة خلال سنة الخدمة الحالية فقط، ثم تُضاف/تُخصم أي تسوية يدوية أدخلتها. هذا احتساب تقريبي وفق نظام العمل السعودي — يُنصح بمراجعته دوريًا.",
           "Leave balance calculation: Annual entitlement is 21 days (30 after 5 years of service). Balance accrues monthly based on completed months since the last hire anniversary, minus 'Annual' leave days taken during the current service year only, then any manual adjustment you entered is added or subtracted. This is an approximate calculation per Saudi labor law — review periodically."
         )}
       </div>
@@ -2397,7 +2397,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
 
       /* احتساب الغياب والتأخير والإجازة بدون راتب لهذا الموظف خلال الشهر المختار */
       const dailyRate = salary / 30;
-      const perMinuteRate = dailyRate / (8 * 60); /* على أساس ٨ ساعات عمل فعلية يوميًا */
+      const perMinuteRate = dailyRate / (8 * 60); /* على أساس 8 ساعات عمل فعلية يوميًا */
 
       const monthAttendance = attendance.filter((a) => a.employeeId === e.id && (a.date || "").startsWith(month));
       const absentDays = monthAttendance.filter((a) => a.status === "غائب").length;
@@ -2414,7 +2414,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const unpaidLeaveDeduction = unpaidLeaveDays * dailyRate;
       const attendanceDeduction = absentDeduction + lateDeduction + unpaidLeaveDeduction;
 
-      /* الوقت الإضافي: ساعات الإضافي المسجّلة هذا الشهر × سعر الساعة × ١٫٥ (وفق نظام العمل السعودي) */
+      /* الوقت الإضافي: ساعات الإضافي المسجّلة هذا الشهر × سعر الساعة × 1٫5 (وفق نظام العمل السعودي) */
       const hourlyRate = dailyRate / 8;
       const overtimeHours = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0), 0);
       const overtimePay = overtimeHours * hourlyRate * 1.5;
@@ -2564,7 +2564,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
           {t(`كشف الرواتب — ${month}`, `Payroll Sheet — ${month}`)}
         </div>
         <div style={{ display: "none" }} className="print-only-meta">
-          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
           <span>{branches.find((b) => b.id === branchFilter)?.name || t("كل الفروع", "All Branches")} · {rows.length} {t("موظف", "employees")}</span>
         </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
@@ -2794,7 +2794,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                 </div>
               </div>
               <div style={{ marginTop: 20, fontSize: 10, color: "#a3927a", textAlign: "center" }}>
-                {t(`تاريخ الإصدار: ${new Date().toLocaleDateString("ar-SA")}`, `Issue Date: ${new Date().toLocaleDateString("en-US")}`)}
+                {t(`تاريخ الإصدار: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Issue Date: ${new Date().toLocaleDateString("en-US")}`)}
               </div>
             </div>
           </div>
@@ -2803,7 +2803,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }} className="no-print">
         {t(
-          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ ٣٠. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ ٤٨٠ دقيقة، على أساس ٨ ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. احتساب الوقت الإضافي: سعر الساعة = راتب اليوم ÷ ٨، وقيمة الإضافي = ساعات الإضافي المسجّلة × سعر الساعة × ١٫٥ (وفق نظام العمل السعودي). البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه. الصافي للموظف = الراتب − حصة GOSI − خصومات الحضور − السلف − الخصومات الأخرى + الحوافز + قيمة الوقت الإضافي.',
+          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ 30. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ 480 دقيقة، على أساس 8 ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. احتساب الوقت الإضافي: سعر الساعة = راتب اليوم ÷ 8، وقيمة الإضافي = ساعات الإضافي المسجّلة × سعر الساعة × 1٫5 (وفق نظام العمل السعودي). البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه. الصافي للموظف = الراتب − حصة GOSI − خصومات الحضور − السلف − الخصومات الأخرى + الحوافز + قيمة الوقت الإضافي.',
           'Deduction calculation: Daily rate = Basic salary ÷ 30. Absence deduction = absent days × daily rate. Lateness deduction = late minutes × (daily rate ÷ 480 minutes, based on an 8-hour workday). Unpaid leave deduction = leave days × daily rate. Overtime calculation: Hourly rate = daily rate ÷ 8, and overtime pay = registered overtime hours × hourly rate × 1.5 (per Saudi labor law). Figures are based on records from the "Attendance & Leave" tab for the month selected above. Net for employee = Salary − GOSI share − attendance deductions − advances − other deductions + incentives + overtime pay.'
         )}
       </div>
@@ -2832,9 +2832,9 @@ function EOSTab({ employees }) {
     let note = "";
     if (reason === "استقالة") {
       if (years < 2) { ratio = 0; note = t("لا يستحق مكافأة (أقل من سنتين خدمة)", "Not entitled to a bonus (less than 2 years of service)"); }
-      else if (years < 5) { ratio = 1 / 3; note = t("يستحق ثلث المكافأة (خدمة من ٢ إلى ٥ سنوات)", "Entitled to one-third of the bonus (2 to 5 years of service)"); }
-      else if (years < 10) { ratio = 2 / 3; note = t("يستحق ثلثي المكافأة (خدمة من ٥ إلى ١٠ سنوات)", "Entitled to two-thirds of the bonus (5 to 10 years of service)"); }
-      else { ratio = 1; note = t("يستحق المكافأة كاملة (خدمة ١٠ سنوات فأكثر)", "Entitled to the full bonus (10+ years of service)"); }
+      else if (years < 5) { ratio = 1 / 3; note = t("يستحق ثلث المكافأة (خدمة من 2 إلى 5 سنوات)", "Entitled to one-third of the bonus (2 to 5 years of service)"); }
+      else if (years < 10) { ratio = 2 / 3; note = t("يستحق ثلثي المكافأة (خدمة من 5 إلى 10 سنوات)", "Entitled to two-thirds of the bonus (5 to 10 years of service)"); }
+      else { ratio = 1; note = t("يستحق المكافأة كاملة (خدمة 10 سنوات فأكثر)", "Entitled to the full bonus (10+ years of service)"); }
     } else {
       note = reason === "فصل من صاحب العمل" ? t("يستحق المكافأة كاملة (إنهاء من صاحب العمل)", "Entitled to the full bonus (terminated by employer)") : t("يستحق المكافأة كاملة", "Entitled to the full bonus");
     }
@@ -2845,7 +2845,7 @@ function EOSTab({ employees }) {
 
   return (
     <div>
-      <Header title={t("حاسبة مكافأة نهاية الخدمة", "End of Service Benefit Calculator")} subtitle={t("وفق نظام العمل السعودي (المادتان ٨٤–٨٧) — نصف شهر عن كل سنة من أول ٥ سنوات، وشهر كامل عمّا زاد", "Per Saudi Labor Law (Articles 84–87) — half a month per year for the first 5 years, and a full month for each year after")} />
+      <Header title={t("حاسبة مكافأة نهاية الخدمة", "End of Service Benefit Calculator")} subtitle={t("وفق نظام العمل السعودي (المادتان 84–87) — نصف شهر عن كل سنة من أول 5 سنوات، وشهر كامل عمّا زاد", "Per Saudi Labor Law (Articles 84–87) — half a month per year for the first 5 years, and a full month for each year after")} />
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 20 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
@@ -2888,7 +2888,7 @@ function EOSTab({ employees }) {
           {t("مستند تسوية نهاية الخدمة", "End of Service Settlement Document")}
         </div>
         <div style={{ display: "none" }} className="print-only-meta">
-          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
           <span>{emp ? (emp.name || "") : ""}</span>
         </div>
         {emp && (
@@ -3844,7 +3844,7 @@ function ReportsTab({ activityLog, users }) {
   const fmtDT = (iso) => {
     const d = new Date(iso);
     if (isNaN(d)) return iso;
-    return d.toLocaleString(t("ar-SA", "en-US"), { dateStyle: "medium", timeStyle: "short" });
+    return d.toLocaleString(t("ar-SA-u-nu-latn", "en-US"), { dateStyle: "medium", timeStyle: "short" });
   };
 
   const rows = activityLog
@@ -3862,7 +3862,7 @@ function ReportsTab({ activityLog, users }) {
 
   return (
     <div>
-      <Header title={t("تقرير الدخول والعمليات", "Login & Activity Report")} subtitle={t("سجلّ بمن دخل النظام ومتى وماذا فعل، مبني على آخر ٥٠٠ عملية", "A log of who accessed the system, when, and what they did — based on the last 500 actions")} />
+      <Header title={t("تقرير الدخول والعمليات", "Login & Activity Report")} subtitle={t("سجلّ بمن دخل النظام ومتى وماذا فعل، مبني على آخر 500 عملية", "A log of who accessed the system, when, and what they did — based on the last 500 actions")} />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }} className="no-print">
         <Field label={t("المستخدم", "User")}>
@@ -3893,7 +3893,7 @@ function ReportsTab({ activityLog, users }) {
           {t("تقرير الدخول والعمليات", "Login & Activity Report")}
         </div>
         <div style={{ display: "none" }} className="print-only-meta">
-          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
           <span>{rows.length} {t("عملية", "actions")}</span>
         </div>
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
@@ -4023,7 +4023,7 @@ function Root() {
       targetLabel: targetLabel || "",
       timestamp: new Date().toISOString(),
     };
-    const next = [...activityLog, entry].slice(-500); /* الاحتفاظ بآخر ٥٠٠ عملية فقط لتفادي تضخّم القاعدة */
+    const next = [...activityLog, entry].slice(-500); /* الاحتفاظ بآخر 500 عملية فقط لتفادي تضخّم القاعدة */
     setActivityLog(next);
     lastSyncedLogRef.current = JSON.stringify(next);
     LOG_DOC.set({ entries: next }).catch(() => {});
