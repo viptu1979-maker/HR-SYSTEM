@@ -2,8 +2,19 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>نظام الموارد البشرية — مؤسسة ديرة فارس للتجارة</title>
+
+<!-- PWA: يسمح بتثبيت التطبيق على الجوال (أندرويد وآيفون) -->
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#3B2A1D" />
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="الموارد البشرية" />
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
@@ -387,7 +398,7 @@ const inputStyle = {
   fontFamily: "inherit",
 };
 
-function Btn({ children, onClick, tone = "primary", small, type = "button" }) {
+function Btn({ children, onClick, tone = "primary", small, type = "button", disabled = false }) {
   const base =
     tone === "primary"
       ? { background: COLORS.espresso, color: "#fff" }
@@ -398,13 +409,15 @@ function Btn({ children, onClick, tone = "primary", small, type = "button" }) {
     <button
       type={type}
       onClick={onClick}
+      disabled={disabled}
       style={{
         ...base,
         borderRadius: 8,
         padding: small ? "6px 10px" : "9px 16px",
         fontSize: 13,
         fontWeight: 700,
-        cursor: "pointer",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       {children}
@@ -572,6 +585,51 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       setLeaveRequests((prev) => [newReq, ...prev]);
       logActivity && logActivity("تقديم طلب إجازة", "leaveRequests", myEmployee?.name || "");
     };
+
+    const todayISO = new Date().toISOString().slice(0, 10);
+    const nowTimeStr = () => {
+      const d = new Date();
+      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    };
+    const minutesOf = (hhmm) => {
+      const [h, m] = (hhmm || "00:00").split(":").map(Number);
+      return h * 60 + m;
+    };
+
+    const clockIn = () => {
+      if (!myEmployee) return;
+      const already = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
+      if (already) return;
+      const timeStr = nowTimeStr();
+      const shiftStart = myEmployee.workShift?.start || "08:00";
+      const diff = minutesOf(timeStr) - minutesOf(shiftStart);
+      const lateMinutes = diff > 0 ? diff : 0;
+      const rec = {
+        id: uid(),
+        employeeId: myEmployee.id,
+        date: todayISO,
+        status: lateMinutes > 0 ? "متأخر" : "حاضر",
+        lateMinutes,
+        overtimeHours: 0,
+        checkInTime: timeStr,
+        checkOutTime: "",
+      };
+      setAttendance((prev) => [...prev, rec]);
+      logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+    };
+
+    const clockOut = () => {
+      if (!myEmployee) return;
+      const rec = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
+      if (!rec || rec.checkOutTime) return;
+      const timeStr = nowTimeStr();
+      const shiftEnd = myEmployee.workShift?.end || "17:00";
+      const diff = minutesOf(timeStr) - minutesOf(shiftEnd);
+      const overtimeHours = diff > 0 ? Math.round((diff / 60) * 2) / 2 : 0;
+      setAttendance((prev) => prev.map((a) => (a.id === rec.id ? { ...a, checkOutTime: timeStr, overtimeHours } : a)));
+      logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+    };
+
     return (
       <EmployeeSelfView
         user={currentUser}
@@ -580,6 +638,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         leaveRequests={leaveRequests.filter((r) => r.employeeId === myEmployee?.id)}
         onSubmitLeaveRequest={submitLeaveRequest}
         attendance={attendance}
+        onClockIn={clockIn}
+        onClockOut={clockOut}
         branchName={branchName}
         onLogout={onLogout}
         setUsers={setUsers}
@@ -884,6 +944,7 @@ const EMPTY_EMP = {
   contractEnd: "",
   careerHistory: [],
   weeklyOffDay: "الجمعة",
+  workShift: { start: "08:00", end: "17:00" },
 };
 
 const WEEK_DAYS = ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"];
@@ -990,6 +1051,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, weeklyOffDay: day } : e)));
     setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, weeklyOffDay: day } : prev));
     logActivity && logActivity("تحديد الإجازة الأسبوعية", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${day}`);
+  };
+
+  const updateWorkShift = (empId, shift) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, workShift: shift } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, workShift: shift } : prev));
+    logActivity && logActivity("تحديد وقت الدوام", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${shift.start}-${shift.end}`);
   };
 
   const removeCareerEntry = (empId, entryId) => {
@@ -1165,6 +1232,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           onRemoveCareerEntry={removeCareerEntry}
           onUpdateGovFees={updateGovFees}
           onUpdateWeeklyOff={updateWeeklyOff}
+          onUpdateWorkShift={updateWorkShift}
           canEditWeeklyOff={canEditWeeklyOff}
           onClose={() => setProfileEmp(null)}
         />
@@ -1174,7 +1242,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onUpdateWeeklyOff, canEditWeeklyOff = true, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onUpdateWeeklyOff, onUpdateWorkShift, canEditWeeklyOff = true, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const feesRefs = {
@@ -1320,6 +1388,30 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
               ) : (
                 <span style={{ fontWeight: 700, color: COLORS.espresso }}>
                   {t(emp.weeklyOffDay || "الجمعة", WEEK_DAYS_EN[emp.weeklyOffDay] || "Friday")}
+                </span>
+              )}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
+              <span style={{ color: "#a3927a" }}>{t("وقت الدوام", "Work Shift")}</span>
+              {canEditWeeklyOff ? (
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <input
+                    type="time"
+                    style={{ ...inputStyle, padding: "4px 8px", fontSize: 12.5, width: 100 }}
+                    value={emp.workShift?.start || "08:00"}
+                    onChange={(e) => onUpdateWorkShift && onUpdateWorkShift(emp.id, { ...(emp.workShift || {}), start: e.target.value })}
+                  />
+                  <span style={{ color: "#a3927a" }}>—</span>
+                  <input
+                    type="time"
+                    style={{ ...inputStyle, padding: "4px 8px", fontSize: 12.5, width: 100 }}
+                    value={emp.workShift?.end || "17:00"}
+                    onChange={(e) => onUpdateWorkShift && onUpdateWorkShift(emp.id, { ...(emp.workShift || {}), end: e.target.value })}
+                  />
+                </div>
+              ) : (
+                <span style={{ fontWeight: 700, color: COLORS.espresso, fontFamily: "Consolas, monospace" }}>
+                  {emp.workShift?.start || "08:00"} — {emp.workShift?.end || "17:00"}
                 </span>
               )}
             </div>
@@ -3442,7 +3534,7 @@ function LeaveRequestForm({ onSubmit, t }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, branchName, onLogout, setUsers, logActivity }) {
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, branchName, onLogout, setUsers, logActivity }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   if (!employee) {
@@ -3486,6 +3578,8 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
   const contractStatus = expiryStatus(employee.contractEnd, t);
   const myLeaves = leaves.filter((l) => l.employeeId === employee.id);
   const myAttendance = attendance.filter((a) => a.employeeId === employee.id).slice().reverse();
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayAtt = attendance.find((a) => a.employeeId === employee.id && a.date === todayISO);
   const myLeaveBal = leaveBalanceInfo(employee, leaves);
 
   return (
@@ -3535,6 +3629,47 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
             label={t("الإجازة الأسبوعية", "Weekly Off Day")}
             value={t(employee.weeklyOffDay || "الجمعة", WEEK_DAYS_EN[employee.weeklyOffDay] || "Friday")}
           />
+        </div>
+
+        <SectionTitle>{t("تسجيل الحضور والانصراف", "Clock In / Clock Out")}</SectionTitle>
+        <div
+          style={{
+            background: "#fff",
+            border: `1px solid ${COLORS.line}`,
+            borderRadius: 10,
+            padding: 16,
+            marginBottom: 22,
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 16,
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("وقت الدوام", "Work Shift")}</div>
+              <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>
+                {employee.workShift?.start || "08:00"} — {employee.workShift?.end || "17:00"}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("حضور اليوم", "Today's Check-in")}</div>
+              <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkInTime || "—"}</div>
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("انصراف اليوم", "Today's Check-out")}</div>
+              <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkOutTime || "—"}</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 10 }}>
+            <Btn onClick={onClockIn} disabled={!!todayAtt}>
+              {t("🟢 تسجيل حضور", "🟢 Clock In")}
+            </Btn>
+            <Btn tone="secondary" onClick={onClockOut} disabled={!todayAtt || !!todayAtt?.checkOutTime}>
+              {t("🔴 تسجيل انصراف", "🔴 Clock Out")}
+            </Btn>
+          </div>
         </div>
 
         <SectionTitle>{t("رصيد الإجازة السنوية", "Annual Leave Balance")}</SectionTitle>
@@ -3658,7 +3793,14 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
               }}
             >
               <div>{a.date}</div>
-              <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>{trLabel(t, ATTENDANCE_STATUS_LABELS_EN, a.status)}</Stamp>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                {(a.checkInTime || a.checkOutTime) && (
+                  <span style={{ fontFamily: "Consolas, monospace", color: "#8a7a63" }}>
+                    {a.checkInTime || "—"} → {a.checkOutTime || "—"}
+                  </span>
+                )}
+                <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>{trLabel(t, ATTENDANCE_STATUS_LABELS_EN, a.status)}</Stamp>
+              </div>
             </div>
           ))}
         </div>
@@ -4088,6 +4230,15 @@ root.render(
     <Root />
   </LangProvider>
 );
+</script>
+
+<!-- تسجيل Service Worker عشان يشتغل التطبيق كـ PWA قابل للتثبيت على الجوال -->
+<script>
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("sw.js").catch(() => {});
+    });
+  }
 </script>
 </body>
 </html>
