@@ -197,6 +197,34 @@ const COLORS = {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+/* حساب المسافة (بالمتر) بين نقطتين جغرافيتين — معادلة Haversine */
+function distanceMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+/* الحصول على الموقع الحالي كـ Promise */
+function getCurrentPosition(options) {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("NOT_SUPPORTED"));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve(pos),
+      (err) => reject(err),
+      options || { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  });
+}
+
 const ENTITIES_SEED = [
   { id: "e1", name: "مؤسسة اختصاص القهوة (Ikhtisas Coffee)" },
   { id: "e2", name: "شركة مستقبل الاقتصاد للتجارة (Ratio Amlaj)" },
@@ -204,10 +232,10 @@ const ENTITIES_SEED = [
 ];
 
 const BRANCHES_SEED = [
-  { id: "b1", entityId: "e1", name: "فرع الرايس", city: "ينبع البحر" },
-  { id: "b2", entityId: "e1", name: "فرع النعيم", city: "ينبع البحر" },
-  { id: "b3", entityId: "e1", name: "كشك المروج", city: "ينبع البحر" },
-  { id: "b4", entityId: "e2", name: "فرع أملج", city: "أملج" },
+  { id: "b1", entityId: "e1", name: "فرع الرايس", city: "ينبع البحر", lat: null, lng: null, radius: 150 },
+  { id: "b2", entityId: "e1", name: "فرع النعيم", city: "ينبع البحر", lat: null, lng: null, radius: 150 },
+  { id: "b3", entityId: "e1", name: "كشك المروج", city: "ينبع البحر", lat: null, lng: null, radius: 150 },
+  { id: "b4", entityId: "e2", name: "فرع أملج", city: "أملج", lat: null, lng: null, radius: 150 },
 ];
 
 const NAV = [
@@ -596,10 +624,52 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return h * 60 + m;
     };
 
-    const clockIn = () => {
+    const [geoBusy, setGeoBusy] = useState(false);
+    const [geoError, setGeoError] = useState("");
+
+    const verifyAtBranch = async (branchId) => {
+      const branch = branches.find((b) => b.id === branchId);
+      if (!branch || branch.lat == null || branch.lng == null) {
+        return { ok: false, message: t("لم يتم تحديد موقع الفرع بعد — تواصل مع الإدارة لضبط موقع الفرع من تبويب \"الكيانات والفروع\".", "The branch location hasn't been set yet — contact management to set it from the \"Entities & Branches\" tab.") };
+      }
+      let pos;
+      try {
+        pos = await getCurrentPosition();
+      } catch (err) {
+        if (err && err.code === 1) {
+          return { ok: false, message: t("تم رفض إذن الوصول للموقع. فعّل خدمة الموقع للمتصفح من إعدادات جهازك وحاول مرة أخرى.", "Location permission was denied. Enable location access for the browser in your device settings and try again.") };
+        }
+        if (err && err.message === "NOT_SUPPORTED") {
+          return { ok: false, message: t("جهازك أو متصفحك لا يدعم تحديد الموقع.", "Your device or browser doesn't support geolocation.") };
+        }
+        return { ok: false, message: t("تعذّر تحديد موقعك. تأكد من تفعيل GPS ووجود اتصال، ثم حاول مرة أخرى.", "Couldn't get your location. Make sure GPS is enabled and you have a connection, then try again.") };
+      }
+      const dist = distanceMeters(pos.coords.latitude, pos.coords.longitude, branch.lat, branch.lng);
+      const radius = branch.radius || 150;
+      if (dist > radius) {
+        return {
+          ok: false,
+          message: t(
+            `أنت على بُعد ${Math.round(dist)} متر تقريبًا من الفرع — يجب أن تكون داخل نطاق ${radius} متر لتسجيل الحضور/الانصراف.`,
+            `You're about ${Math.round(dist)}m away from the branch — you must be within ${radius}m to clock in/out.`
+          ),
+        };
+      }
+      return { ok: true, lat: pos.coords.latitude, lng: pos.coords.longitude, distance: Math.round(dist), accuracy: pos.coords.accuracy };
+    };
+
+    const clockIn = async () => {
       if (!myEmployee) return;
       const already = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
       if (already) return;
+      setGeoError("");
+      setGeoBusy(true);
+      const check = await verifyAtBranch(myEmployee.branchId);
+      setGeoBusy(false);
+      if (!check.ok) {
+        setGeoError(check.message);
+        return;
+      }
       const timeStr = nowTimeStr();
       const shiftStart = myEmployee.workShift?.start || "08:00";
       const diff = minutesOf(timeStr) - minutesOf(shiftStart);
@@ -613,20 +683,35 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         overtimeHours: 0,
         checkInTime: timeStr,
         checkOutTime: "",
+        checkInLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
       };
       setAttendance((prev) => [...prev, rec]);
       logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
     };
 
-    const clockOut = () => {
+    const clockOut = async () => {
       if (!myEmployee) return;
       const rec = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
       if (!rec || rec.checkOutTime) return;
+      setGeoError("");
+      setGeoBusy(true);
+      const check = await verifyAtBranch(myEmployee.branchId);
+      setGeoBusy(false);
+      if (!check.ok) {
+        setGeoError(check.message);
+        return;
+      }
       const timeStr = nowTimeStr();
       const shiftEnd = myEmployee.workShift?.end || "17:00";
       const diff = minutesOf(timeStr) - minutesOf(shiftEnd);
       const overtimeHours = diff > 0 ? Math.round((diff / 60) * 2) / 2 : 0;
-      setAttendance((prev) => prev.map((a) => (a.id === rec.id ? { ...a, checkOutTime: timeStr, overtimeHours } : a)));
+      setAttendance((prev) =>
+        prev.map((a) =>
+          a.id === rec.id
+            ? { ...a, checkOutTime: timeStr, overtimeHours, checkOutLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy } }
+            : a
+        )
+      );
       logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
     };
 
@@ -640,6 +725,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         attendance={attendance}
         onClockIn={clockIn}
         onClockOut={clockOut}
+        geoBusy={geoBusy}
+        geoError={geoError}
         branchName={branchName}
         onLogout={onLogout}
         setUsers={setUsers}
@@ -805,6 +892,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             setBranches={setBranches}
             employees={scopedEmployees}
             canManageEntities={isAdmin || isManager}
+            canManageGeofence={isAdmin}
           />
         )}
         {tab === "attendance" && (
@@ -2146,10 +2234,12 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
 }
 
 /* ============ الكيانات والفروع ============ */
-function BranchesTab({ entities, setEntities, branches, setBranches, employees, canManageEntities = true }) {
+function BranchesTab({ entities, setEntities, branches, setBranches, employees, canManageEntities = true, canManageGeofence = false }) {
   const { t } = useLang();
   const [entityName, setEntityName] = useState("");
   const [branchForm, setBranchForm] = useState({ entityId: entities.length === 1 ? entities[0].id : "", name: "", city: "" });
+  const [locatingId, setLocatingId] = useState(null);
+  const [locError, setLocError] = useState("");
 
   const addEntity = () => {
     if (!entityName.trim()) return;
@@ -2162,10 +2252,35 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
   };
   const addBranch = () => {
     if (!branchForm.name.trim() || !branchForm.entityId) return;
-    setBranches((prev) => [...prev, { id: uid(), ...branchForm }]);
+    setBranches((prev) => [...prev, { id: uid(), radius: 150, lat: null, lng: null, ...branchForm }]);
     setBranchForm({ entityId: "", name: "", city: "" });
   };
   const removeBranch = (id) => setBranches((prev) => prev.filter((b) => b.id !== id));
+
+  const captureLocation = async (branchId) => {
+    setLocError("");
+    setLocatingId(branchId);
+    try {
+      const pos = await getCurrentPosition();
+      const { latitude, longitude } = pos.coords;
+      setBranches((prev) => prev.map((b) => (b.id === branchId ? { ...b, lat: latitude, lng: longitude } : b)));
+    } catch (err) {
+      if (err && err.code === 1) setLocError(t("تم رفض إذن الوصول للموقع — فعّله من إعدادات المتصفح.", "Location permission denied — enable it in browser settings."));
+      else if (err && err.message === "NOT_SUPPORTED") setLocError(t("المتصفح لا يدعم خدمة تحديد الموقع.", "This browser doesn't support geolocation."));
+      else setLocError(t("تعذّر تحديد الموقع — تأكد من تفعيل GPS وحاول مرة أخرى.", "Couldn't get location — make sure GPS is enabled and try again."));
+    } finally {
+      setLocatingId(null);
+    }
+  };
+
+  const updateRadius = (branchId, val) => {
+    const radius = Math.max(20, Number(val) || 150);
+    setBranches((prev) => prev.map((b) => (b.id === branchId ? { ...b, radius } : b)));
+  };
+
+  const clearLocation = (branchId) => {
+    setBranches((prev) => prev.map((b) => (b.id === branchId ? { ...b, lat: null, lng: null } : b)));
+  };
 
   return (
     <div>
@@ -2224,16 +2339,62 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
           </div>
         </div>
 
+        {canManageGeofence && locError && (
+          <div style={{ fontSize: 12, color: COLORS.brick, marginBottom: 10, padding: "8px 10px", background: "#FBEAEA", borderRadius: 8 }}>
+            {locError}
+          </div>
+        )}
+
+        {canManageGeofence && (
+          <div style={{ fontSize: 11.5, color: "#8a7a63", marginBottom: 10, padding: "8px 10px", background: "#FAF6EC", borderRadius: 8 }}>
+            {t(
+              "📍 لتفعيل تسجيل الحضور بالموقع الجغرافي: قف داخل الفرع فعليًا ثم اضغط \"التقط الموقع الحالي\" — هيتم استخدامه كمركز نطاق الفرع. (هذا الإعداد خاص بالأدمن فقط)",
+              "📍 To enable location-based attendance: stand physically inside the branch, then tap \"Capture current location\" — it will be used as the branch's geofence center. (Admin-only setting)"
+            )}
+          </div>
+        )}
+
         {branches.map((b) => (
           <div
             key={b.id}
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 4px", borderTop: `1px dashed ${COLORS.line}` }}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 4px", borderTop: `1px dashed ${COLORS.line}`, flexWrap: "wrap", gap: 8 }}
           >
             <div>
               <div style={{ fontSize: 13, fontWeight: 700 }}>{b.name}</div>
               <div style={{ fontSize: 11, color: "#8a7a63" }}>{entities.find((en) => en.id === b.entityId)?.name || "—"} · {b.city}</div>
+              <div style={{ fontSize: 11, marginTop: 4 }}>
+                {b.lat != null && b.lng != null ? (
+                  <span style={{ color: COLORS.green, fontWeight: 700 }}>
+                    ✅ {t("الموقع محدد", "Location set")} ({b.lat.toFixed(5)}, {b.lng.toFixed(5)})
+                  </span>
+                ) : (
+                  <span style={{ color: COLORS.brick, fontWeight: 700 }}>⚠️ {t("الموقع غير محدد — الحضور بالموقع معطّل لهذا الفرع", "Location not set — location-based attendance is disabled for this branch")}</span>
+                )}
+              </div>
             </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              {canManageGeofence ? (
+                <>
+                  {b.lat != null && (
+                    <Field label={t("النطاق (متر)", "Radius (m)")}>
+                      <input
+                        type="number"
+                        style={{ ...inputStyle, width: 90 }}
+                        value={b.radius || 150}
+                        onChange={(e) => updateRadius(b.id, e.target.value)}
+                      />
+                    </Field>
+                  )}
+                  <Btn small onClick={() => captureLocation(b.id)} disabled={locatingId === b.id}>
+                    {locatingId === b.id ? t("⏳ جارِ التحديد...", "⏳ Locating...") : t("📍 التقط الموقع الحالي", "📍 Capture current location")}
+                  </Btn>
+                  {b.lat != null && (
+                    <Btn small tone="secondary" onClick={() => clearLocation(b.id)}>{t("إلغاء الموقع", "Clear location")}</Btn>
+                  )}
+                </>
+              ) : (
+                b.lat != null && <Stamp>{t("النطاق", "Radius")}: {b.radius || 150}{t("م", "m")}</Stamp>
+              )}
               <Stamp>{employees.filter((e) => e.branchId === b.id).length} {t("موظف", "employees")}</Stamp>
               <Btn small tone="danger" onClick={() => removeBranch(b.id)}>{t("حذف", "Delete")}</Btn>
             </div>
@@ -3534,7 +3695,7 @@ function LeaveRequestForm({ onSubmit, t }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, branchName, onLogout, setUsers, logActivity }) {
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   if (!employee) {
@@ -3639,37 +3800,42 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
             borderRadius: 10,
             padding: 16,
             marginBottom: 22,
-            display: "flex",
-            flexWrap: "wrap",
-            gap: 16,
-            alignItems: "center",
-            justifyContent: "space-between",
           }}
         >
-          <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
-            <div>
-              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("وقت الدوام", "Work Shift")}</div>
-              <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>
-                {employee.workShift?.start || "08:00"} — {employee.workShift?.end || "17:00"}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("وقت الدوام", "Work Shift")}</div>
+                <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>
+                  {employee.workShift?.start || "08:00"} — {employee.workShift?.end || "17:00"}
+                </div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("حضور اليوم", "Today's Check-in")}</div>
+                <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkInTime || "—"}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("انصراف اليوم", "Today's Check-out")}</div>
+                <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkOutTime || "—"}</div>
               </div>
             </div>
-            <div>
-              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("حضور اليوم", "Today's Check-in")}</div>
-              <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkInTime || "—"}</div>
-            </div>
-            <div>
-              <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("انصراف اليوم", "Today's Check-out")}</div>
-              <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkOutTime || "—"}</div>
+            <div style={{ display: "flex", gap: 10 }}>
+              <Btn onClick={onClockIn} disabled={!!todayAtt || geoBusy}>
+                {geoBusy ? t("📍 جارِ التحقق من الموقع...", "📍 Checking location...") : t("🟢 تسجيل حضور", "🟢 Clock In")}
+              </Btn>
+              <Btn tone="secondary" onClick={onClockOut} disabled={!todayAtt || !!todayAtt?.checkOutTime || geoBusy}>
+                {geoBusy ? t("📍 جارِ التحقق من الموقع...", "📍 Checking location...") : t("🔴 تسجيل انصراف", "🔴 Clock Out")}
+              </Btn>
             </div>
           </div>
-          <div style={{ display: "flex", gap: 10 }}>
-            <Btn onClick={onClockIn} disabled={!!todayAtt}>
-              {t("🟢 تسجيل حضور", "🟢 Clock In")}
-            </Btn>
-            <Btn tone="secondary" onClick={onClockOut} disabled={!todayAtt || !!todayAtt?.checkOutTime}>
-              {t("🔴 تسجيل انصراف", "🔴 Clock Out")}
-            </Btn>
+          <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
+            📍 {t("يتطلب تسجيل الحضور/الانصراف تفعيل خدمة الموقع (GPS) والتواجد داخل نطاق الفرع.", "Clock in/out requires location (GPS) access and being physically within the branch's range.")}
           </div>
+          {geoError && (
+            <div style={{ marginTop: 10, fontSize: 12.5, color: COLORS.brick, background: "#FBEAEA", borderRadius: 8, padding: "9px 12px", fontWeight: 600 }}>
+              ⚠️ {geoError}
+            </div>
+          )}
         </div>
 
         <SectionTitle>{t("رصيد الإجازة السنوية", "Annual Leave Balance")}</SectionTitle>
