@@ -279,7 +279,8 @@ function trLabel(t, dict, v) {
   return t(v, dict[v] || v);
 }
 
-const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "" };
+const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null };
+const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "payroll", "eos", "settings"];
 
 function navForRole(role) {
   if (role === "admin") return [...NAV, { key: "users", label: "المستخدمون", labelEn: "Users", icon: "◑" }];
@@ -461,7 +462,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const isManager = role === "manager";
   const isEntityManager = role === "entity_manager";
   const isBranchManager = role === "branch_manager";
-  const navItems = navForRole(role);
+  const navItems =
+    !isAdmin && Array.isArray(currentUser.customTabs)
+      ? NAV.filter((n) => currentUser.customTabs.includes(n.key))
+      : navForRole(role);
+  const hasTab = (key) => navItems.some((n) => n.key === key);
   const [tab, setTab] = useState(navItems[0]?.key || "dash");
   const [entities, setEntities] = useState(ENTITIES_SEED);
   const [branches, setBranches] = useState(BRANCHES_SEED);
@@ -884,7 +889,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             setVehicles={setVehicles}
           />
         )}
-        {(isAdmin || isManager || isEntityManager) && tab === "branches" && (
+        {hasTab("branches") && tab === "branches" && (
           <BranchesTab
             entities={scopedEntities}
             setEntities={setEntities}
@@ -935,10 +940,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           />
         )}
         {tab === "eos" && <EOSTab employees={scopedEmployees} />}
-        {isAdmin && tab === "reports" && (
+        {isAdmin && hasTab("reports") && tab === "reports" && (
           <ReportsTab activityLog={activityLog} users={users} />
         )}
-        {(isAdmin || isManager || isEntityManager) && tab === "settings" && <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} />}
+        {hasTab("settings") && tab === "settings" && <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} />}
         {isAdmin && tab === "users" && (
           <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} logActivity={logActivity} />
         )}
@@ -1031,7 +1036,7 @@ const EMPTY_EMP = {
   contractStart: "",
   contractEnd: "",
   careerHistory: [],
-  weeklyOffDay: "الجمعة",
+  weeklyOffDays: ["الجمعة"],
   workShift: { start: "08:00", end: "17:00" },
 };
 
@@ -1045,6 +1050,16 @@ const WEEK_DAYS_EN = {
   "الخميس": "Thursday",
   "الجمعة": "Friday",
 };
+
+/* أيام الإجازة الأسبوعية لموظف — متوافقة مع البيانات القديمة (weeklyOffDay نص واحد) والجديدة (weeklyOffDays مصفوفة) */
+function getOffDays(emp) {
+  if (Array.isArray(emp?.weeklyOffDays) && emp.weeklyOffDays.length) return emp.weeklyOffDays;
+  if (emp?.weeklyOffDay) return [emp.weeklyOffDay];
+  return ["الجمعة"];
+}
+function formatOffDays(days, t) {
+  return days.map((d) => t(d, WEEK_DAYS_EN[d] || d)).join(t("، ", ", "));
+}
 
 /* تحويل تاريخ ميلادي إلى هجري للعرض جنب حقل التاريخ (بدون اتصال إنترنت، عبر Intl المدمجة في المتصفح) */
 function toHijri(dateStr) {
@@ -1135,9 +1150,23 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     logActivity && logActivity("تعديل رسوم حكومية", "employees", employees.find((e) => e.id === empId)?.name || "");
   };
 
-  const updateWeeklyOff = (empId, day) => {
-    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, weeklyOffDay: day } : e)));
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, weeklyOffDay: day } : prev));
+  const toggleWeeklyOffDay = (empId, day) => {
+    setEmployees((prev) =>
+      prev.map((e) => {
+        if (e.id !== empId) return e;
+        const current = getOffDays(e);
+        const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day];
+        const finalDays = next.length ? next : [day];
+        return { ...e, weeklyOffDays: finalDays, weeklyOffDay: finalDays[0] };
+      })
+    );
+    setProfileEmp((prev) => {
+      if (!prev || prev.id !== empId) return prev;
+      const current = getOffDays(prev);
+      const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day];
+      const finalDays = next.length ? next : [day];
+      return { ...prev, weeklyOffDays: finalDays, weeklyOffDay: finalDays[0] };
+    });
     logActivity && logActivity("تحديد الإجازة الأسبوعية", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${day}`);
   };
 
@@ -1319,7 +1348,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           onAddCareerEntry={addCareerEntry}
           onRemoveCareerEntry={removeCareerEntry}
           onUpdateGovFees={updateGovFees}
-          onUpdateWeeklyOff={updateWeeklyOff}
+          onToggleWeeklyOffDay={toggleWeeklyOffDay}
           onUpdateWorkShift={updateWorkShift}
           canEditWeeklyOff={canEditWeeklyOff}
           onClose={() => setProfileEmp(null)}
@@ -1330,7 +1359,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onUpdateWeeklyOff, onUpdateWorkShift, canEditWeeklyOff = true, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, canEditWeeklyOff = true, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const feesRefs = {
@@ -1461,21 +1490,36 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
             <InfoRow label={t("المسمى الوظيفي", "Job Title")} value={emp.position} />
             <InfoRow label={t("تاريخ التعيين", "Hire Date")} value={emp.joinDate} />
             <InfoRow label={t("رقم الجوال", "Mobile Number")} value={emp.phone} />
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
-              <span style={{ color: "#a3927a" }}>{t("الإجازة الأسبوعية", "Weekly Off Day")}</span>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", fontSize: 12.5, padding: "5px 0", flexWrap: "wrap", gap: 8 }}>
+              <span style={{ color: "#a3927a", paddingTop: canEditWeeklyOff ? 4 : 0 }}>{t("أيام الإجازة الأسبوعية", "Weekly Off Days")}</span>
               {canEditWeeklyOff ? (
-                <select
-                  style={{ ...inputStyle, padding: "4px 8px", fontSize: 12.5, width: 140 }}
-                  value={emp.weeklyOffDay || "الجمعة"}
-                  onChange={(e) => onUpdateWeeklyOff && onUpdateWeeklyOff(emp.id, e.target.value)}
-                >
-                  {WEEK_DAYS.map((d) => (
-                    <option key={d} value={d}>{t(d, WEEK_DAYS_EN[d])}</option>
-                  ))}
-                </select>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxWidth: 280, justifyContent: "flex-end" }}>
+                  {WEEK_DAYS.map((d) => {
+                    const active = getOffDays(emp).includes(d);
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => onToggleWeeklyOffDay && onToggleWeeklyOffDay(emp.id, d)}
+                        style={{
+                          padding: "4px 9px",
+                          borderRadius: 6,
+                          fontSize: 11.5,
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          border: `1px solid ${active ? COLORS.espresso : COLORS.line}`,
+                          background: active ? COLORS.espresso : "#fff",
+                          color: active ? "#fff" : COLORS.coffee,
+                        }}
+                      >
+                        {t(d, WEEK_DAYS_EN[d])}
+                      </button>
+                    );
+                  })}
+                </div>
               ) : (
                 <span style={{ fontWeight: 700, color: COLORS.espresso }}>
-                  {t(emp.weeklyOffDay || "الجمعة", WEEK_DAYS_EN[emp.weeklyOffDay] || "Friday")}
+                  {formatOffDays(getOffDays(emp), t)}
                 </span>
               )}
             </div>
@@ -3787,8 +3831,8 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
           />
           <ReceiptCard label={t("تاريخ التعيين", "Hire Date")} value={employee.joinDate || "—"} />
           <ReceiptCard
-            label={t("الإجازة الأسبوعية", "Weekly Off Day")}
-            value={t(employee.weeklyOffDay || "الجمعة", WEEK_DAYS_EN[employee.weeklyOffDay] || "Friday")}
+            label={t("أيام الإجازة الأسبوعية", "Weekly Off Days")}
+            value={formatOffDays(getOffDays(employee), t)}
           />
         </div>
 
@@ -3998,18 +4042,26 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
       setErr(t("اسم المستخدم مستخدم بالفعل، اختر اسمًا آخر", "This username is already taken, please choose another"));
       return;
     }
+    const customizableRole = ["manager", "entity_manager", "branch_manager"].includes(form.role);
+    const payload = { ...form, username: form.username.trim() };
+    if (!customizableRole) {
+      payload.customTabs = null;
+    } else if (!Array.isArray(payload.customTabs)) {
+      payload.customTabs = navForRole(form.role).map((n) => n.key).filter((k) => CUSTOMIZABLE_TAB_KEYS.includes(k));
+    }
     if (editingId) {
-      setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...form, id: editingId, username: form.username.trim() } : u)));
-      logActivity && logActivity("تعديل مستخدم", "users", form.username.trim());
+      setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...payload, id: editingId } : u)));
+      logActivity && logActivity("تعديل مستخدم", "users", payload.username);
     } else {
-      setUsers((prev) => [...prev, { ...form, username: form.username.trim(), id: uid() }]);
-      logActivity && logActivity("إضافة مستخدم", "users", form.username.trim());
+      setUsers((prev) => [...prev, { ...payload, id: uid() }]);
+      logActivity && logActivity("إضافة مستخدم", "users", payload.username);
     }
     resetForm();
   };
 
   const edit = (u) => {
-    setForm(u);
+    const defaultTabs = navForRole(u.role).map((n) => n.key).filter((k) => CUSTOMIZABLE_TAB_KEYS.includes(k));
+    setForm({ ...u, customTabs: Array.isArray(u.customTabs) ? u.customTabs : defaultTabs });
     setEditingId(u.id);
     setErr("");
   };
@@ -4046,10 +4098,14 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
             <select
               style={inputStyle}
               value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value, branchId: "", employeeId: "", entityId: "" })}
+              onChange={(e) => {
+                const newRole = e.target.value;
+                const defaultTabs = navForRole(newRole).map((n) => n.key).filter((k) => CUSTOMIZABLE_TAB_KEYS.includes(k));
+                setForm({ ...form, role: newRole, branchId: "", employeeId: "", entityId: "", customTabs: defaultTabs });
+              }}
             >
               <option value="admin">{t("أدمن (كل الصلاحيات)", "Admin (full access)")}</option>
-              <option value="manager">{t("مسؤول (كل الصلاحيات ما عدا التقارير والمستخدمين)", "Manager (full access except Reports & Users)")}</option>
+              <option value="manager">{t("مسؤول عام", "General Manager")}</option>
               <option value="entity_manager">{t("مدير كيان", "Entity Manager")}</option>
               <option value="branch_manager">{t("مسؤول فرع", "Branch Manager")}</option>
               <option value="employee">{t("موظف", "Employee")}</option>
@@ -4086,6 +4142,48 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
             </Field>
           )}
         </div>
+
+        {["manager", "entity_manager", "branch_manager"].includes(form.role) && (
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px dashed ${COLORS.line}` }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8, color: COLORS.espresso }}>
+              {t("التبويبات المسموح بها لهذا الحساب", "Tabs allowed for this account")}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {NAV.filter((n) => CUSTOMIZABLE_TAB_KEYS.includes(n.key)).map((n) => {
+                const active = (form.customTabs || []).includes(n.key);
+                return (
+                  <button
+                    key={n.key}
+                    type="button"
+                    onClick={() => {
+                      const cur = form.customTabs || [];
+                      const next = cur.includes(n.key) ? cur.filter((k) => k !== n.key) : [...cur, n.key];
+                      setForm({ ...form, customTabs: next });
+                    }}
+                    style={{
+                      padding: "6px 11px",
+                      borderRadius: 7,
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      border: `1px solid ${active ? COLORS.espresso : COLORS.line}`,
+                      background: active ? COLORS.espresso : "#fff",
+                      color: active ? "#fff" : COLORS.coffee,
+                    }}
+                  >
+                    {t(n.label, n.labelEn)}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 11, color: "#a3927a", marginTop: 8 }}>
+              {t(
+                "ملاحظة: تبويبَي \"المستخدمون\" و\"التقارير\" مقصوران على حساب الأدمن دائمًا ولا يمكن منحهما لأي دور آخر.",
+                "Note: the \"Users\" and \"Reports\" tabs are always admin-only and can't be granted to any other role."
+              )}
+            </div>
+          </div>
+        )}
         {err && <div style={{ color: COLORS.brick, fontSize: 12, marginTop: 10 }}>{err}</div>}
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
           <Btn onClick={submit}>{editingId ? t("حفظ التعديل", "Save Changes") : t("إضافة الحساب", "Add Account")}</Btn>
@@ -4094,36 +4192,63 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
       </div>
 
       <SectionTitle>{t("الحسابات الحالية", "Current Accounts")} ({fmt(users.length)})</SectionTitle>
-      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
-        {users.map((u, i) => (
-          <div
-            key={u.id}
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              padding: "10px 14px",
-              borderTop: i ? `1px dashed ${COLORS.line}` : "none",
-            }}
-          >
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 13 }}>
-                {u.name} <span style={{ fontWeight: 400, color: "#8a7a63" }}>({u.username})</span>
-              </div>
-              <div style={{ fontSize: 11.5, color: "#8a7a63" }}>
-                {t(ROLE_LABELS[u.role], ROLE_LABELS_EN[u.role])}
-                {u.role === "entity_manager" && ` · ${entities.find((en) => en.id === u.entityId)?.name || "—"}`}
-                {u.role === "branch_manager" && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
-                {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
-              </div>
+      {(() => {
+        const branchIdOf = (u) => {
+          if (u.role === "branch_manager") return u.branchId || null;
+          if (u.role === "employee") return employees.find((e) => e.id === u.employeeId)?.branchId || null;
+          return null;
+        };
+        const groups = [];
+        const generalUsers = users.filter((u) => !branchIdOf(u));
+        if (generalUsers.length) {
+          groups.push({ key: "general", label: t("عام / إداريون (بدون فرع محدد)", "General / Admins (no specific branch)"), users: generalUsers });
+        }
+        branches.forEach((b) => {
+          const branchUsers = users.filter((u) => branchIdOf(u) === b.id);
+          if (branchUsers.length) {
+            groups.push({ key: b.id, label: `${b.name} · ${entities.find((en) => en.id === b.entityId)?.name || "—"}`, users: branchUsers });
+          }
+        });
+        return groups.map((g) => (
+          <div key={g.key} style={{ marginBottom: 18 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 700, color: COLORS.espresso }}>{g.label}</div>
+              <Stamp>{g.users.length} {t("حساب", "accounts")}</Stamp>
             </div>
-            <div style={{ display: "flex", gap: 6 }}>
-              <Btn small tone="secondary" onClick={() => edit(u)}>{t("تعديل", "Edit")}</Btn>
-              <Btn small tone="danger" onClick={() => remove(u.id)}>{t("حذف", "Delete")}</Btn>
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
+              {g.users.map((u, i) => (
+                <div
+                  key={u.id}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "10px 14px",
+                    borderTop: i ? `1px dashed ${COLORS.line}` : "none",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>
+                      {u.name} <span style={{ fontWeight: 400, color: "#8a7a63" }}>({u.username})</span>
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "#8a7a63" }}>
+                      {t(ROLE_LABELS[u.role], ROLE_LABELS_EN[u.role])}
+                      {u.role === "entity_manager" && ` · ${entities.find((en) => en.id === u.entityId)?.name || "—"}`}
+                      {u.role === "branch_manager" && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
+                      {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
+                      {Array.isArray(u.customTabs) && ` · 🔧 ${t(`صلاحيات مخصصة (${u.customTabs.length} تبويب)`, `Custom access (${u.customTabs.length} tabs)`)}`}
+                    </div>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <Btn small tone="secondary" onClick={() => edit(u)}>{t("تعديل", "Edit")}</Btn>
+                    <Btn small tone="danger" onClick={() => remove(u.id)}>{t("حذف", "Delete")}</Btn>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
-        ))}
-      </div>
+        ));
+      })()}
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
         {t(
