@@ -468,6 +468,56 @@ const inputStyle = {
   fontFamily: "inherit",
 };
 
+/* حقل تاريخ مخصّص: يعرض القيمة كنص عادي (أرقام إنجليزية مضمونة دايمًا) فوق حقل تاريخ أصلي شفاف
+   لفتح تقويم الاختيار — بديل عن الاعتماد الكامل على input type="date" لأن بعض المتصفحات (خصوصًا Safari/iOS)
+   تتجاهل خاصية lang وتعرض أرقامًا هندية حسب لغة نظام الجهاز، بغض النظر عن أي إعداد في الصفحة نفسها */
+function DateField({ value, onChange, style, placeholder = "YYYY-MM-DD" }) {
+  return (
+    <span style={{ position: "relative", display: "inline-flex", flex: style?.flex }}>
+      <input
+        type="text"
+        readOnly
+        dir="ltr"
+        value={value || ""}
+        placeholder={placeholder}
+        style={{ ...inputStyle, ...style, cursor: "pointer" }}
+      />
+      <input
+        type="date"
+        lang="en"
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", border: 0, padding: 0, margin: 0, cursor: "pointer" }}
+        tabIndex={-1}
+      />
+    </span>
+  );
+}
+
+/* حقل وقت مخصّص بنفس منطق DateField أعلاه — لضمان عرض الأرقام إنجليزية دايمًا بغض النظر عن لغة نظام الجهاز */
+function TimeField({ value, onChange, style, placeholder = "HH:MM" }) {
+  return (
+    <span style={{ position: "relative", display: "inline-flex", flex: style?.flex }}>
+      <input
+        type="text"
+        readOnly
+        dir="ltr"
+        value={value || ""}
+        placeholder={placeholder}
+        style={{ ...inputStyle, ...style, cursor: "pointer" }}
+      />
+      <input
+        type="time"
+        lang="en"
+        value={value || ""}
+        onChange={(e) => onChange(e.target.value)}
+        style={{ position: "absolute", inset: 0, opacity: 0, width: "100%", height: "100%", border: 0, padding: 0, margin: 0, cursor: "pointer" }}
+        tabIndex={-1}
+      />
+    </span>
+  );
+}
+
 function Btn({ children, onClick, tone = "primary", small, type = "button", disabled = false }) {
   const base =
     tone === "primary"
@@ -1352,7 +1402,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
             <input type="number" style={inputStyle} value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
           </Field>
           <Field label={t("تاريخ التعيين", "Hire Date")}>
-            <input type="date" lang="en" style={inputStyle} value={form.joinDate} onChange={(e) => setForm({ ...form, joinDate: e.target.value })} />
+            <DateField style={inputStyle} value={form.joinDate} onChange={(v) => setForm({ ...form, joinDate: v })} />
           </Field>
           <Field label={t("رقم الجوال", "Mobile Number")}>
             <input style={inputStyle} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
@@ -1369,7 +1419,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.coffee, margin: "14px 0 8px" }}>{t("بيانات الإقامة والعقد", "Iqama & Contract Details")}</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
           <Field label={t("تاريخ انتهاء الإقامة", "Iqama Expiry Date")}>
-            <input type="date" lang="en" style={inputStyle} value={form.iqamaExpiry} onChange={(e) => setForm({ ...form, iqamaExpiry: e.target.value })} />
+            <DateField style={inputStyle} value={form.iqamaExpiry} onChange={(v) => setForm({ ...form, iqamaExpiry: v })} />
           </Field>
           <Field label={t("المهنة على الإقامة", "Profession on Iqama")}>
             <input style={inputStyle} value={form.iqamaProfession} onChange={(e) => setForm({ ...form, iqamaProfession: e.target.value })} />
@@ -1381,10 +1431,10 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
             </select>
           </Field>
           <Field label={t("بداية العقد", "Contract Start")}>
-            <input type="date" lang="en" style={inputStyle} value={form.contractStart} onChange={(e) => setForm({ ...form, contractStart: e.target.value })} />
+            <DateField style={inputStyle} value={form.contractStart} onChange={(v) => setForm({ ...form, contractStart: v })} />
           </Field>
           <Field label={t("نهاية العقد", "Contract End")}>
-            <input type="date" lang="en" style={inputStyle} value={form.contractEnd} onChange={(e) => setForm({ ...form, contractEnd: e.target.value })} />
+            <DateField style={inputStyle} value={form.contractEnd} onChange={(v) => setForm({ ...form, contractEnd: v })} />
           </Field>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -1676,18 +1726,16 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
               <span style={{ color: "#a3927a" }}>{t("وقت الدوام", "Work Shift")}</span>
               {canEditWeeklyOff ? (
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                  <input
-                    type="time" lang="en"
-                    style={{ ...inputStyle, padding: "4px 8px", fontSize: 12.5, width: 100 }}
+                  <TimeField
+                    style={{ padding: "4px 8px", fontSize: 12.5, width: 100 }}
                     value={emp.workShift?.start || "08:00"}
-                    onChange={(e) => onUpdateWorkShift && onUpdateWorkShift(emp.id, { ...(emp.workShift || {}), start: e.target.value })}
+                    onChange={(v) => onUpdateWorkShift && onUpdateWorkShift(emp.id, { ...(emp.workShift || {}), start: v })}
                   />
                   <span style={{ color: "#a3927a" }}>—</span>
-                  <input
-                    type="time" lang="en"
-                    style={{ ...inputStyle, padding: "4px 8px", fontSize: 12.5, width: 100 }}
+                  <TimeField
+                    style={{ padding: "4px 8px", fontSize: 12.5, width: 100 }}
                     value={emp.workShift?.end || "17:00"}
-                    onChange={(e) => onUpdateWorkShift && onUpdateWorkShift(emp.id, { ...(emp.workShift || {}), end: e.target.value })}
+                    onChange={(v) => onUpdateWorkShift && onUpdateWorkShift(emp.id, { ...(emp.workShift || {}), end: v })}
                   />
                 </div>
               ) : (
@@ -1795,7 +1843,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
 
           <Section title={`${t("المسار الوظيفي", "Career Path")} (${career.length})`}>
             <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-              <input type="date" lang="en" style={{ ...inputStyle, maxWidth: 140 }} value={careerForm.date} onChange={(e) => setCareerForm({ ...careerForm, date: e.target.value })} />
+              <DateField style={{ ...inputStyle, maxWidth: 140 }} value={careerForm.date} onChange={(v) => setCareerForm({ ...careerForm, date: v })} />
               <input
                 style={{ ...inputStyle, maxWidth: 200 }}
                 placeholder={t("مثال: ترقية إلى مشرف فرع", "e.g. Promoted to Branch Supervisor")}
@@ -1946,11 +1994,10 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                   <td style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{r.nationalId || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.iqamaExpiry || ""}
-                      onChange={(e) => update(r.id, "iqamaExpiry", e.target.value)}
+                      onChange={(v) => update(r.id, "iqamaExpiry", v)}
                     />
                     <HijriNote dateStr={r.iqamaExpiry} />
                   </td>
@@ -1968,11 +2015,10 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                     </select>
                   </td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.contractEnd || ""}
-                      onChange={(e) => update(r.id, "contractEnd", e.target.value)}
+                      onChange={(v) => update(r.id, "contractEnd", v)}
                     />
                     <HijriNote dateStr={r.contractEnd} />
                   </td>
@@ -2166,11 +2212,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                   </td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.crExpiry || ""}
-                      onChange={(e) => updateBranch(r.id, "crExpiry", e.target.value)}
+                      onChange={(v) => updateBranch(r.id, "crExpiry", v)}
                     />
                     <HijriNote dateStr={r.crExpiry} />
                   </td>
@@ -2185,11 +2230,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                   </td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.civilDefenseExpiry || ""}
-                      onChange={(e) => updateBranch(r.id, "civilDefenseExpiry", e.target.value)}
+                      onChange={(v) => updateBranch(r.id, "civilDefenseExpiry", v)}
                     />
                     <HijriNote dateStr={r.civilDefenseExpiry} />
                   </td>
@@ -2204,11 +2248,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                   </td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.municipalityExpiry || ""}
-                      onChange={(e) => updateBranch(r.id, "municipalityExpiry", e.target.value)}
+                      onChange={(v) => updateBranch(r.id, "municipalityExpiry", v)}
                     />
                     <HijriNote dateStr={r.municipalityExpiry} />
                   </td>
@@ -2251,11 +2294,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{r.position}</td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.healthCertExpiry || ""}
-                      onChange={(e) => updateEmployee(r.id, "healthCertExpiry", e.target.value)}
+                      onChange={(v) => updateEmployee(r.id, "healthCertExpiry", v)}
                     />
                     <HijriNote dateStr={r.healthCertExpiry} />
                   </td>
@@ -2277,11 +2319,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                   </td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.insuranceExpiry || ""}
-                      onChange={(e) => updateEmployee(r.id, "insuranceExpiry", e.target.value)}
+                      onChange={(v) => updateEmployee(r.id, "insuranceExpiry", v)}
                     />
                     <HijriNote dateStr={r.insuranceExpiry} />
                   </td>
@@ -2318,10 +2359,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
             </select>
           </Field>
           <Field label={t("تاريخ انتهاء الاستمارة", "Registration Expiry")}>
-            <input type="date" lang="en" style={inputStyle} value={vehicleForm.istimaraExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, istimaraExpiry: e.target.value })} />
+            <DateField style={inputStyle} value={vehicleForm.istimaraExpiry} onChange={(v) => setVehicleForm({ ...vehicleForm, istimaraExpiry: v })} />
           </Field>
           <Field label={t("تاريخ انتهاء الفحص الدوري", "Periodic Inspection Expiry")}>
-            <input type="date" lang="en" style={inputStyle} value={vehicleForm.periodicInspectionExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, periodicInspectionExpiry: e.target.value })} />
+            <DateField style={inputStyle} value={vehicleForm.periodicInspectionExpiry} onChange={(v) => setVehicleForm({ ...vehicleForm, periodicInspectionExpiry: v })} />
           </Field>
           <Field label={t("شركة تأمين السيارة", "Vehicle Insurance Company")}>
             <input style={inputStyle} value={vehicleForm.insuranceCompany} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceCompany: e.target.value })} />
@@ -2330,7 +2371,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
             <input style={inputStyle} value={vehicleForm.insurancePolicyNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, insurancePolicyNumber: e.target.value })} />
           </Field>
           <Field label={t("تاريخ انتهاء تأمين السيارة", "Vehicle Insurance Expiry")}>
-            <input type="date" lang="en" style={inputStyle} value={vehicleForm.insuranceExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceExpiry: e.target.value })} />
+            <DateField style={inputStyle} value={vehicleForm.insuranceExpiry} onChange={(v) => setVehicleForm({ ...vehicleForm, insuranceExpiry: v })} />
           </Field>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -2370,11 +2411,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   <td style={{ padding: "9px 12px" }}>{r.make || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.istimaraExpiry || ""}
-                      onChange={(e) => updateVehicle(r.id, "istimaraExpiry", e.target.value)}
+                      onChange={(v) => updateVehicle(r.id, "istimaraExpiry", v)}
                     />
                     <HijriNote dateStr={r.istimaraExpiry} />
                   </td>
@@ -2382,11 +2422,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     <Stamp tone={r.istimaraStatus.tone}>{r.istimaraStatus.label}</Stamp>
                   </td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.periodicInspectionExpiry || ""}
-                      onChange={(e) => updateVehicle(r.id, "periodicInspectionExpiry", e.target.value)}
+                      onChange={(v) => updateVehicle(r.id, "periodicInspectionExpiry", v)}
                     />
                     <HijriNote dateStr={r.periodicInspectionExpiry} />
                   </td>
@@ -2396,11 +2435,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   <td style={{ padding: "9px 12px" }}>{r.insuranceCompany || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{r.insurancePolicyNumber || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>
-                    <input
-                      type="date" lang="en"
+                    <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.insuranceExpiry || ""}
-                      onChange={(e) => updateVehicle(r.id, "insuranceExpiry", e.target.value)}
+                      onChange={(v) => updateVehicle(r.id, "insuranceExpiry", v)}
                     />
                     <HijriNote dateStr={r.insuranceExpiry} />
                   </td>
@@ -2654,10 +2692,10 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
             </select>
           </Field>
           <Field label={t("من تاريخ", "From Date")}>
-            <input type="date" lang="en" style={inputStyle} value={leaveForm.from} onChange={(e) => setLeaveForm({ ...leaveForm, from: e.target.value })} />
+            <DateField style={inputStyle} value={leaveForm.from} onChange={(v) => setLeaveForm({ ...leaveForm, from: v })} />
           </Field>
           <Field label={t("إلى تاريخ", "To Date")}>
-            <input type="date" lang="en" style={inputStyle} value={leaveForm.to} onChange={(e) => setLeaveForm({ ...leaveForm, to: e.target.value })} />
+            <DateField style={inputStyle} value={leaveForm.to} onChange={(v) => setLeaveForm({ ...leaveForm, to: v })} />
           </Field>
           <div style={{ display: "flex", alignItems: "flex-end" }}>
             <Btn onClick={addLeave}>{t("تسجيل الإجازة", "Register Leave")}</Btn>
@@ -2763,7 +2801,7 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
             </select>
           </Field>
           <Field label={t("التاريخ", "Date")}>
-            <input type="date" lang="en" style={inputStyle} value={attForm.date} onChange={(e) => setAttForm({ ...attForm, date: e.target.value })} />
+            <DateField style={inputStyle} value={attForm.date} onChange={(v) => setAttForm({ ...attForm, date: v })} />
           </Field>
           <Field label={t("الحالة", "Status")}>
             <select style={inputStyle} value={attForm.status} onChange={(e) => setAttForm({ ...attForm, status: e.target.value })}>
@@ -3346,7 +3384,7 @@ function EOSTab({ employees }) {
             </select>
           </Field>
           <Field label={t("تاريخ انتهاء الخدمة", "Service End Date")}>
-            <input type="date" lang="en" style={inputStyle} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            <DateField style={inputStyle} value={endDate} onChange={(v) => setEndDate(v)} />
           </Field>
           <Field label={t("سبب انتهاء الخدمة", "Reason for Termination")}>
             <select style={inputStyle} value={reason} onChange={(e) => setReason(e.target.value)}>
@@ -3953,10 +3991,10 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
             <input type="text" style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
           </Field>
           <Field label={t("من تاريخ", "From")}>
-            <input type="date" lang="en" style={inputStyle} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} />
+            <DateField style={inputStyle} value={form.from} onChange={(v) => setForm({ ...form, from: v })} />
           </Field>
           <Field label={t("إلى تاريخ (موعد الإنجاز)", "To (Due Date)")}>
-            <input type="date" lang="en" style={inputStyle} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} />
+            <DateField style={inputStyle} value={form.to} onChange={(v) => setForm({ ...form, to: v })} />
           </Field>
         </div>
         <div style={{ marginTop: 10 }}>
@@ -4145,10 +4183,10 @@ function LeaveRequestForm({ onSubmit, t }) {
           </select>
         </Field>
         <Field label={t("من تاريخ", "From")}>
-          <input type="date" lang="en" style={inputStyle} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} />
+          <DateField style={inputStyle} value={form.from} onChange={(v) => setForm({ ...form, from: v })} />
         </Field>
         <Field label={t("إلى تاريخ", "To")}>
-          <input type="date" lang="en" style={inputStyle} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} />
+          <DateField style={inputStyle} value={form.to} onChange={(v) => setForm({ ...form, to: v })} />
         </Field>
         <Field label={t("ملاحظة (اختياري)", "Note (optional)")}>
           <input style={inputStyle} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
@@ -4885,10 +4923,10 @@ function ReportsTab({ activityLog, users }) {
           </select>
         </Field>
         <Field label={t("من تاريخ", "From Date")}>
-          <input type="date" lang="en" style={inputStyle} value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          <DateField style={inputStyle} value={fromDate} onChange={(v) => setFromDate(v)} />
         </Field>
         <Field label={t("إلى تاريخ", "To Date")}>
-          <input type="date" lang="en" style={inputStyle} value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          <DateField style={inputStyle} value={toDate} onChange={(v) => setToDate(v)} />
         </Field>
         <Btn onClick={() => window.print()}>{t("🖶 طباعة التقرير", "🖶 Print Report")}</Btn>
       </div>
