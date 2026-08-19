@@ -197,6 +197,38 @@ const COLORS = {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+/* ضغط وتصغير صورة قبل تحويلها لـ base64 وتخزينها في Firestore — لتفادي تضخّم حجم المستند */
+function compressImage(file, maxDim = 900, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("IMAGE_LOAD_FAILED"));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          if (width >= height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 /* حساب المسافة (بالمتر) بين نقطتين جغرافيتين — معادلة Haversine */
 function distanceMeters(lat1, lng1, lat2, lng2) {
   const R = 6371000;
@@ -614,6 +646,24 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     setTasks((prev) => prev.filter((x) => x.id !== taskId));
     logActivity && logActivity("حذف مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
   };
+  const addTaskComment = (taskId, text) => {
+    if (!text || !text.trim()) return;
+    const comment = { id: uid(), text: text.trim(), author: currentUser.name, at: new Date().toISOString() };
+    setTasks((prev) => prev.map((ts) => (ts.id === taskId ? { ...ts, comments: [...(ts.comments || []), comment] } : ts)));
+    const ts = tasks.find((x) => x.id === taskId);
+    logActivity && logActivity("تعليق على مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+  };
+  /* توثيق إتمام المهمة بالصور */
+  const addTaskPhotos = (taskId, dataUrls) => {
+    setTasks((prev) => prev.map((ts) => (ts.id === taskId ? { ...ts, completionPhotos: [...(ts.completionPhotos || []), ...dataUrls] } : ts)));
+    const ts = tasks.find((x) => x.id === taskId);
+    logActivity && logActivity("توثيق مهمة بصور", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+  };
+  const removeTaskPhoto = (taskId, photoIndex) => {
+    setTasks((prev) =>
+      prev.map((ts) => (ts.id === taskId ? { ...ts, completionPhotos: (ts.completionPhotos || []).filter((_, i) => i !== photoIndex) } : ts))
+    );
+  };
 
   /* دورة اعتماد طلبات الإجازة: موافقة مبدئية من مدير الكيان، ثم موافقة نهائية من الأدمن/المسؤول العام */
   const preliminaryApproveLeaveRequest = (reqId) => {
@@ -770,6 +820,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         logActivity={logActivity}
         tasks={tasks.filter((ts) => ts.employeeId === myEmployee?.id)}
         onUpdateTaskStatus={updateTaskStatus}
+        onAddTaskComment={addTaskComment}
+        onAddTaskPhotos={addTaskPhotos}
+        onRemoveTaskPhoto={removeTaskPhoto}
       />
     );
   }
@@ -967,6 +1020,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             onAddTask={addTask}
             onUpdateTaskStatus={updateTaskStatus}
             onRemoveTask={removeTask}
+            onAddTaskComment={addTaskComment}
+            onAddTaskPhotos={addTaskPhotos}
+            onRemoveTaskPhoto={removeTaskPhoto}
             branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
           />
         )}
@@ -1067,6 +1123,7 @@ function Empty({ text }) {
 /* ============ الموظفون ============ */
 const EMPTY_EMP = {
   name: "",
+  photo: "",
   nationalId: "",
   nationality: "سعودي",
   branchId: "",
@@ -1238,7 +1295,34 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
           {editingId ? t("تعديل بيانات موظف", "Edit Employee") : t("إضافة موظف جديد", "Add New Employee")}
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end" }}>
+          <Field label={t("صورة الموظف", "Employee Photo")}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              {form.photo ? (
+                <img src={form.photo} alt="" style={{ width: 42, height: 42, borderRadius: "50%", objectFit: "cover", border: `1px solid ${COLORS.line}` }} />
+              ) : (
+                <div style={{ width: 42, height: 42, borderRadius: "50%", background: COLORS.paperDark, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, color: "#a3927a" }}>
+                  {(form.name || "؟").trim().charAt(0)}
+                </div>
+              )}
+              <input
+                type="file"
+                accept="image/*"
+                style={{ ...inputStyle, padding: "6px 8px", maxWidth: 170 }}
+                onChange={(e) => {
+                  const file = e.target.files && e.target.files[0];
+                  if (!file) return;
+                  compressImage(file, 400, 0.75).then((dataUrl) => setForm((f) => ({ ...f, photo: dataUrl }))).catch(() => {});
+                  e.target.value = "";
+                }}
+              />
+              {form.photo && (
+                <Btn small tone="secondary" onClick={() => setForm((f) => ({ ...f, photo: "" }))}>{t("إزالة", "Remove")}</Btn>
+              )}
+            </div>
+          </Field>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12 }}>
           <Field label={t("الاسم الكامل", "Full Name")}>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
@@ -1340,6 +1424,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 {[
+                  "",
                   t("الاسم", "Name"),
                   t("الفرع", "Branch"),
                   t("الوظيفة", "Position"),
@@ -1358,6 +1443,15 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
             <tbody>
               {list.map((e) => (
                 <tr key={e.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                  <td style={{ padding: "9px 12px" }}>
+                    {e.photo ? (
+                      <img src={e.photo} alt="" style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover", border: `1px solid ${COLORS.line}` }} />
+                    ) : (
+                      <div style={{ width: 30, height: 30, borderRadius: "50%", background: COLORS.paperDark, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 700, color: "#a3927a" }}>
+                        {(e.name || "؟").trim().charAt(0)}
+                      </div>
+                    )}
+                  </td>
                   <td
                     style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.brick, cursor: "pointer", textDecoration: "underline dotted" }}
                     onClick={() => setProfileEmp(e)}
@@ -1516,9 +1610,18 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
             borderRadius: "12px 12px 0 0",
           }}
         >
-          <div>
-            <div style={{ fontWeight: 800, color: COLORS.espresso, fontSize: 15 }}>{emp.name}</div>
-            <div style={{ fontSize: 11.5, color: "#a3927a" }}>{emp.position} — {branchName}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {emp.photo ? (
+              <img src={emp.photo} alt="" style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover", border: `1px solid ${COLORS.line}` }} />
+            ) : (
+              <div style={{ width: 40, height: 40, borderRadius: "50%", background: COLORS.paperDark, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 700, color: "#a3927a", flexShrink: 0 }}>
+                {(emp.name || "؟").trim().charAt(0)}
+              </div>
+            )}
+            <div>
+              <div style={{ fontWeight: 800, color: COLORS.espresso, fontSize: 15 }}>{emp.name}</div>
+              <div style={{ fontSize: 11.5, color: "#a3927a" }}>{emp.position} — {branchName}</div>
+            </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <Stamp tone={emp.status === "نشط" ? "green" : emp.status === "موقوف" ? "gold" : "brick"}>
@@ -3781,13 +3884,28 @@ function LeaveRequestsTab({ employees, leaveRequests, isEntityManager, isFinalAp
 }
 
 /* ============ مهام الموظفين ============ */
-function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, onRemoveTask, branchName }) {
+function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, onRemoveTask, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, branchName }) {
   const { t } = useLang();
   const [form, setForm] = useState({ employeeId: "", title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "" });
   const [statusFilter, setStatusFilter] = useState("");
   const [branchFilter, setBranchFilter] = useState("");
+  const [commentDrafts, setCommentDrafts] = useState({});
+  const [photoBusy, setPhotoBusy] = useState({});
+  const [lightbox, setLightbox] = useState(null);
   const empName = (id) => employees.find((e) => e.id === id)?.name || t("موظف محذوف", "Deleted employee");
   const todayISO = new Date().toISOString().slice(0, 10);
+
+  const handlePhotoUpload = async (taskId, files) => {
+    if (!files || files.length === 0) return;
+    setPhotoBusy((p) => ({ ...p, [taskId]: true }));
+    try {
+      const dataUrls = await Promise.all(Array.from(files).map((f) => compressImage(f, 900, 0.7)));
+      onAddTaskPhotos && onAddTaskPhotos(taskId, dataUrls);
+    } catch (err) {
+      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+    }
+    setPhotoBusy((p) => ({ ...p, [taskId]: false }));
+  };
 
   const submit = () => {
     if (!form.employeeId || !form.title.trim() || !form.to) return;
@@ -3903,10 +4021,100 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
                 )}
                 <Btn small tone="danger" onClick={() => onRemoveTask(ts.id)}>{t("✕ حذف", "✕ Delete")}</Btn>
               </div>
+
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>
+                  {t("توثيق الإنجاز (صور)", "Completion Documentation (Photos)")} {ts.completionPhotos && ts.completionPhotos.length > 0 ? `(${ts.completionPhotos.length})` : ""}
+                </div>
+                {(ts.completionPhotos || []).length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                    {ts.completionPhotos.map((photo, idx) => (
+                      <div key={idx} style={{ position: "relative" }}>
+                        <img
+                          src={photo}
+                          alt=""
+                          onClick={() => setLightbox(photo)}
+                          style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.line}`, cursor: "pointer" }}
+                        />
+                        <button
+                          className="no-print"
+                          onClick={() => onRemoveTaskPhoto(ts.id, idx)}
+                          style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}
+                          title={t("حذف الصورة", "Delete photo")}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={!!photoBusy[ts.id]}
+                  className="no-print"
+                  style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
+                  onChange={(e) => {
+                    handlePhotoUpload(ts.id, e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                {photoBusy[ts.id] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+              </div>
+
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>
+                  {t("التعليقات", "Comments")} {ts.comments && ts.comments.length > 0 ? `(${ts.comments.length})` : ""}
+                </div>
+                {(ts.comments || []).length === 0 && (
+                  <div style={{ fontSize: 11.5, color: "#a3927a", marginBottom: 6 }}>{t("لا توجد تعليقات بعد", "No comments yet")}</div>
+                )}
+                {(ts.comments || []).map((c) => (
+                  <div key={c.id} style={{ fontSize: 12, background: COLORS.paperDark, borderRadius: 8, padding: "6px 10px", marginBottom: 6 }}>
+                    <div>{c.text}</div>
+                    <div style={{ fontSize: 10, color: "#a3927a", marginTop: 3 }}>{c.author} · {new Date(c.at).toLocaleString(t("ar-SA-u-nu-latn", "en-US"))}</div>
+                  </div>
+                ))}
+                <div style={{ display: "flex", gap: 6 }} className="no-print">
+                  <input
+                    type="text"
+                    style={{ ...inputStyle, flex: 1 }}
+                    placeholder={t("أضف تعليقًا...", "Add a comment...")}
+                    value={commentDrafts[ts.id] || ""}
+                    onChange={(e) => setCommentDrafts({ ...commentDrafts, [ts.id]: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && (commentDrafts[ts.id] || "").trim()) {
+                        onAddTaskComment(ts.id, commentDrafts[ts.id]);
+                        setCommentDrafts({ ...commentDrafts, [ts.id]: "" });
+                      }
+                    }}
+                  />
+                  <Btn
+                    small
+                    onClick={() => {
+                      if (!(commentDrafts[ts.id] || "").trim()) return;
+                      onAddTaskComment(ts.id, commentDrafts[ts.id]);
+                      setCommentDrafts({ ...commentDrafts, [ts.id]: "" });
+                    }}
+                  >
+                    {t("إرسال", "Send")}
+                  </Btn>
+                </div>
+              </div>
             </div>
           );
         })}
       </div>
+
+      {lightbox && (
+        <div
+          onClick={() => setLightbox(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.75)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }}
+        >
+          <img src={lightbox} alt="" style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }} />
+        </div>
+      )}
     </div>
   );
 }
@@ -3958,9 +4166,24 @@ function LeaveRequestForm({ onSubmit, t }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus }) {
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
+  const [taskPhotoBusy, setTaskPhotoBusy] = useState({});
+  const [taskLightbox, setTaskLightbox] = useState(null);
+
+  const handleTaskPhotoUpload = async (taskId, files) => {
+    if (!files || files.length === 0) return;
+    setTaskPhotoBusy((p) => ({ ...p, [taskId]: true }));
+    try {
+      const dataUrls = await Promise.all(Array.from(files).map((f) => compressImage(f, 900, 0.7)));
+      onAddTaskPhotos && onAddTaskPhotos(taskId, dataUrls);
+    } catch (err) {
+      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+    }
+    setTaskPhotoBusy((p) => ({ ...p, [taskId]: false }));
+  };
   if (!employee) {
     return (
       <div
@@ -4019,10 +4242,19 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
     >
       <div style={{ maxWidth: 860, margin: "0 auto" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22 }}>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.espresso }}>{t("مرحبًا", "Welcome")}، {employee.name}</div>
-            <div style={{ fontSize: 12, color: "#8a7a63", marginTop: 3 }}>
-              {branchName(employee.branchId)} · {employee.position}
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            {employee.photo ? (
+              <img src={employee.photo} alt="" style={{ width: 48, height: 48, borderRadius: "50%", objectFit: "cover", border: `1px solid ${COLORS.line}` }} />
+            ) : (
+              <div style={{ width: 48, height: 48, borderRadius: "50%", background: COLORS.paperDark, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 700, color: "#a3927a", flexShrink: 0 }}>
+                {(employee.name || "؟").trim().charAt(0)}
+              </div>
+            )}
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.espresso }}>{t("مرحبًا", "Welcome")}، {employee.name}</div>
+              <div style={{ fontSize: 12, color: "#8a7a63", marginTop: 3 }}>
+                {branchName(employee.branchId)} · {employee.position}
+              </div>
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -4198,10 +4430,99 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
                       <Btn small tone="secondary" onClick={() => onUpdateTaskStatus && onUpdateTaskStatus(ts.id, "قيد التنفيذ")}>{t("↺ إعادة فتح", "↺ Reopen")}</Btn>
                     </div>
                   )}
+
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>
+                      {t("توثيق الإنجاز (صور)", "Completion Documentation (Photos)")} {ts.completionPhotos && ts.completionPhotos.length > 0 ? `(${ts.completionPhotos.length})` : ""}
+                    </div>
+                    {(ts.completionPhotos || []).length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                        {ts.completionPhotos.map((photo, idx) => (
+                          <div key={idx} style={{ position: "relative" }}>
+                            <img
+                              src={photo}
+                              alt=""
+                              onClick={() => setTaskLightbox(photo)}
+                              style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.line}`, cursor: "pointer" }}
+                            />
+                            <button
+                              onClick={() => onRemoveTaskPhoto && onRemoveTaskPhoto(ts.id, idx)}
+                              style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}
+                              title={t("حذف الصورة", "Delete photo")}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      capture="environment"
+                      disabled={!!taskPhotoBusy[ts.id]}
+                      style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 260 }}
+                      onChange={(e) => {
+                        handleTaskPhotoUpload(ts.id, e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                    {taskPhotoBusy[ts.id] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+                  </div>
+
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>
+                      {t("التعليقات", "Comments")} {ts.comments && ts.comments.length > 0 ? `(${ts.comments.length})` : ""}
+                    </div>
+                    {(ts.comments || []).length === 0 && (
+                      <div style={{ fontSize: 11.5, color: "#a3927a", marginBottom: 6 }}>{t("لا توجد تعليقات بعد", "No comments yet")}</div>
+                    )}
+                    {(ts.comments || []).map((c) => (
+                      <div key={c.id} style={{ fontSize: 12, background: COLORS.paperDark, borderRadius: 8, padding: "6px 10px", marginBottom: 6 }}>
+                        <div>{c.text}</div>
+                        <div style={{ fontSize: 10, color: "#a3927a", marginTop: 3 }}>{c.author} · {new Date(c.at).toLocaleString(t("ar-SA-u-nu-latn", "en-US"))}</div>
+                      </div>
+                    ))}
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input
+                        type="text"
+                        style={{ ...inputStyle, flex: 1 }}
+                        placeholder={t("أضف تعليقًا...", "Add a comment...")}
+                        value={taskCommentDrafts[ts.id] || ""}
+                        onChange={(e) => setTaskCommentDrafts({ ...taskCommentDrafts, [ts.id]: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && (taskCommentDrafts[ts.id] || "").trim()) {
+                            onAddTaskComment && onAddTaskComment(ts.id, taskCommentDrafts[ts.id]);
+                            setTaskCommentDrafts({ ...taskCommentDrafts, [ts.id]: "" });
+                          }
+                        }}
+                      />
+                      <Btn
+                        small
+                        onClick={() => {
+                          if (!(taskCommentDrafts[ts.id] || "").trim()) return;
+                          onAddTaskComment && onAddTaskComment(ts.id, taskCommentDrafts[ts.id]);
+                          setTaskCommentDrafts({ ...taskCommentDrafts, [ts.id]: "" });
+                        }}
+                      >
+                        {t("إرسال", "Send")}
+                      </Btn>
+                    </div>
+                  </div>
                 </div>
               );
             })}
         </div>
+
+        {taskLightbox && (
+          <div
+            onClick={() => setTaskLightbox(null)}
+            style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.75)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }}
+          >
+            <img src={taskLightbox} alt="" style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }} />
+          </div>
+        )}
 
         <SectionTitle>{t("طلب إجازة جديد", "New Leave Request")}</SectionTitle>
         <LeaveRequestForm onSubmit={onSubmitLeaveRequest} t={t} />
