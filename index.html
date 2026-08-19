@@ -246,6 +246,7 @@ const NAV = [
   { key: "branches", label: "الكيانات والفروع", labelEn: "Entities & Branches", icon: "◫" },
   { key: "attendance", label: "الحضور والإجازات", labelEn: "Attendance & Leave", icon: "◔" },
   { key: "leaveRequests", label: "طلبات الإجازات", labelEn: "Leave Requests", icon: "✉" },
+  { key: "tasks", label: "مهام الموظفين", labelEn: "Employee Tasks", icon: "☑" },
   { key: "payroll", label: "الرواتب و GOSI", labelEn: "Payroll & GOSI", icon: "◎" },
   { key: "eos", label: "نهاية الخدمة", labelEn: "End of Service", icon: "◆" },
   { key: "reports", label: "التقارير", labelEn: "Reports", icon: "▥" },
@@ -274,20 +275,21 @@ const LEAVE_REQUEST_STATUS_LABELS_EN = {
 };
 const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late" };
 const PAYROLL_ITEM_TYPE_LABELS_EN = { "سلفة": "Advance", "خصم": "Deduction", "حافز": "Incentive" };
+const TASK_STATUS_LABELS_EN = { "قيد التنفيذ": "In Progress", "مكتملة": "Completed", "متأخرة": "Overdue" };
 const EOS_REASON_LABELS_EN = { "استقالة": "Resignation", "فصل من صاحب العمل": "Termination by Employer", "انتهاء عقد محدد المدة": "Fixed-term Contract End" };
 function trLabel(t, dict, v) {
   return t(v, dict[v] || v);
 }
 
 const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null };
-const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "payroll", "eos", "settings"];
+const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "tasks", "payroll", "eos", "settings"];
 
 function navForRole(role) {
   if (role === "admin") return [...NAV, { key: "users", label: "المستخدمون", labelEn: "Users", icon: "◑" }];
   if (role === "manager") return NAV.filter((n) => n.key !== "reports"); // كل التبويبات فيما عدا التقارير، وبدون تبويب المستخدمين
   if (role === "entity_manager") return NAV.filter((n) => n.key !== "reports"); // كل التبويبات عدا التقارير (سجل الدخول حصري للأدمن العام) وبدون تبويب المستخدمين
   if (role === "branch_manager")
-    return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "payroll", "eos"].includes(n.key));
+    return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "tasks", "payroll", "eos"].includes(n.key));
   return [];
 }
 
@@ -319,6 +321,13 @@ function daysOverlapInMonth(from, to, monthStr) {
   const end = e < monthEnd ? e : monthEnd;
   if (end < start) return 0;
   return Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+}
+
+/* إضافة عدد شهور لصيغة "YYYY-MM" وإرجاع نفس الصيغة */
+function addMonthsToStr(monthStr, n) {
+  const [y, m] = monthStr.split("-").map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
 /* رصيد الإجازة السنوية: تراكم شهري حسب مدة الخدمة الفعلية منذ آخر تاريخ ذكرى تعيين
@@ -476,6 +485,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [attendance, setAttendance] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [payrollItems, setPayrollItems] = useState([]);
+  const [tasks, setTasks] = useState([]);
   const [gosiRates, setGosiRates] = useState({
     saudiEmployee: 9.75,
     saudiEmployer: 11.75,
@@ -505,6 +515,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             gosiRates: d.gosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
             vehicles: d.vehicles || [],
             payrollItems: d.payrollItems || [],
+            tasks: d.tasks || [],
           };
           setEntities(next.entities);
           setBranches(next.branches);
@@ -515,10 +526,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setVehicles(next.vehicles);
           setGosiRates(next.gosiRates);
           setPayrollItems(next.payrollItems);
+          setTasks(next.tasks);
           lastSyncedRef.current = JSON.stringify(next);
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [] }).catch(() => {});
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [] }).catch(() => {});
         }
         setSyncError("");
         setLoaded(true);
@@ -534,7 +546,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   /* حفظ ومزامنة تلقائية إلى Firestore — تنعكس فورًا على كل الأجهزة المتصلة */
   useEffect(() => {
     if (!loaded) return;
-    const payload = { entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems };
+    const payload = { entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, tasks };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) return;
     const t = setTimeout(() => {
@@ -547,7 +559,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         .catch(() => setSaveMsg("تعذر الحفظ — تحقّق من الإنترنت"));
     }, 400);
     return () => clearTimeout(t);
-  }, [entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, loaded]);
+  }, [entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, tasks, loaded]);
 
   const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
   const entityName = (id) => entities.find((e) => e.id === id)?.name || "—";
@@ -582,6 +594,26 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const scopedPayrollItems = isBranchManager || isEntityManager
     ? payrollItems.filter((p) => scopedEmployees.some((e) => e.id === p.employeeId))
     : payrollItems;
+  const scopedTasks = isBranchManager || isEntityManager
+    ? tasks.filter((ts) => scopedEmployees.some((e) => e.id === ts.employeeId))
+    : tasks;
+
+  /* إدارة مهام الموظفين: تسجيل مهمة جديدة، تحديث حالتها، حذفها */
+  const addTask = (task) => {
+    const newTask = { ...task, id: uid(), status: "قيد التنفيذ", assignedBy: currentUser.name, assignedAt: new Date().toISOString() };
+    setTasks((prev) => [newTask, ...prev]);
+    logActivity && logActivity("تسجيل مهمة جديدة", "tasks", `${employees.find((e) => e.id === task.employeeId)?.name || ""} — ${task.title}`);
+  };
+  const updateTaskStatus = (taskId, status) => {
+    setTasks((prev) => prev.map((ts) => (ts.id === taskId ? { ...ts, status } : ts)));
+    const ts = tasks.find((x) => x.id === taskId);
+    logActivity && logActivity(status === "مكتملة" ? "إنهاء مهمة" : "إعادة فتح مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+  };
+  const removeTask = (taskId) => {
+    const ts = tasks.find((x) => x.id === taskId);
+    setTasks((prev) => prev.filter((x) => x.id !== taskId));
+    logActivity && logActivity("حذف مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+  };
 
   /* دورة اعتماد طلبات الإجازة: موافقة مبدئية من مدير الكيان، ثم موافقة نهائية من الأدمن/المسؤول العام */
   const preliminaryApproveLeaveRequest = (reqId) => {
@@ -736,6 +768,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         onLogout={onLogout}
         setUsers={setUsers}
         logActivity={logActivity}
+        tasks={tasks.filter((ts) => ts.employeeId === myEmployee?.id)}
+        onUpdateTaskStatus={updateTaskStatus}
       />
     );
   }
@@ -922,6 +956,17 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             onPreliminaryReject={preliminaryRejectLeaveRequest}
             onFinalApprove={finalApproveLeaveRequest}
             onFinalReject={finalRejectLeaveRequest}
+            branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
+          />
+        )}
+        {tab === "tasks" && (
+          <TasksTab
+            employees={scopedEmployees}
+            branches={scopedBranches}
+            tasks={scopedTasks}
+            onAddTask={addTask}
+            onUpdateTaskStatus={updateTaskStatus}
+            onRemoveTask={removeTask}
             branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
           />
         )}
@@ -1223,7 +1268,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
             <input type="number" style={inputStyle} value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
           </Field>
           <Field label={t("تاريخ التعيين", "Hire Date")}>
-            <input type="date" style={inputStyle} value={form.joinDate} onChange={(e) => setForm({ ...form, joinDate: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={form.joinDate} onChange={(e) => setForm({ ...form, joinDate: e.target.value })} />
           </Field>
           <Field label={t("رقم الجوال", "Mobile Number")}>
             <input style={inputStyle} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
@@ -1240,7 +1285,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.coffee, margin: "14px 0 8px" }}>{t("بيانات الإقامة والعقد", "Iqama & Contract Details")}</div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
           <Field label={t("تاريخ انتهاء الإقامة", "Iqama Expiry Date")}>
-            <input type="date" style={inputStyle} value={form.iqamaExpiry} onChange={(e) => setForm({ ...form, iqamaExpiry: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={form.iqamaExpiry} onChange={(e) => setForm({ ...form, iqamaExpiry: e.target.value })} />
           </Field>
           <Field label={t("المهنة على الإقامة", "Profession on Iqama")}>
             <input style={inputStyle} value={form.iqamaProfession} onChange={(e) => setForm({ ...form, iqamaProfession: e.target.value })} />
@@ -1252,10 +1297,10 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
             </select>
           </Field>
           <Field label={t("بداية العقد", "Contract Start")}>
-            <input type="date" style={inputStyle} value={form.contractStart} onChange={(e) => setForm({ ...form, contractStart: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={form.contractStart} onChange={(e) => setForm({ ...form, contractStart: e.target.value })} />
           </Field>
           <Field label={t("نهاية العقد", "Contract End")}>
-            <input type="date" style={inputStyle} value={form.contractEnd} onChange={(e) => setForm({ ...form, contractEnd: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={form.contractEnd} onChange={(e) => setForm({ ...form, contractEnd: e.target.value })} />
           </Field>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -1375,6 +1420,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
       Number(emp.govFees?.other || 0)
   );
 
+  const isSaudi = emp.nationality === "سعودي";
   const branchName = branches.find((b) => b.id === emp.branchId)?.name || "—";
   const iqamaSt = expiryStatus(emp.iqamaExpiry, t);
   const contractSt = expiryStatus(emp.contractEnd, t);
@@ -1528,14 +1574,14 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
               {canEditWeeklyOff ? (
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <input
-                    type="time"
+                    type="time" lang="en"
                     style={{ ...inputStyle, padding: "4px 8px", fontSize: 12.5, width: 100 }}
                     value={emp.workShift?.start || "08:00"}
                     onChange={(e) => onUpdateWorkShift && onUpdateWorkShift(emp.id, { ...(emp.workShift || {}), start: e.target.value })}
                   />
                   <span style={{ color: "#a3927a" }}>—</span>
                   <input
-                    type="time"
+                    type="time" lang="en"
                     style={{ ...inputStyle, padding: "4px 8px", fontSize: 12.5, width: 100 }}
                     value={emp.workShift?.end || "17:00"}
                     onChange={(e) => onUpdateWorkShift && onUpdateWorkShift(emp.id, { ...(emp.workShift || {}), end: e.target.value })}
@@ -1575,6 +1621,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
             </div>
           </Section>
 
+          {!isSaudi && (
           <Section title={t("الرسوم الحكومية", "Government Fees")}>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 10 }}>
               <Field label={t("رسوم تجديد الإقامة (﷼)", "Iqama Renewal Fee (SAR)")}>
@@ -1641,10 +1688,11 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
               {t("اكتب القيم ثم اضغط \"حفظ الرسوم\" لحفظها وتحديث الإجمالي.", "Enter the values then press \"Save Fees\" to save them and update the total.")}
             </div>
           </Section>
+          )}
 
           <Section title={`${t("المسار الوظيفي", "Career Path")} (${career.length})`}>
             <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-              <input type="date" style={{ ...inputStyle, maxWidth: 140 }} value={careerForm.date} onChange={(e) => setCareerForm({ ...careerForm, date: e.target.value })} />
+              <input type="date" lang="en" style={{ ...inputStyle, maxWidth: 140 }} value={careerForm.date} onChange={(e) => setCareerForm({ ...careerForm, date: e.target.value })} />
               <input
                 style={{ ...inputStyle, maxWidth: 200 }}
                 placeholder={t("مثال: ترقية إلى مشرف فرع", "e.g. Promoted to Branch Supervisor")}
@@ -1796,7 +1844,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                   <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{r.nationalId || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.iqamaExpiry || ""}
                       onChange={(e) => update(r.id, "iqamaExpiry", e.target.value)}
@@ -1818,7 +1866,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                   </td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.contractEnd || ""}
                       onChange={(e) => update(r.id, "contractEnd", e.target.value)}
@@ -2016,7 +2064,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   </td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.crExpiry || ""}
                       onChange={(e) => updateBranch(r.id, "crExpiry", e.target.value)}
@@ -2035,7 +2083,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   </td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.civilDefenseExpiry || ""}
                       onChange={(e) => updateBranch(r.id, "civilDefenseExpiry", e.target.value)}
@@ -2054,7 +2102,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   </td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.municipalityExpiry || ""}
                       onChange={(e) => updateBranch(r.id, "municipalityExpiry", e.target.value)}
@@ -2101,7 +2149,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   <td style={{ padding: "9px 12px" }}>{r.position}</td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.healthCertExpiry || ""}
                       onChange={(e) => updateEmployee(r.id, "healthCertExpiry", e.target.value)}
@@ -2127,7 +2175,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   </td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.insuranceExpiry || ""}
                       onChange={(e) => updateEmployee(r.id, "insuranceExpiry", e.target.value)}
@@ -2167,10 +2215,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
             </select>
           </Field>
           <Field label={t("تاريخ انتهاء الاستمارة", "Registration Expiry")}>
-            <input type="date" style={inputStyle} value={vehicleForm.istimaraExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, istimaraExpiry: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={vehicleForm.istimaraExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, istimaraExpiry: e.target.value })} />
           </Field>
           <Field label={t("تاريخ انتهاء الفحص الدوري", "Periodic Inspection Expiry")}>
-            <input type="date" style={inputStyle} value={vehicleForm.periodicInspectionExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, periodicInspectionExpiry: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={vehicleForm.periodicInspectionExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, periodicInspectionExpiry: e.target.value })} />
           </Field>
           <Field label={t("شركة تأمين السيارة", "Vehicle Insurance Company")}>
             <input style={inputStyle} value={vehicleForm.insuranceCompany} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceCompany: e.target.value })} />
@@ -2179,7 +2227,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
             <input style={inputStyle} value={vehicleForm.insurancePolicyNumber} onChange={(e) => setVehicleForm({ ...vehicleForm, insurancePolicyNumber: e.target.value })} />
           </Field>
           <Field label={t("تاريخ انتهاء تأمين السيارة", "Vehicle Insurance Expiry")}>
-            <input type="date" style={inputStyle} value={vehicleForm.insuranceExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceExpiry: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={vehicleForm.insuranceExpiry} onChange={(e) => setVehicleForm({ ...vehicleForm, insuranceExpiry: e.target.value })} />
           </Field>
         </div>
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
@@ -2220,7 +2268,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.istimaraExpiry || ""}
                       onChange={(e) => updateVehicle(r.id, "istimaraExpiry", e.target.value)}
@@ -2232,7 +2280,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   </td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.periodicInspectionExpiry || ""}
                       onChange={(e) => updateVehicle(r.id, "periodicInspectionExpiry", e.target.value)}
@@ -2246,7 +2294,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   <td style={{ padding: "9px 12px" }}>{r.insurancePolicyNumber || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
-                      type="date"
+                      type="date" lang="en"
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.insuranceExpiry || ""}
                       onChange={(e) => updateVehicle(r.id, "insuranceExpiry", e.target.value)}
@@ -2503,10 +2551,10 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
             </select>
           </Field>
           <Field label={t("من تاريخ", "From Date")}>
-            <input type="date" style={inputStyle} value={leaveForm.from} onChange={(e) => setLeaveForm({ ...leaveForm, from: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={leaveForm.from} onChange={(e) => setLeaveForm({ ...leaveForm, from: e.target.value })} />
           </Field>
           <Field label={t("إلى تاريخ", "To Date")}>
-            <input type="date" style={inputStyle} value={leaveForm.to} onChange={(e) => setLeaveForm({ ...leaveForm, to: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={leaveForm.to} onChange={(e) => setLeaveForm({ ...leaveForm, to: e.target.value })} />
           </Field>
           <div style={{ display: "flex", alignItems: "flex-end" }}>
             <Btn onClick={addLeave}>{t("تسجيل الإجازة", "Register Leave")}</Btn>
@@ -2612,7 +2660,7 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
             </select>
           </Field>
           <Field label={t("التاريخ", "Date")}>
-            <input type="date" style={inputStyle} value={attForm.date} onChange={(e) => setAttForm({ ...attForm, date: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={attForm.date} onChange={(e) => setAttForm({ ...attForm, date: e.target.value })} />
           </Field>
           <Field label={t("الحالة", "Status")}>
             <select style={inputStyle} value={attForm.status} onChange={(e) => setAttForm({ ...attForm, status: e.target.value })}>
@@ -2671,14 +2719,35 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
-  const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", month: new Date().toISOString().slice(0, 7), note: "" });
+  const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", month: new Date().toISOString().slice(0, 7), note: "", repayment: "دفعة واحدة", installments: 2 });
   const [payslip, setPayslip] = useState(null);
 
   const addItem = () => {
     if (!itemForm.employeeId || !itemForm.amount || Number(itemForm.amount) <= 0) return;
-    setPayrollItems((prev) => [...prev, { ...itemForm, amount: Number(itemForm.amount), id: uid() }]);
-    logActivity && logActivity(`تسجيل ${itemForm.type}`, "payroll", `${empName(itemForm.employeeId)} — ${fmt(Number(itemForm.amount))} ﷼`);
-    setItemForm({ employeeId: "", type: itemForm.type, amount: "", month: itemForm.month, note: "" });
+    const totalAmount = Number(itemForm.amount);
+
+    /* السلفة على دفعات: تُقسَّم على عدة أشهر متتالية بدءًا من شهر الاستحقاق المحدد */
+    if (itemForm.type === "سلفة" && itemForm.repayment === "أقساط" && Number(itemForm.installments) > 1) {
+      const n = Math.floor(Number(itemForm.installments));
+      const baseShare = Math.floor((totalAmount / n) * 100) / 100;
+      const lastShare = Math.round((totalAmount - baseShare * (n - 1)) * 100) / 100;
+      const loanGroupId = uid();
+      const installmentItems = Array.from({ length: n }, (_, i) => ({
+        employeeId: itemForm.employeeId,
+        type: "سلفة",
+        amount: i === n - 1 ? lastShare : baseShare,
+        month: addMonthsToStr(itemForm.month, i),
+        note: `${itemForm.note ? itemForm.note + " — " : ""}قسط ${i + 1} من ${n}`,
+        loanGroupId,
+        id: uid(),
+      }));
+      setPayrollItems((prev) => [...prev, ...installmentItems]);
+      logActivity && logActivity(`تسجيل سلفة على ${n} دفعات`, "payroll", `${empName(itemForm.employeeId)} — إجمالي ${fmt(totalAmount)} ﷼`);
+    } else {
+      setPayrollItems((prev) => [...prev, { ...itemForm, amount: totalAmount, id: uid() }]);
+      logActivity && logActivity(`تسجيل ${itemForm.type}`, "payroll", `${empName(itemForm.employeeId)} — ${fmt(totalAmount)} ﷼`);
+    }
+    setItemForm({ employeeId: "", type: itemForm.type, amount: "", month: itemForm.month, note: "", repayment: "دفعة واحدة", installments: 2 });
   };
   const removeItem = (id) => setPayrollItems((prev) => prev.filter((p) => p.id !== id));
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
@@ -2805,9 +2874,28 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
           <Field label={t("المبلغ", "Amount")}>
             <input type="number" style={inputStyle} value={itemForm.amount} onChange={(e) => setItemForm({ ...itemForm, amount: e.target.value })} />
           </Field>
-          <Field label={t("شهر الاستحقاق", "Applicable Month")}>
+          <Field label={t(itemForm.type === "سلفة" && itemForm.repayment === "أقساط" ? "شهر أول قسط" : "شهر الاستحقاق", itemForm.type === "سلفة" && itemForm.repayment === "أقساط" ? "First Installment Month" : "Applicable Month")}>
             <input type="month" style={inputStyle} value={itemForm.month} onChange={(e) => setItemForm({ ...itemForm, month: e.target.value })} />
           </Field>
+          {itemForm.type === "سلفة" && (
+            <Field label={t("طريقة السداد", "Repayment Method")}>
+              <select style={inputStyle} value={itemForm.repayment} onChange={(e) => setItemForm({ ...itemForm, repayment: e.target.value })}>
+                <option value="دفعة واحدة">{t("دفعة واحدة", "Single Payment")}</option>
+                <option value="أقساط">{t("على دفعات", "Installments")}</option>
+              </select>
+            </Field>
+          )}
+          {itemForm.type === "سلفة" && itemForm.repayment === "أقساط" && (
+            <Field label={t("عدد الدفعات", "Number of Installments")}>
+              <input
+                type="number"
+                min="2"
+                style={inputStyle}
+                value={itemForm.installments}
+                onChange={(e) => setItemForm({ ...itemForm, installments: e.target.value })}
+              />
+            </Field>
+          )}
           <Field label={t("ملاحظة / السبب", "Note / Reason")}>
             <input type="text" style={inputStyle} value={itemForm.note} onChange={(e) => setItemForm({ ...itemForm, note: e.target.value })} />
           </Field>
@@ -2817,8 +2905,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         </div>
         <div style={{ marginTop: 10, fontSize: 11.5, color: "#a3927a" }}>
           {t(
-            'السلفة والخصم يُطرحان من صافي راتب الموظف في "شهر الاستحقاق" المحدد، والحافز يُضاف إليه. يظهر أثر كل قيد في جدول كشف الرواتب أدناه عند اختيار نفس الشهر.',
-            'Advances and deductions are subtracted from the employee\'s net salary in the selected "applicable month", and incentives are added to it. The effect of each entry appears in the payroll table below when that same month is selected.'
+            'السلفة والخصم يُطرحان من صافي راتب الموظف في "شهر الاستحقاق" المحدد، والحافز يُضاف إليه. عند اختيار "على دفعات" يُقسَّم مبلغ السلفة بالتساوي على عدد الأشهر المحدد بدءًا من الشهر المختار، ويُسجَّل كل قسط كقيد سلفة مستقل في شهره. يظهر أثر كل قيد في جدول كشف الرواتب أدناه عند اختيار نفس الشهر.',
+            'Advances and deductions are subtracted from the employee\'s net salary in the selected "applicable month", and incentives are added to it. When "Installments" is selected, the advance amount is split evenly across the chosen number of months starting from the selected month, with each installment recorded as its own advance entry in its month. The effect of each entry appears in the payroll table below when that same month is selected.'
           )}
         </div>
       </div>
@@ -3155,7 +3243,7 @@ function EOSTab({ employees }) {
             </select>
           </Field>
           <Field label={t("تاريخ انتهاء الخدمة", "Service End Date")}>
-            <input type="date" style={inputStyle} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            <input type="date" lang="en" style={inputStyle} value={endDate} onChange={(e) => setEndDate(e.target.value)} />
           </Field>
           <Field label={t("سبب انتهاء الخدمة", "Reason for Termination")}>
             <select style={inputStyle} value={reason} onChange={(e) => setReason(e.target.value)}>
@@ -3692,6 +3780,137 @@ function LeaveRequestsTab({ employees, leaveRequests, isEntityManager, isFinalAp
   );
 }
 
+/* ============ مهام الموظفين ============ */
+function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, onRemoveTask, branchName }) {
+  const { t } = useLang();
+  const [form, setForm] = useState({ employeeId: "", title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "" });
+  const [statusFilter, setStatusFilter] = useState("");
+  const [branchFilter, setBranchFilter] = useState("");
+  const empName = (id) => employees.find((e) => e.id === id)?.name || t("موظف محذوف", "Deleted employee");
+  const todayISO = new Date().toISOString().slice(0, 10);
+
+  const submit = () => {
+    if (!form.employeeId || !form.title.trim() || !form.to) return;
+    onAddTask && onAddTask({ ...form, title: form.title.trim(), description: form.description.trim() });
+    setForm({ employeeId: form.employeeId, title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "" });
+  };
+
+  const effectiveStatus = (ts) => (ts.status !== "مكتملة" && ts.to && ts.to < todayISO ? "متأخرة" : ts.status);
+  const statusTone = (s) => (s === "مكتملة" ? "green" : s === "متأخرة" ? "brick" : "gold");
+
+  const filteredEmployees = branchFilter ? employees.filter((e) => e.branchId === branchFilter) : employees;
+
+  const visibleTasks = tasks
+    .filter((ts) => !branchFilter || employees.find((e) => e.id === ts.employeeId)?.branchId === branchFilter)
+    .filter((ts) => !statusFilter || effectiveStatus(ts) === statusFilter)
+    .slice()
+    .sort((a, b) => (a.assignedAt < b.assignedAt ? 1 : -1));
+
+  const openCount = tasks.filter((ts) => effectiveStatus(ts) === "قيد التنفيذ").length;
+  const overdueCount = tasks.filter((ts) => effectiveStatus(ts) === "متأخرة").length;
+  const doneCount = tasks.filter((ts) => effectiveStatus(ts) === "مكتملة").length;
+
+  return (
+    <div>
+      <Header title={t("مهام الموظفين", "Employee Tasks")} subtitle={t("إسناد المهام للموظفين وتحديد فترة الإنجاز ومتابعة حالتها", "Assign tasks to employees, set the completion period, and track their status")} />
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+        <ReceiptCard label={t("قيد التنفيذ", "In Progress")} value={fmt(openCount)} tone={COLORS.gold} />
+        <ReceiptCard label={t("متأخرة", "Overdue")} value={fmt(overdueCount)} tone={COLORS.brick} />
+        <ReceiptCard label={t("مكتملة", "Completed")} value={fmt(doneCount)} tone={COLORS.green} />
+      </div>
+
+      <SectionTitle className="no-print">{t("إسناد مهمة جديدة", "Assign a New Task")}</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }} className="no-print">
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <Field label={t("الموظف", "Employee")}>
+            <select style={inputStyle} value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })}>
+              <option value="">{t("اختر الموظف", "Select employee")}</option>
+              {employees.map((e) => (
+                <option key={e.id} value={e.id}>{e.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t("عنوان المهمة", "Task Title")}>
+            <input type="text" style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          </Field>
+          <Field label={t("من تاريخ", "From")}>
+            <input type="date" style={inputStyle} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} />
+          </Field>
+          <Field label={t("إلى تاريخ (موعد الإنجاز)", "To (Due Date)")}>
+            <input type="date" style={inputStyle} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} />
+          </Field>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <Field label={t("وصف المهمة (اختياري)", "Task Description (optional)")}>
+            <textarea
+              style={{ ...inputStyle, width: "100%", minHeight: 60, resize: "vertical", fontFamily: "inherit" }}
+              value={form.description}
+              onChange={(e) => setForm({ ...form, description: e.target.value })}
+            />
+          </Field>
+        </div>
+        <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+          <Btn onClick={submit}>{t("📌 إسناد المهمة", "📌 Assign Task")}</Btn>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }} className="no-print">
+        <Field label={t("تصفية بالفرع", "Filter by Branch")}>
+          <select style={inputStyle} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
+            <option value="">{t("كل الفروع", "All Branches")}</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label={t("تصفية بالحالة", "Filter by Status")}>
+          <select style={inputStyle} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="">{t("كل الحالات", "All Statuses")}</option>
+            <option value="قيد التنفيذ">{t("قيد التنفيذ", "In Progress")}</option>
+            <option value="متأخرة">{t("متأخرة", "Overdue")}</option>
+            <option value="مكتملة">{t("مكتملة", "Completed")}</option>
+          </select>
+        </Field>
+      </div>
+
+      <SectionTitle>{t("قائمة المهام", "Task List")} ({visibleTasks.length})</SectionTitle>
+      <div>
+        {visibleTasks.length === 0 && (
+          <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+            <Empty text={t("لا توجد مهام مسجّلة", "No tasks registered")} />
+          </div>
+        )}
+        {visibleTasks.map((ts) => {
+          const st = effectiveStatus(ts);
+          return (
+            <div key={ts.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{ts.title}</div>
+                  <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{empName(ts.employeeId)} · {branchName(ts.employeeId)}</div>
+                  <div style={{ fontSize: 12.5, marginTop: 6, fontFamily: "Consolas, monospace" }}>{ts.from} → {ts.to}</div>
+                  {ts.description && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{ts.description}</div>}
+                  <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 6 }}>{t("أُسندت بواسطة", "Assigned by")}: {ts.assignedBy || "—"}</div>
+                </div>
+                <Stamp tone={statusTone(st)}>{trLabel(t, TASK_STATUS_LABELS_EN, st)}</Stamp>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }} className="no-print">
+                {ts.status !== "مكتملة" ? (
+                  <Btn small onClick={() => onUpdateTaskStatus(ts.id, "مكتملة")}>{t("✔ تمييز كمكتملة", "✔ Mark Completed")}</Btn>
+                ) : (
+                  <Btn small tone="secondary" onClick={() => onUpdateTaskStatus(ts.id, "قيد التنفيذ")}>{t("↺ إعادة فتح", "↺ Reopen")}</Btn>
+                )}
+                <Btn small tone="danger" onClick={() => onRemoveTask(ts.id)}>{t("✕ حذف", "✕ Delete")}</Btn>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 
 function LeaveRequestForm({ onSubmit, t }) {
   const [form, setForm] = useState({ type: "سنوية", from: "", to: "", note: "" });
@@ -3718,10 +3937,10 @@ function LeaveRequestForm({ onSubmit, t }) {
           </select>
         </Field>
         <Field label={t("من تاريخ", "From")}>
-          <input type="date" style={inputStyle} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} />
+          <input type="date" lang="en" style={inputStyle} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} />
         </Field>
         <Field label={t("إلى تاريخ", "To")}>
-          <input type="date" style={inputStyle} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} />
+          <input type="date" lang="en" style={inputStyle} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} />
         </Field>
         <Field label={t("ملاحظة (اختياري)", "Note (optional)")}>
           <input style={inputStyle} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
@@ -3739,7 +3958,7 @@ function LeaveRequestForm({ onSubmit, t }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity }) {
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   if (!employee) {
@@ -3944,6 +4163,44 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
             <div style={{ fontWeight: 700, marginBottom: 6 }}>{employee.contractEnd || "—"}</div>
             <Stamp tone={contractStatus.tone}>{contractStatus.label}</Stamp>
           </div>
+        </div>
+
+        <SectionTitle>{t("مهامي", "My Tasks")}</SectionTitle>
+        <div style={{ marginBottom: 20 }}>
+          {(!tasks || tasks.length === 0) && (
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+              <Empty text={t("لا توجد مهام مسندة إليك", "No tasks assigned to you")} />
+            </div>
+          )}
+          {(tasks || [])
+            .slice()
+            .sort((a, b) => (a.assignedAt < b.assignedAt ? 1 : -1))
+            .map((ts) => {
+              const isOverdue = ts.status !== "مكتملة" && ts.to && ts.to < todayISO;
+              const st = isOverdue ? "متأخرة" : ts.status;
+              const tone = st === "مكتملة" ? "green" : st === "متأخرة" ? "brick" : "gold";
+              return (
+                <div key={ts.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+                    <div>
+                      <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{ts.title}</div>
+                      <div style={{ fontSize: 12.5, marginTop: 6, fontFamily: "Consolas, monospace" }}>{ts.from} → {ts.to}</div>
+                      {ts.description && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{ts.description}</div>}
+                    </div>
+                    <Stamp tone={tone}>{trLabel(t, TASK_STATUS_LABELS_EN, st)}</Stamp>
+                  </div>
+                  {ts.status !== "مكتملة" ? (
+                    <div style={{ marginTop: 10 }}>
+                      <Btn small onClick={() => onUpdateTaskStatus && onUpdateTaskStatus(ts.id, "مكتملة")}>{t("✔ تمييز كمكتملة", "✔ Mark Completed")}</Btn>
+                    </div>
+                  ) : (
+                    <div style={{ marginTop: 10 }}>
+                      <Btn small tone="secondary" onClick={() => onUpdateTaskStatus && onUpdateTaskStatus(ts.id, "قيد التنفيذ")}>{t("↺ إعادة فتح", "↺ Reopen")}</Btn>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
         </div>
 
         <SectionTitle>{t("طلب إجازة جديد", "New Leave Request")}</SectionTitle>
@@ -4307,10 +4564,10 @@ function ReportsTab({ activityLog, users }) {
           </select>
         </Field>
         <Field label={t("من تاريخ", "From Date")}>
-          <input type="date" style={inputStyle} value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
+          <input type="date" lang="en" style={inputStyle} value={fromDate} onChange={(e) => setFromDate(e.target.value)} />
         </Field>
         <Field label={t("إلى تاريخ", "To Date")}>
-          <input type="date" style={inputStyle} value={toDate} onChange={(e) => setToDate(e.target.value)} />
+          <input type="date" lang="en" style={inputStyle} value={toDate} onChange={(e) => setToDate(e.target.value)} />
         </Field>
         <Btn onClick={() => window.print()}>{t("🖶 طباعة التقرير", "🖶 Print Report")}</Btn>
       </div>
