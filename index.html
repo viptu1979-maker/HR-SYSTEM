@@ -3953,10 +3953,10 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
             <input type="text" style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
           </Field>
           <Field label={t("من تاريخ", "From")}>
-            <input type="date" style={inputStyle} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} />
           </Field>
           <Field label={t("إلى تاريخ (موعد الإنجاز)", "To (Due Date)")}>
-            <input type="date" style={inputStyle} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} />
+            <input type="date" lang="en" style={inputStyle} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} />
           </Field>
         </div>
         <div style={{ marginTop: 10 }}>
