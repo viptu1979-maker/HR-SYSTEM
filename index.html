@@ -104,6 +104,49 @@
     }
   }
   .print-footer-note { display: none; }
+
+  @keyframes pulse-save {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+
+  /* على الشاشات الضيقة: تحويل الجداول العريضة (class="responsive-table") إلى كروت رأسية
+     بدل التمرير الأفقي — كل صف يبقى كارت مستقل وكل عمود يظهر كسطر "تسمية: قيمة" */
+  @media (max-width: 860px) {
+    .responsive-table-wrap { overflow: visible !important; }
+    .responsive-table { min-width: 0 !important; }
+    .responsive-table thead { display: none; }
+    .responsive-table, .responsive-table tbody, .responsive-table tr, .responsive-table td {
+      display: block;
+      width: 100% !important;
+    }
+    .responsive-table tr {
+      border-top: 1px solid #E4D9C4 !important;
+      padding: 10px 12px;
+    }
+    .responsive-table tbody tr:first-child { border-top: none !important; }
+    .responsive-table td {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px 10px;
+      padding: 6px 2px !important;
+      border: none !important;
+      text-align: right;
+      position: static !important;
+      box-shadow: none !important;
+      background: transparent !important;
+    }
+    .responsive-table td::before {
+      content: attr(data-label);
+      font-weight: 700;
+      color: #8a7a63;
+      font-size: 11px;
+      flex-shrink: 0;
+    }
+    .responsive-table td > * { min-width: 0; }
+  }
 </style>
 </head>
 <body>
@@ -133,6 +176,18 @@ const LangContext = createContext({ lang: "ar", dir: "rtl", t: (ar) => ar, toggl
 function useLang() {
   return useContext(LangContext);
 }
+
+/* هل عرض الشاشة الحالي في نطاق الجوال؟ — يتحدّث تلقائيًا مع تغيير حجم النافذة (تدوير الجوال مثلًا) */
+function useIsMobile(breakpoint = 860) {
+  const [isMobile, setIsMobile] = useState(() => (typeof window !== "undefined" ? window.innerWidth <= breakpoint : false));
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth <= breakpoint);
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, [breakpoint]);
+  return isMobile;
+}
+
 function LangProvider({ children }) {
   const [lang, setLang] = useState(() => {
     try {
@@ -174,6 +229,61 @@ function LangToggle({ style }) {
       }}
     >
       {lang === "ar" ? "English" : "العربية"}
+    </button>
+  );
+}
+
+/* أيقونة حالة الحفظ/المزامنة — تعكس أي تعديل يعمله المستخدم:
+   💾 تغييرات غير محفوظة (اضغط للحفظ) → ⏳ جارِ الحفظ → ✓ تم الحفظ → ⚠ تعذر الحفظ (مشكلة اتصال)
+   الحفظ هنا يدوي بالكامل — البيانات ما بتتزامن مع القاعدة إلا لما المستخدم يضغط الأيقونة بنفسه */
+function SaveStatusIcon({ saving, syncError, dirty, onSave, compact = false }) {
+  const { t } = useLang();
+  let icon = "✓";
+  let color = "#5FA875";
+  let bg = "rgba(95,168,117,0.15)";
+  let label = t("تم الحفظ", "Saved");
+  if (syncError) {
+    icon = "⚠";
+    color = "#E8A9A0";
+    bg = "rgba(232,169,160,0.18)";
+    label = t("تعذر الحفظ — تحقّق من الإنترنت", "Couldn't save — check your connection");
+  } else if (saving) {
+    icon = "⏳";
+    color = COLORS.gold;
+    bg = "rgba(216,168,90,0.18)";
+    label = t("جارِ الحفظ...", "Saving...");
+  } else if (dirty) {
+    icon = "💾";
+    color = "#fff";
+    bg = COLORS.brick;
+    label = t("لديك تغييرات غير محفوظة — اضغط للحفظ", "You have unsaved changes — tap to save");
+  }
+  const clickable = dirty && !saving && !syncError && typeof onSave === "function";
+  return (
+    <button
+      type="button"
+      onClick={clickable ? onSave : undefined}
+      disabled={!clickable}
+      title={label}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: compact ? "5px 8px" : "5px 10px",
+        borderRadius: 20,
+        background: bg,
+        color,
+        fontSize: compact ? 13 : 11.5,
+        fontWeight: 700,
+        flexShrink: 0,
+        whiteSpace: "nowrap",
+        border: "none",
+        cursor: clickable ? "pointer" : "default",
+        animation: dirty && !saving ? "pulse-save 1.4s ease-in-out infinite" : "none",
+      }}
+    >
+      <span style={{ fontSize: compact ? 14 : 12, lineHeight: 1 }}>{icon}</span>
+      {!compact && <span>{label}</span>}
     </button>
   );
 }
@@ -667,9 +777,29 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   });
   const [loaded, setLoaded] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const [syncError, setSyncError] = useState("");
   const [showChangePassword, setShowChangePassword] = useState(false);
+  const isMobile = useIsMobile();
+  const [navOpen, setNavOpen] = useState(false);
   const lastSyncedRef = useRef("");
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
+
+  /* تحذير المستخدم لو حاول يغلق الصفحة أو يخرج منها وفيه تعديلات لسه ما اتحفظتش */
+  useEffect(() => {
+    const handler = (e) => {
+      if (dirtyRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, []);
 
   /* الاستماع لحظيًا لبيانات النظام من Firestore — أي تعديل من أي جهاز يوصل هنا فورًا */
   useEffect(() => {
@@ -677,6 +807,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       (snap) => {
         /* نتجاهل النسخة المحلية غير المؤكدة من الخادم بعد (كتابتنا إحنا) لتفادي قطع الكتابة أثناء الكتابة */
         if (snap.metadata.hasPendingWrites) return;
+        /* لو فيه تعديلات محلية لسه ما اتحفظتش، نتجاهل التحديث الوارد من جهاز تاني مؤقتًا
+           عشان ما نمسحش تعديلات المستخدم قبل ما يحفظها بنفسه */
+        if (dirtyRef.current) return;
         const d = snap.data();
         if (d) {
           const next = {
@@ -717,23 +850,62 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     return () => unsub();
   }, []);
 
-  /* حفظ ومزامنة تلقائية إلى Firestore — تنعكس فورًا على كل الأجهزة المتصلة */
+  /* تعقّب التعديلات: بمجرد أي تغيير في البيانات (موظف، حضور، راتب...) نعلّمه "غير محفوظ".
+     لصفحة الموظف الذاتية (دور "employee"): الحفظ تلقائي زي الأول — التعديل بيتزامن مع القاعدة
+     بدون تدخل (تسجيل حضور/انصراف، طلب إجازة، إلخ).
+     لباقي الأدوار (أدمن، مدير كيان، مسؤول فرع...): الحفظ يدوي فقط عند ضغط أيقونة الحفظ. */
   useEffect(() => {
     if (!loaded) return;
     const payload = { entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, tasks };
     const json = JSON.stringify(payload);
-    if (json === lastSyncedRef.current) return;
-    const t = setTimeout(() => {
-      DATA_DOC.set(payload)
-        .then(() => {
-          lastSyncedRef.current = json;
-          setSaveMsg("تمت المزامنة ✓");
-          setTimeout(() => setSaveMsg(""), 1500);
-        })
-        .catch(() => setSaveMsg("تعذر الحفظ — تحقّق من الإنترنت"));
-    }, 400);
-    return () => clearTimeout(t);
-  }, [entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, tasks, loaded]);
+    if (json === lastSyncedRef.current) {
+      setDirty(false);
+      return;
+    }
+    if (role === "employee") {
+      setSaving(true);
+      const t = setTimeout(() => {
+        DATA_DOC.set(payload)
+          .then(() => {
+            lastSyncedRef.current = json;
+            setDirty(false);
+            setSaving(false);
+            setSaveMsg("تم الحفظ ✓");
+            setTimeout(() => setSaveMsg(""), 1500);
+          })
+          .catch(() => {
+            setSaving(false);
+            setDirty(true);
+            setSaveMsg("تعذر الحفظ — تحقّق من الإنترنت");
+          });
+      }, 400);
+      return () => clearTimeout(t);
+    }
+    setDirty(true);
+  }, [entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, tasks, loaded, role]);
+
+  /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
+  const saveNow = () => {
+    const payload = { entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, tasks };
+    const json = JSON.stringify(payload);
+    if (json === lastSyncedRef.current) {
+      setDirty(false);
+      return;
+    }
+    setSaving(true);
+    DATA_DOC.set(payload)
+      .then(() => {
+        lastSyncedRef.current = json;
+        setDirty(false);
+        setSaving(false);
+        setSaveMsg("تم الحفظ ✓");
+        setTimeout(() => setSaveMsg(""), 1500);
+      })
+      .catch(() => {
+        setSaving(false);
+        setSaveMsg("تعذر الحفظ — تحقّق من الإنترنت");
+      });
+  };
 
   const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
   const entityName = (id) => entities.find((e) => e.id === id)?.name || "—";
@@ -965,6 +1137,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         onAddTaskComment={addTaskComment}
         onAddTaskPhotos={addTaskPhotos}
         onRemoveTaskPhoto={removeTaskPhoto}
+        dirty={dirty}
+        saving={saving}
+        syncError={syncError}
+        onSave={saveNow}
       />
     );
   }
@@ -980,7 +1156,48 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         display: "flex",
       }}
     >
-      {/* الشريط الجانبي */}
+      {/* شريط علوي خاص بالجوال فقط: زر فتح القائمة + عنوان الصفحة الحالية */}
+      {isMobile && (
+        <div
+          className="no-print"
+          style={{
+            position: "fixed",
+            top: 0,
+            insetInlineStart: 0,
+            insetInlineEnd: 0,
+            zIndex: 35,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            background: COLORS.espresso,
+            color: "#F5EBDC",
+            padding: "12px 14px",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+          }}
+        >
+          <button
+            onClick={() => setNavOpen(true)}
+            aria-label={t("فتح القائمة", "Open menu")}
+            style={{ background: "transparent", border: "none", color: "#F5EBDC", fontSize: 22, cursor: "pointer", padding: 4, lineHeight: 1 }}
+          >
+            ☰
+          </button>
+          <div style={{ fontSize: 14, fontWeight: 700 }}>
+            {t(navItems.find((n) => n.key === tab)?.label || "نظام الموارد البشرية", navItems.find((n) => n.key === tab)?.labelEn || "HR System")}
+          </div>
+          <SaveStatusIcon saving={saving} syncError={syncError} dirty={dirty} onSave={saveNow} compact />
+        </div>
+      )}
+
+      {/* خلفية معتمة خلف القائمة المنزلقة على الجوال — الضغط عليها يغلق القائمة */}
+      {isMobile && navOpen && (
+        <div
+          onClick={() => setNavOpen(false)}
+          style={{ position: "fixed", inset: 0, background: "rgba(20,14,10,0.45)", zIndex: 44 }}
+        />
+      )}
+
+      {/* الشريط الجانبي — قائمة ثابتة على سطح المكتب، وقائمة منزلقة (درج) على الجوال */}
       <aside
         style={{
           width: 230,
@@ -989,6 +1206,20 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           padding: "22px 14px",
           flexShrink: 0,
           minHeight: "100vh",
+          ...(isMobile
+            ? {
+                position: "fixed",
+                top: 0,
+                bottom: 0,
+                insetInlineStart: 0,
+                width: "min(250px, 82vw)",
+                zIndex: 45,
+                overflowY: "auto",
+                transform: navOpen ? "translateX(0)" : "translateX(100%)",
+                transition: "transform 0.25s ease",
+                boxShadow: navOpen ? "-8px 0 24px rgba(0,0,0,0.25)" : "none",
+              }
+            : {}),
         }}
       >
         <div style={{ marginBottom: 26, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
@@ -996,13 +1227,31 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             <div style={{ fontSize: 18, fontWeight: 800, letterSpacing: 0.3 }}>{t("نظام الموارد البشرية", "HR System")}</div>
             <div style={{ fontSize: 11, color: COLORS.goldLight, marginTop: 3 }}>{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
           </div>
-          <LangToggle style={{ background: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.25)", color: "#F5EBDC", flexShrink: 0 }} />
+          {isMobile ? (
+            <button
+              onClick={() => setNavOpen(false)}
+              aria-label={t("إغلاق القائمة", "Close menu")}
+              style={{ background: "transparent", border: "none", color: "#F5EBDC", fontSize: 20, cursor: "pointer", padding: 2, lineHeight: 1, flexShrink: 0 }}
+            >
+              ✕
+            </button>
+          ) : (
+            <LangToggle style={{ background: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.25)", color: "#F5EBDC", flexShrink: 0 }} />
+          )}
         </div>
+        {isMobile && (
+          <div style={{ marginBottom: 14 }}>
+            <LangToggle style={{ background: "rgba(255,255,255,0.08)", borderColor: "rgba(255,255,255,0.25)", color: "#F5EBDC" }} />
+          </div>
+        )}
         <nav style={{ display: "flex", flexDirection: "column", gap: 4 }}>
           {navItems.map((n) => (
             <button
               key={n.key}
-              onClick={() => setTab(n.key)}
+              onClick={() => {
+                setTab(n.key);
+                if (isMobile) setNavOpen(false);
+              }}
               style={{
                 display: "flex",
                 alignItems: "center",
@@ -1012,9 +1261,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
                 border: "none",
                 borderRight: tab === n.key ? `3px solid ${COLORS.gold}` : "3px solid transparent",
                 color: tab === n.key ? "#fff" : "#D9CBB2",
-                padding: "10px 10px",
+                padding: "12px 10px",
                 borderRadius: 6,
-                fontSize: 13.5,
+                fontSize: 14,
                 fontWeight: tab === n.key ? 700 : 500,
                 cursor: "pointer",
               }}
@@ -1024,7 +1273,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             </button>
           ))}
         </nav>
-        <div style={{ marginTop: 30, fontSize: 10.5, color: syncError ? "#E8A9A0" : "#B8A78A", minHeight: 14 }}>{syncError || saveMsg}</div>
+        <div style={{ marginTop: 30 }}>
+          <SaveStatusIcon saving={saving} syncError={syncError} dirty={dirty} onSave={saveNow} />
+        </div>
         <div
           style={{
             marginTop: 18,
@@ -1082,7 +1333,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       )}
 
       {/* المحتوى */}
-      <main style={{ flex: 1, padding: "26px 30px", maxWidth: 1180 }}>
+      <main style={{ flex: 1, minWidth: 0, padding: isMobile ? "70px 14px 24px" : "26px 30px", maxWidth: 1180 }}>
         {tab === "dash" && (
           <Dashboard
             entities={scopedEntities}
@@ -1603,7 +1854,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         </div>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }} className="no-print">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("قائمة الموظفين", "Employee List")} ({fmt(list.length)})</SectionTitle>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <select style={{ ...inputStyle, maxWidth: 220 }} value={filterBranch} onChange={(e) => setFilterBranch(e.target.value)}>
@@ -1630,7 +1881,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {list.length === 0 && <Empty text={t("لا يوجد موظفون مطابقون", "No matching employees")} />}
         {list.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 920 }}>
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 920 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 <th style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}></th>
@@ -1676,6 +1927,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
                     )}
                   </td>
                   <td
+                    data-label={t("الاسم", "Name")}
                     style={{
                       padding: "9px 12px",
                       fontWeight: 700,
@@ -1693,12 +1945,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
                   >
                     {e.name}
                   </td>
-                  <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === e.branchId)?.name || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>{e.position}</td>
-                  <td style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, e.nationality)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{fmt(e.salary)} ﷼</td>
-                  <td style={{ padding: "9px 12px" }}>{e.joinDate || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === e.branchId)?.name || "—"}</td>
+                  <td data-label={t("الوظيفة", "Position")} style={{ padding: "9px 12px" }}>{e.position}</td>
+                  <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, e.nationality)}</td>
+                  <td data-label={t("الراتب", "Salary")} style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{fmt(e.salary)} ﷼</td>
+                  <td data-label={t("تاريخ التعيين", "Hire Date")} style={{ padding: "9px 12px" }}>{e.joinDate || "—"}</td>
+                  <td data-label={t("الحالة", "Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={e.status === "نشط" ? "green" : e.status === "موقوف" ? "gold" : "brick"}>{trLabel(t, STATUS_LABELS_EN, e.status)}</Stamp>
                   </td>
                   <td style={{ padding: "9px 12px", display: "flex", gap: 6 }} className="no-print">
@@ -2128,7 +2380,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
         <ReceiptCard label={t("إجمالي الموظفين النشطين", "Total Active Employees")} value={fmt(rows.length)} />
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }} className="no-print">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("جدول المتابعة", "Tracking Table")}</SectionTitle>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
@@ -2152,7 +2404,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {filtered.length === 0 && <Empty text={t("لا توجد بيانات مطابقة", "No matching data")} />}
         {filtered.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 980 }}>
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 980 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 <th
@@ -2187,6 +2439,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
               {filtered.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
                   <td
+                    data-label={t("الاسم", "Name")}
                     style={{
                       padding: "9px 12px",
                       fontWeight: 700,
@@ -2199,10 +2452,10 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                   >
                     {r.name}
                   </td>
-                  <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{r.nationalId || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
+                  <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
+                  <td data-label={t("رقم الهوية/الإقامة", "National ID/Iqama No.")} style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{r.nationalId || "—"}</td>
+                  <td data-label={t("انتهاء الإقامة", "Iqama Expiry")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.iqamaExpiry || ""}
@@ -2210,10 +2463,10 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                     />
                     <HijriNote dateStr={r.iqamaExpiry} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة الإقامة", "Iqama Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.iqamaStatus.tone}>{r.iqamaStatus.label}</Stamp>
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("نوع العقد", "Contract Type")} style={{ padding: "9px 12px" }}>
                     <select
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.contractType || "محدد المدة"}
@@ -2223,7 +2476,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                       <option value="غير محدد المدة">{t("غير محدد المدة", "Unlimited")}</option>
                     </select>
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("نهاية العقد", "Contract End")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.contractEnd || ""}
@@ -2231,7 +2484,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                     />
                     <HijriNote dateStr={r.contractEnd} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة العقد", "Contract Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.contractStatus.tone}>
                       {r.contractType === "غير محدد المدة" && !r.contractEnd ? t("عقد مفتوح", "Open-ended") : r.contractStatus.label}
                     </Stamp>
@@ -2377,7 +2630,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
         <ReceiptCard label={t("تأمين سيارات ينتهي خلال 30 يوم", "Vehicle insurance expiring in 30 days")} value={fmt(vehicleInsuranceAlerts)} tone={vehicleInsuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
         <SectionTitle>{t("تراخيص الفروع", "Branch Licenses")}</SectionTitle>
         <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
           <option value="">{t("عرض الكل", "Show All")}</option>
@@ -2390,7 +2643,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginBottom: 26 }}>
         {filteredBranchRows.length === 0 && <Empty text={t("لا توجد فروع مطابقة", "No matching branches")} />}
         {filteredBranchRows.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1080 }}>
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1080 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 <th
@@ -2426,6 +2679,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
               {filteredBranchRows.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
                   <td
+                    data-label={t("الفرع", "Branch")}
                     style={{
                       padding: "9px 12px",
                       fontWeight: 700,
@@ -2438,14 +2692,14 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   >
                     {r.name}
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("رقم السجل التجاري", "CR Number")} style={{ padding: "9px 12px" }}>
                     <input
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
                       value={r.crNumber || ""}
                       onChange={(e) => updateBranch(r.id, "crNumber", e.target.value)}
                     />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("انتهاء السجل التجاري", "CR Expiry")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.crExpiry || ""}
@@ -2453,17 +2707,17 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                     <HijriNote dateStr={r.crExpiry} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة السجل التجاري", "CR Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.crStatus.tone}>{r.crStatus.label}</Stamp>
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("رقم رخصة الدفاع المدني", "Civil Defense License No.")} style={{ padding: "9px 12px" }}>
                     <input
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
                       value={r.civilDefenseNumber || ""}
                       onChange={(e) => updateBranch(r.id, "civilDefenseNumber", e.target.value)}
                     />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("انتهاء الدفاع المدني", "Civil Defense Expiry")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.civilDefenseExpiry || ""}
@@ -2471,17 +2725,17 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                     <HijriNote dateStr={r.civilDefenseExpiry} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة الدفاع المدني", "Civil Defense Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.civilDefenseStatus.tone}>{r.civilDefenseStatus.label}</Stamp>
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("رقم رخصة البلدية", "Municipality License No.")} style={{ padding: "9px 12px" }}>
                     <input
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
                       value={r.municipalityNumber || ""}
                       onChange={(e) => updateBranch(r.id, "municipalityNumber", e.target.value)}
                     />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("انتهاء رخصة البلدية", "Municipality License Expiry")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.municipalityExpiry || ""}
@@ -2489,7 +2743,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                     <HijriNote dateStr={r.municipalityExpiry} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة رخصة البلدية", "Municipality License Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.municipalityStatus.tone}>{r.municipalityStatus.label}</Stamp>
                   </td>
                 </tr>
@@ -2503,7 +2757,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginTop: 10 }}>
         {healthRows.length === 0 && <Empty text={t("لا يوجد موظفون نشطون", "No active employees")} />}
         {healthRows.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1100 }}>
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1100 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 <th
@@ -2538,6 +2792,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
               {healthRows.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
                   <td
+                    data-label={t("الاسم", "Name")}
                     style={{
                       padding: "9px 12px",
                       fontWeight: 700,
@@ -2550,9 +2805,9 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   >
                     {r.name}
                   </td>
-                  <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>{r.position}</td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
+                  <td data-label={t("الوظيفة", "Position")} style={{ padding: "9px 12px" }}>{r.position}</td>
+                  <td data-label={t("انتهاء الشهادة الصحية", "Health Cert. Expiry")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.healthCertExpiry || ""}
@@ -2560,24 +2815,24 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                     <HijriNote dateStr={r.healthCertExpiry} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة الشهادة الصحية", "Health Cert. Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.healthCertStatus.tone}>{r.healthCertStatus.label}</Stamp>
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("شركة التأمين", "Insurance Company")} style={{ padding: "9px 12px" }}>
                     <input
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
                       value={r.insuranceCompany || ""}
                       onChange={(e) => updateEmployee(r.id, "insuranceCompany", e.target.value)}
                     />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("رقم وثيقة التأمين", "Policy Number")} style={{ padding: "9px 12px" }}>
                     <input
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
                       value={r.insurancePolicyNumber || ""}
                       onChange={(e) => updateEmployee(r.id, "insurancePolicyNumber", e.target.value)}
                     />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("انتهاء التأمين الطبي", "Medical Insurance Expiry")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.insuranceExpiry || ""}
@@ -2585,7 +2840,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                     <HijriNote dateStr={r.insuranceExpiry} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة التأمين الطبي", "Medical Insurance Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.insuranceStatus.tone}>{r.insuranceStatus.label}</Stamp>
                   </td>
                 </tr>
@@ -2642,7 +2897,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {vehicleRows.length === 0 && <Empty text={t("لا توجد سيارات مسجَّلة", "No registered vehicles")} />}
         {vehicleRows.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1350 }}>
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1350 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 <th
@@ -2680,6 +2935,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
               {vehicleRows.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
                   <td
+                    data-label={t("رقم اللوحة", "Plate Number")}
                     style={{
                       padding: "9px 12px",
                       fontWeight: 700,
@@ -2693,9 +2949,9 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   >
                     {r.plateNumber}
                   </td>
-                  <td style={{ padding: "9px 12px" }}>{r.make || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("النوع/الموديل", "Make/Model")} style={{ padding: "9px 12px" }}>{r.make || "—"}</td>
+                  <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
+                  <td data-label={t("انتهاء الاستمارة", "Registration Expiry")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.istimaraExpiry || ""}
@@ -2703,10 +2959,10 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                     <HijriNote dateStr={r.istimaraExpiry} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة الاستمارة", "Registration Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.istimaraStatus.tone}>{r.istimaraStatus.label}</Stamp>
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("انتهاء الفحص الدوري", "Periodic Inspection Expiry")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.periodicInspectionExpiry || ""}
@@ -2714,12 +2970,12 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                     <HijriNote dateStr={r.periodicInspectionExpiry} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة الفحص الدوري", "Periodic Inspection Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.periodicInspectionStatus.tone}>{r.periodicInspectionStatus.label}</Stamp>
                   </td>
-                  <td style={{ padding: "9px 12px" }}>{r.insuranceCompany || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>{r.insurancePolicyNumber || "—"}</td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("شركة التأمين", "Insurance Company")} style={{ padding: "9px 12px" }}>{r.insuranceCompany || "—"}</td>
+                  <td data-label={t("رقم الوثيقة", "Policy Number")} style={{ padding: "9px 12px" }}>{r.insurancePolicyNumber || "—"}</td>
+                  <td data-label={t("انتهاء تأمين السيارة", "Insurance Expiry")} style={{ padding: "9px 12px" }}>
                     <DateField
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
                       value={r.insuranceExpiry || ""}
@@ -2727,7 +2983,7 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                     />
                     <HijriNote dateStr={r.insuranceExpiry} />
                   </td>
-                  <td style={{ padding: "9px 12px" }}>
+                  <td data-label={t("حالة تأمين السيارة", "Insurance Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.vehicleInsuranceStatus.tone}>{r.vehicleInsuranceStatus.label}</Stamp>
                   </td>
                   <td style={{ padding: "9px 12px", display: "flex", gap: 6 }}>
@@ -3062,7 +3318,7 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
         {employees.length === 0 && <Empty text={t("لا يوجد موظفون", "No employees")} />}
         {employees.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 {[
@@ -3082,11 +3338,11 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
                 const bal = leaveBalanceInfo(e, leaves);
                 return (
                   <tr key={e.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
-                    <td style={{ padding: "8px 12px", fontWeight: 700 }}>{e.name}</td>
-                    <td style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.perYear)} ${t("يوم", "days")}` : "—"}</td>
-                    <td style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.accrued)} ${t("يوم", "days")}` : "—"}</td>
-                    <td style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.usedDays)} ${t("يوم", "days")}` : "—"}</td>
-                    <td style={{ padding: "8px 12px" }}>
+                    <td data-label={t("الاسم", "Name")} style={{ padding: "8px 12px", fontWeight: 700 }}>{e.name}</td>
+                    <td data-label={t("الاستحقاق السنوي", "Annual Entitlement")} style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.perYear)} ${t("يوم", "days")}` : "—"}</td>
+                    <td data-label={t("الرصيد المتراكم", "Accrued")} style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.accrued)} ${t("يوم", "days")}` : "—"}</td>
+                    <td data-label={t("المستخدم", "Used")} style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.usedDays)} ${t("يوم", "days")}` : "—"}</td>
+                    <td data-label={t("تسوية يدوية", "Manual Adjustment")} style={{ padding: "8px 12px" }}>
                       <input
                         type="number"
                         step="0.5"
@@ -3101,7 +3357,7 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
                         }}
                       />
                     </td>
-                    <td style={{ padding: "8px 12px", fontWeight: 700, color: bal && bal.balance < 0 ? COLORS.brick : COLORS.green }}>
+                    <td data-label={t("المتبقي", "Remaining")} style={{ padding: "8px 12px", fontWeight: 700, color: bal && bal.balance < 0 ? COLORS.brick : COLORS.green }}>
                       {bal ? `${fmt(bal.balance)} ${t("يوم", "days")}` : "—"}
                     </td>
                   </tr>
@@ -3413,7 +3669,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         ))}
       </div>
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }} className="no-print">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("كشف الرواتب", "Payroll Sheet")}</SectionTitle>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           <select style={{ ...inputStyle, maxWidth: 220 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
@@ -3439,7 +3695,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {rows.length === 0 && <Empty text={t("لا يوجد موظفون نشطون مطابقون", "No matching active employees")} />}
         {rows.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1240 }}>
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1240 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 <th
@@ -3486,6 +3742,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
               {rows.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
                   <td
+                    data-label={t("الاسم", "Name")}
                     style={{
                       padding: "9px 12px",
                       fontFamily: "inherit",
@@ -3499,25 +3756,25 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   >
                     {r.name}
                   </td>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
-                  <td style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.absentDays)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.lateMinutesTotal)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.overtimeHours)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.overtimePay)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.incentives)}</td>
-                  <td style={{ padding: "9px 12px" }}>{fmt(r.employerShare)}</td>
-                  <td style={{ padding: "9px 12px", color: COLORS.green, fontWeight: 700 }}>{fmt(r.net)}</td>
-                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{fmt(r.totalCost)}</td>
+                  <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
+                  <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
+                  <td data-label={t("الراتب الأساسي", "Basic Salary")} style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
+                  <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
+                  <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.absentDays)}</td>
+                  <td data-label={t("خصم الغياب", "Absence Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
+                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.lateMinutesTotal)}</td>
+                  <td data-label={t("خصم التأخير", "Lateness Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
+                  <td data-label={t("أيام إجازة بدون راتب", "Unpaid Leave Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
+                  <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
+                  <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
+                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.overtimeHours)}</td>
+                  <td data-label={t("قيمة الإضافي", "Overtime Pay")} style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.overtimePay)}</td>
+                  <td data-label={t("السلف", "Advances")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
+                  <td data-label={t("خصومات أخرى", "Other Deductions")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
+                  <td data-label={t("الحوافز", "Incentives")} style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.incentives)}</td>
+                  <td data-label={t("حصة صاحب العمل", "Employer Share")} style={{ padding: "9px 12px" }}>{fmt(r.employerShare)}</td>
+                  <td data-label={t("الصافي للموظف", "Net for Employee")} style={{ padding: "9px 12px", color: COLORS.green, fontWeight: 700 }}>{fmt(r.net)}</td>
+                  <td data-label={t("تكلفة الشركة", "Company Cost")} style={{ padding: "9px 12px", fontWeight: 700 }}>{fmt(r.totalCost)}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "inherit" }} className="no-print">
                     <Btn small onClick={() => setPayslip({ ...r, __month: month })}>{t("🖶 قسيمة الراتب", "🖶 Payslip")}</Btn>
                   </td>
@@ -4563,7 +4820,7 @@ function LeaveRequestForm({ onSubmit, t }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto }) {
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, dirty, saving, syncError, onSave }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
@@ -4634,11 +4891,11 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
         background: COLORS.paper,
         minHeight: "100vh",
         color: COLORS.ink,
-        padding: "26px 24px",
+        padding: "18px 14px",
       }}
     >
       <div style={{ maxWidth: 860, margin: "0 auto" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, flexWrap: "wrap", gap: 14 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
             {employee.photo ? (
               <img src={employee.photo} alt="" style={{ width: 48, height: 48, borderRadius: "50%", objectFit: "cover", border: `1px solid ${COLORS.line}` }} />
@@ -4654,7 +4911,8 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
               </div>
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <SaveStatusIcon saving={saving} syncError={syncError} dirty={dirty} onSave={onSave} />
             <LangToggle />
             <Btn tone="secondary" onClick={() => setShowChangePassword(true)}>{t("🔑 تغيير كلمة المرور", "🔑 Change Password")}</Btn>
             <Btn tone="secondary" onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
@@ -5302,7 +5560,7 @@ function ReportsTab({ activityLog, users }) {
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
           {rows.length === 0 && <Empty text={t("لا توجد عمليات مسجّلة مطابقة", "No matching recorded actions")} />}
           {rows.length > 0 && (
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+            <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
                 <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                   {[
@@ -5319,13 +5577,13 @@ function ReportsTab({ activityLog, users }) {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
-                    <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{fmtDT(r.timestamp)}</td>
-                    <td style={{ padding: "9px 12px", fontWeight: 700 }}>{r.userName} <span style={{ color: "#a3927a", fontWeight: 400 }}>({r.username})</span></td>
-                    <td style={{ padding: "9px 12px" }}>{t(ROLE_LABELS[r.role], ROLE_LABELS_EN[r.role]) || "—"}</td>
-                    <td style={{ padding: "9px 12px" }}>
+                    <td data-label={t("التاريخ والوقت", "Date & Time")} style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{fmtDT(r.timestamp)}</td>
+                    <td data-label={t("المستخدم", "User")} style={{ padding: "9px 12px", fontWeight: 700 }}>{r.userName} <span style={{ color: "#a3927a", fontWeight: 400 }}>({r.username})</span></td>
+                    <td data-label={t("الدور", "Role")} style={{ padding: "9px 12px" }}>{t(ROLE_LABELS[r.role], ROLE_LABELS_EN[r.role]) || "—"}</td>
+                    <td data-label={t("العملية", "Action")} style={{ padding: "9px 12px" }}>
                       <Stamp tone={ACTION_TONE(r.action)}>{r.action}</Stamp>
                     </td>
-                    <td style={{ padding: "9px 12px" }}>{r.targetLabel || "—"}</td>
+                    <td data-label={t("التفاصيل", "Details")} style={{ padding: "9px 12px" }}>{r.targetLabel || "—"}</td>
                   </tr>
                 ))}
               </tbody>
