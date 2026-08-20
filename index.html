@@ -1126,7 +1126,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             setBranches={setBranches}
             employees={scopedEmployees}
             canManageEntities={isAdmin || isManager}
-            canManageGeofence={isAdmin}
+            canManageGeofence={isAdmin || isEntityManager}
           />
         )}
         {tab === "attendance" && (
@@ -2741,8 +2741,8 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
         {canManageGeofence && (
           <div style={{ fontSize: 11.5, color: "#8a7a63", marginBottom: 10, padding: "8px 10px", background: "#FAF6EC", borderRadius: 8 }}>
             {t(
-              "📍 لتفعيل تسجيل الحضور بالموقع الجغرافي: قف داخل الفرع فعليًا ثم اضغط \"التقط الموقع الحالي\" — هيتم استخدامه كمركز نطاق الفرع. (هذا الإعداد خاص بالأدمن فقط)",
-              "📍 To enable location-based attendance: stand physically inside the branch, then tap \"Capture current location\" — it will be used as the branch's geofence center. (Admin-only setting)"
+              "📍 لتفعيل تسجيل الحضور بالموقع الجغرافي: قف داخل الفرع فعليًا ثم اضغط \"التقط الموقع الحالي\" — هيتم استخدامه كمركز نطاق الفرع. (هذا الإعداد خاص بالأدمن ومدير الكيان فقط)",
+              "📍 To enable location-based attendance: stand physically inside the branch, then tap \"Capture current location\" — it will be used as the branch's geofence center. (Admin and Entity Manager only)"
             )}
           </div>
         )}
