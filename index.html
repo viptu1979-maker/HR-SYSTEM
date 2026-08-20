@@ -2747,7 +2747,15 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
           </div>
         )}
 
-        {branches.map((b) => (
+        {branches
+          .slice()
+          .sort((a, b) => {
+            const entA = entities.find((en) => en.id === a.entityId)?.name || "";
+            const entB = entities.find((en) => en.id === b.entityId)?.name || "";
+            if (entA !== entB) return entA.localeCompare(entB, "ar");
+            return (a.name || "").localeCompare(b.name || "", "ar");
+          })
+          .map((b) => (
           <div
             key={b.id}
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 4px", borderTop: `1px dashed ${COLORS.line}`, flexWrap: "wrap", gap: 8 }}
