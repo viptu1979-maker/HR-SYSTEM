@@ -1627,15 +1627,28 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
           <span>{list.length} {t("موظف", "employees")}</span>
         </div>
-      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {list.length === 0 && <Empty text={t("لا يوجد موظفون مطابقون", "No matching employees")} />}
         {list.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 920 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                <th style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}></th>
+                <th
+                  style={{
+                    padding: "9px 12px",
+                    fontWeight: 700,
+                    color: COLORS.coffee,
+                    position: "sticky",
+                    insetInlineStart: 0,
+                    background: COLORS.paperDark,
+                    zIndex: 2,
+                    boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                  }}
+                >
+                  {t("الاسم", "Name")}
+                </th>
                 {[
-                  "",
-                  t("الاسم", "Name"),
                   t("الفرع", "Branch"),
                   t("الوظيفة", "Position"),
                   t("الجنسية", "Nationality"),
@@ -1663,7 +1676,18 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
                     )}
                   </td>
                   <td
-                    style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.brick, cursor: "pointer", textDecoration: "underline dotted" }}
+                    style={{
+                      padding: "9px 12px",
+                      fontWeight: 700,
+                      color: COLORS.brick,
+                      cursor: "pointer",
+                      textDecoration: "underline dotted",
+                      position: "sticky",
+                      insetInlineStart: 0,
+                      background: "#fff",
+                      zIndex: 1,
+                      boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                    }}
                     onClick={() => setProfileEmp(e)}
                     title={t("عرض الملف الكامل", "View full profile")}
                   >
@@ -2131,8 +2155,21 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 980 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                <th
+                  style={{
+                    padding: "9px 12px",
+                    fontWeight: 700,
+                    color: COLORS.coffee,
+                    position: "sticky",
+                    insetInlineStart: 0,
+                    background: COLORS.paperDark,
+                    zIndex: 2,
+                    boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                  }}
+                >
+                  {t("الاسم", "Name")}
+                </th>
                 {[
-                  t("الاسم", "Name"),
                   t("الفرع", "Branch"),
                   t("الجنسية", "Nationality"),
                   t("رقم الهوية/الإقامة", "National ID/Iqama No."),
@@ -2149,7 +2186,19 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
             <tbody>
               {filtered.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
-                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{r.name}</td>
+                  <td
+                    style={{
+                      padding: "9px 12px",
+                      fontWeight: 700,
+                      position: "sticky",
+                      insetInlineStart: 0,
+                      background: "#fff",
+                      zIndex: 1,
+                      boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                    }}
+                  >
+                    {r.name}
+                  </td>
                   <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{r.nationalId || "—"}</td>
@@ -2344,8 +2393,21 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1080 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                <th
+                  style={{
+                    padding: "9px 12px",
+                    fontWeight: 700,
+                    color: COLORS.coffee,
+                    position: "sticky",
+                    insetInlineStart: 0,
+                    background: COLORS.paperDark,
+                    zIndex: 2,
+                    boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                  }}
+                >
+                  {t("الفرع", "Branch")}
+                </th>
                 {[
-                  t("الفرع", "Branch"),
                   t("رقم السجل التجاري", "CR Number"),
                   t("انتهاء السجل التجاري", "CR Expiry"),
                   t("حالة السجل التجاري", "CR Status"),
@@ -2363,7 +2425,19 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
             <tbody>
               {filteredBranchRows.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
-                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{r.name}</td>
+                  <td
+                    style={{
+                      padding: "9px 12px",
+                      fontWeight: 700,
+                      position: "sticky",
+                      insetInlineStart: 0,
+                      background: "#fff",
+                      zIndex: 1,
+                      boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                    }}
+                  >
+                    {r.name}
+                  </td>
                   <td style={{ padding: "9px 12px" }}>
                     <input
                       style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
@@ -2432,8 +2506,21 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1100 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                <th
+                  style={{
+                    padding: "9px 12px",
+                    fontWeight: 700,
+                    color: COLORS.coffee,
+                    position: "sticky",
+                    insetInlineStart: 0,
+                    background: COLORS.paperDark,
+                    zIndex: 2,
+                    boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                  }}
+                >
+                  {t("الاسم", "Name")}
+                </th>
                 {[
-                  t("الاسم", "Name"),
                   t("الفرع", "Branch"),
                   t("الوظيفة", "Position"),
                   t("انتهاء الشهادة الصحية", "Health Cert. Expiry"),
@@ -2450,7 +2537,19 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
             <tbody>
               {healthRows.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
-                  <td style={{ padding: "9px 12px", fontWeight: 700 }}>{r.name}</td>
+                  <td
+                    style={{
+                      padding: "9px 12px",
+                      fontWeight: 700,
+                      position: "sticky",
+                      insetInlineStart: 0,
+                      background: "#fff",
+                      zIndex: 1,
+                      boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                    }}
+                  >
+                    {r.name}
+                  </td>
                   <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{r.position}</td>
                   <td style={{ padding: "9px 12px" }}>
@@ -2546,8 +2645,21 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1350 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                <th
+                  style={{
+                    padding: "9px 12px",
+                    fontWeight: 700,
+                    color: COLORS.coffee,
+                    position: "sticky",
+                    insetInlineStart: 0,
+                    background: COLORS.paperDark,
+                    zIndex: 2,
+                    boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                  }}
+                >
+                  {t("رقم اللوحة", "Plate Number")}
+                </th>
                 {[
-                  t("رقم اللوحة", "Plate Number"),
                   t("النوع/الموديل", "Make/Model"),
                   t("الفرع", "Branch"),
                   t("انتهاء الاستمارة", "Registration Expiry"),
@@ -2567,7 +2679,20 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
             <tbody>
               {vehicleRows.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
-                  <td style={{ padding: "9px 12px", fontWeight: 700, fontFamily: "Consolas, monospace" }}>{r.plateNumber}</td>
+                  <td
+                    style={{
+                      padding: "9px 12px",
+                      fontWeight: 700,
+                      fontFamily: "Consolas, monospace",
+                      position: "sticky",
+                      insetInlineStart: 0,
+                      background: "#fff",
+                      zIndex: 1,
+                      boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                    }}
+                  >
+                    {r.plateNumber}
+                  </td>
                   <td style={{ padding: "9px 12px" }}>{r.make || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td style={{ padding: "9px 12px" }}>
@@ -3317,8 +3442,21 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1240 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                <th
+                  style={{
+                    padding: "9px 12px",
+                    fontWeight: 700,
+                    color: COLORS.coffee,
+                    position: "sticky",
+                    insetInlineStart: 0,
+                    background: COLORS.paperDark,
+                    zIndex: 2,
+                    boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                  }}
+                >
+                  {t("الاسم", "Name")}
+                </th>
                 {[
-                  t("الاسم", "Name"),
                   t("الفرع", "Branch"),
                   t("الجنسية", "Nationality"),
                   t("الراتب الأساسي", "Basic Salary"),
@@ -3347,7 +3485,20 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit", fontWeight: 700 }}>{r.name}</td>
+                  <td
+                    style={{
+                      padding: "9px 12px",
+                      fontFamily: "inherit",
+                      fontWeight: 700,
+                      position: "sticky",
+                      insetInlineStart: 0,
+                      background: "#fff",
+                      zIndex: 1,
+                      boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                    }}
+                  >
+                    {r.name}
+                  </td>
                   <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
