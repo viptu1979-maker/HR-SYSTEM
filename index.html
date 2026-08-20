@@ -1047,6 +1047,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             setAttendance={setAttendance}
             branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
             logActivity={logActivity}
+            entities={scopedEntities}
+            branches={scopedBranches}
           />
         )}
         {tab === "leaveRequests" && (
@@ -1111,10 +1113,22 @@ function Dashboard({ entities, branches, employees, leaves, branchName, entityNa
   const today = new Date().toISOString().slice(0, 10);
   const onLeaveToday = leaves.filter((l) => l.from <= today && l.to >= today).length;
 
-  const byBranch = branches.map((b) => ({
-    ...b,
-    count: employees.filter((e) => e.branchId === b.id && e.status === "نشط").length,
-  }));
+  /* تجميع الموظفين حسب الكيان، ثم حسب الفروع التابعة لكل كيان */
+  const byEntity = entities.map((ent) => {
+    const entBranches = branches
+      .filter((b) => b.entityId === ent.id)
+      .map((b) => ({
+        ...b,
+        count: employees.filter((e) => e.branchId === b.id && e.status === "نشط").length,
+      }));
+    const total = entBranches.reduce((s, b) => s + b.count, 0);
+    return { ...ent, branches: entBranches, total };
+  });
+
+  /* فروع بلا كيان معروف (احتياطًا لبيانات غير مكتملة) */
+  const orphanBranches = branches
+    .filter((b) => !entities.some((ent) => ent.id === b.entityId))
+    .map((b) => ({ ...b, count: employees.filter((e) => e.branchId === b.id && e.status === "نشط").length }));
 
   return (
     <div>
@@ -1126,31 +1140,85 @@ function Dashboard({ entities, branches, employees, leaves, branchName, entityNa
         <ReceiptCard label={t("في إجازة اليوم", "On Leave Today")} value={fmt(onLeaveToday)} tone={onLeaveToday > 0 ? COLORS.brick : COLORS.green} />
       </div>
 
-      <SectionTitle>{t("توزيع الموظفين حسب الفرع", "Employee Distribution by Branch")}</SectionTitle>
-      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
-        {byBranch.length === 0 && <Empty text={t("لا توجد فروع بعد — أضف فرعًا من تبويب الكيانات والفروع", "No branches yet — add one from the Entities & Branches tab")} />}
-        {byBranch.map((b, i) => (
+      <SectionTitle>{t("تقسيم الموظفين حسب الكيان والفروع", "Employee Breakdown by Entity & Branch")}</SectionTitle>
+      {byEntity.length === 0 && orphanBranches.length === 0 && (
+        <Empty text={t("لا توجد كيانات أو فروع بعد — أضف من تبويب الكيانات والفروع", "No entities or branches yet — add one from the Entities & Branches tab")} />
+      )}
+      {byEntity.map((ent) => (
+        <div
+          key={ent.id}
+          style={{
+            background: "#fff",
+            border: `1px solid ${COLORS.line}`,
+            borderRadius: 10,
+            overflow: "hidden",
+            marginBottom: 14,
+          }}
+        >
           <div
-            key={b.id}
             style={{
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
               padding: "12px 16px",
-              borderBottom: i < byBranch.length - 1 ? `1px dashed ${COLORS.line}` : "none",
+              background: COLORS.paperDark,
+              borderBottom: `1px solid ${COLORS.line}`,
             }}
           >
-            <div>
-              <div style={{ fontWeight: 700, fontSize: 13.5 }}>{b.name}</div>
-              <div style={{ fontSize: 11.5, color: "#8a7a63" }}>{entityName(b.entityId)} · {b.city}</div>
-            </div>
-            <Stamp>{fmt(b.count)} {t("موظف", "employees")}</Stamp>
+            <div style={{ fontWeight: 800, fontSize: 14, color: COLORS.espresso }}>{ent.name}</div>
+            <Stamp tone="green">{fmt(ent.total)} {t("موظف", "employees")}</Stamp>
           </div>
-        ))}
-      </div>
+          {ent.branches.length === 0 && <Empty text={t("لا توجد فروع مسجّلة لهذا الكيان", "No branches registered for this entity")} />}
+          {ent.branches.map((b, i) => (
+            <div
+              key={b.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "12px 16px",
+                borderBottom: i < ent.branches.length - 1 ? `1px dashed ${COLORS.line}` : "none",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13.5 }}>{b.name}</div>
+                <div style={{ fontSize: 11.5, color: "#8a7a63" }}>{b.city}</div>
+              </div>
+              <Stamp>{fmt(b.count)} {t("موظف", "employees")}</Stamp>
+            </div>
+          ))}
+        </div>
+      ))}
+
+      {orphanBranches.length > 0 && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 14 }}>
+          <div style={{ padding: "12px 16px", background: COLORS.brickBg, borderBottom: `1px solid ${COLORS.line}`, fontWeight: 800, fontSize: 14, color: COLORS.brick }}>
+            {t("فروع بلا كيان محدد", "Branches without an assigned entity")}
+          </div>
+          {orphanBranches.map((b, i) => (
+            <div
+              key={b.id}
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "12px 16px",
+                borderBottom: i < orphanBranches.length - 1 ? `1px dashed ${COLORS.line}` : "none",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 13.5 }}>{b.name}</div>
+                <div style={{ fontSize: 11.5, color: "#8a7a63" }}>{b.city}</div>
+              </div>
+              <Stamp>{fmt(b.count)} {t("موظف", "employees")}</Stamp>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
+
 
 function Header({ title, subtitle, action }) {
   return (
@@ -2639,29 +2707,46 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
 }
 
 /* ============ الحضور والإجازات ============ */
-function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance, setAttendance, logActivity }) {
+function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance, setAttendance, logActivity, entities, branches }) {
   const { t } = useLang();
-  const [leaveForm, setLeaveForm] = useState({ employeeId: "", type: "سنوية", from: "", to: "" });
-  const [attForm, setAttForm] = useState({ employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
+  const [leaveForm, setLeaveForm] = useState({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
+  const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
+
+  /* فروع الكيان المختار، وموظفو الفرع المختار — لكل نموذج على حدة */
+  const leaveBranches = leaveForm.entityId ? branches.filter((b) => b.entityId === leaveForm.entityId) : branches;
+  const leaveEmployees = leaveForm.branchId
+    ? employees.filter((e) => e.branchId === leaveForm.branchId)
+    : leaveForm.entityId
+    ? employees.filter((e) => leaveBranches.some((b) => b.id === e.branchId))
+    : employees;
+
+  const attBranches = attForm.entityId ? branches.filter((b) => b.entityId === attForm.entityId) : branches;
+  const attEmployees = attForm.branchId
+    ? employees.filter((e) => e.branchId === attForm.branchId)
+    : attForm.entityId
+    ? employees.filter((e) => attBranches.some((b) => b.id === e.branchId))
+    : employees;
 
   const addLeave = () => {
     if (!leaveForm.employeeId || !leaveForm.from || !leaveForm.to) return;
-    setLeaves((prev) => [...prev, { ...leaveForm, id: uid() }]);
+    const { entityId, branchId, ...rest } = leaveForm;
+    setLeaves((prev) => [...prev, { ...rest, id: uid() }]);
     logActivity && logActivity("تسجيل إجازة", "attendance", empName(leaveForm.employeeId));
-    setLeaveForm({ employeeId: "", type: "سنوية", from: "", to: "" });
+    setLeaveForm({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
   };
   const removeLeave = (id) => setLeaves((prev) => prev.filter((l) => l.id !== id));
 
   const addAtt = () => {
     if (!attForm.employeeId || !attForm.date) return;
+    const { entityId, branchId, ...rest } = attForm;
     const record = {
-      ...attForm,
+      ...rest,
       lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0,
       overtimeHours: Number(attForm.overtimeHours || 0),
     };
     setAttendance((prev) => [...prev, { ...record, id: uid() }]);
     logActivity && logActivity("تسجيل حضور", "attendance", empName(attForm.employeeId));
-    setAttForm({ employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
+    setAttForm({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   };
   const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
 
@@ -2674,10 +2759,34 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
       <SectionTitle>{t("تسجيل إجازة", "Register Leave")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <Field label={t("الكيان", "Entity")}>
+            <select
+              style={inputStyle}
+              value={leaveForm.entityId}
+              onChange={(e) => setLeaveForm({ ...leaveForm, entityId: e.target.value, branchId: "", employeeId: "" })}
+            >
+              <option value="">{t("كل الكيانات", "All entities")}</option>
+              {entities.map((ent) => (
+                <option key={ent.id} value={ent.id}>{ent.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t("الفرع", "Branch")}>
+            <select
+              style={inputStyle}
+              value={leaveForm.branchId}
+              onChange={(e) => setLeaveForm({ ...leaveForm, branchId: e.target.value, employeeId: "" })}
+            >
+              <option value="">{t("كل الفروع", "All branches")}</option>
+              {leaveBranches.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </Field>
           <Field label={t("الموظف", "Employee")}>
             <select style={inputStyle} value={leaveForm.employeeId} onChange={(e) => setLeaveForm({ ...leaveForm, employeeId: e.target.value })}>
               <option value="">{t("اختر الموظف", "Select employee")}</option>
-              {employees.map((e) => (
+              {leaveEmployees.map((e) => (
                 <option key={e.id} value={e.id}>{e.name}</option>
               ))}
             </select>
@@ -2792,10 +2901,34 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
       <SectionTitle>{t("سجل حضور يومي", "Daily Attendance Log")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <Field label={t("الكيان", "Entity")}>
+            <select
+              style={inputStyle}
+              value={attForm.entityId}
+              onChange={(e) => setAttForm({ ...attForm, entityId: e.target.value, branchId: "", employeeId: "" })}
+            >
+              <option value="">{t("كل الكيانات", "All entities")}</option>
+              {entities.map((ent) => (
+                <option key={ent.id} value={ent.id}>{ent.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label={t("الفرع", "Branch")}>
+            <select
+              style={inputStyle}
+              value={attForm.branchId}
+              onChange={(e) => setAttForm({ ...attForm, branchId: e.target.value, employeeId: "" })}
+            >
+              <option value="">{t("كل الفروع", "All branches")}</option>
+              {attBranches.map((b) => (
+                <option key={b.id} value={b.id}>{b.name}</option>
+              ))}
+            </select>
+          </Field>
           <Field label={t("الموظف", "Employee")}>
             <select style={inputStyle} value={attForm.employeeId} onChange={(e) => setAttForm({ ...attForm, employeeId: e.target.value })}>
               <option value="">{t("اختر الموظف", "Select employee")}</option>
-              {employees.map((e) => (
+              {attEmployees.map((e) => (
                 <option key={e.id} value={e.id}>{e.name}</option>
               ))}
             </select>
