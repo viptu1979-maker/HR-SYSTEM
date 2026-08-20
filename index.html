@@ -518,6 +518,98 @@ function TimeField({ value, onChange, style, placeholder = "HH:MM" }) {
   );
 }
 
+/* قائمة اختيار موظف قابلة للبحث — تفلتر بالاسم أو رقم الهوية أثناء الكتابة */
+function EmployeeSelect({ employees, value, onChange, placeholder }) {
+  const { t } = useLang();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+
+  const selected = employees.find((e) => e.id === value);
+
+  useEffect(() => {
+    const handler = (ev) => {
+      if (wrapRef.current && !wrapRef.current.contains(ev.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? employees.filter(
+        (e) => (e.name || "").toLowerCase().includes(q) || (e.nationalId || "").toLowerCase().includes(q)
+      )
+    : employees;
+
+  return (
+    <div ref={wrapRef} style={{ position: "relative" }}>
+      <input
+        style={inputStyle}
+        placeholder={placeholder || t("ابحث بالاسم أو رقم الهوية...", "Search by name or ID...")}
+        value={open ? query : selected ? selected.name : ""}
+        onFocus={() => {
+          setOpen(true);
+          setQuery("");
+        }}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      {open && (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 30,
+            top: "100%",
+            insetInlineStart: 0,
+            insetInlineEnd: 0,
+            background: "#fff",
+            border: `1px solid ${COLORS.line}`,
+            borderRadius: 8,
+            maxHeight: 240,
+            overflowY: "auto",
+            marginTop: 3,
+            boxShadow: "0 6px 16px rgba(36,24,17,0.12)",
+          }}
+        >
+          <div
+            onClick={() => {
+              onChange("");
+              setOpen(false);
+              setQuery("");
+            }}
+            style={{ padding: "8px 12px", fontSize: 12, color: "#a3927a", cursor: "pointer", borderBottom: `1px dashed ${COLORS.line}` }}
+          >
+            {t("بدون اختيار", "Clear selection")}
+          </div>
+          {filtered.length === 0 && (
+            <div style={{ padding: "10px 12px", fontSize: 12.5, color: "#a3927a" }}>{t("لا يوجد نتائج", "No results")}</div>
+          )}
+          {filtered.map((e) => (
+            <div
+              key={e.id}
+              onClick={() => {
+                onChange(e.id);
+                setOpen(false);
+                setQuery("");
+              }}
+              style={{
+                padding: "8px 12px",
+                fontSize: 13,
+                cursor: "pointer",
+                borderTop: `1px dashed ${COLORS.line}`,
+                background: e.id === value ? COLORS.paperDark : "transparent",
+              }}
+            >
+              <div style={{ fontWeight: 600 }}>{e.name}</div>
+              {e.nationalId && <div style={{ fontSize: 11, color: "#8a7a63" }}>{e.nationalId}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Btn({ children, onClick, tone = "primary", small, type = "button", disabled = false }) {
   const base =
     tone === "primary"
@@ -2784,12 +2876,7 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
             </select>
           </Field>
           <Field label={t("الموظف", "Employee")}>
-            <select style={inputStyle} value={leaveForm.employeeId} onChange={(e) => setLeaveForm({ ...leaveForm, employeeId: e.target.value })}>
-              <option value="">{t("اختر الموظف", "Select employee")}</option>
-              {leaveEmployees.map((e) => (
-                <option key={e.id} value={e.id}>{e.name}</option>
-              ))}
-            </select>
+            <EmployeeSelect employees={leaveEmployees} value={leaveForm.employeeId} onChange={(id) => setLeaveForm({ ...leaveForm, employeeId: id })} />
           </Field>
           <Field label={t("نوع الإجازة", "Leave Type")}>
             <select style={inputStyle} value={leaveForm.type} onChange={(e) => setLeaveForm({ ...leaveForm, type: e.target.value })}>
@@ -2926,12 +3013,7 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
             </select>
           </Field>
           <Field label={t("الموظف", "Employee")}>
-            <select style={inputStyle} value={attForm.employeeId} onChange={(e) => setAttForm({ ...attForm, employeeId: e.target.value })}>
-              <option value="">{t("اختر الموظف", "Select employee")}</option>
-              {attEmployees.map((e) => (
-                <option key={e.id} value={e.id}>{e.name}</option>
-              ))}
-            </select>
+            <EmployeeSelect employees={attEmployees} value={attForm.employeeId} onChange={(id) => setAttForm({ ...attForm, employeeId: id })} />
           </Field>
           <Field label={t("التاريخ", "Date")}>
             <DateField style={inputStyle} value={attForm.date} onChange={(v) => setAttForm({ ...attForm, date: v })} />
@@ -3131,12 +3213,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }} className="no-print">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
           <Field label={t("الموظف", "Employee")}>
-            <select style={inputStyle} value={itemForm.employeeId} onChange={(e) => setItemForm({ ...itemForm, employeeId: e.target.value })}>
-              <option value="">{t("اختر الموظف", "Select employee")}</option>
-              {employees.map((e) => (
-                <option key={e.id} value={e.id}>{e.name}</option>
-              ))}
-            </select>
+            <EmployeeSelect employees={employees} value={itemForm.employeeId} onChange={(id) => setItemForm({ ...itemForm, employeeId: id })} />
           </Field>
           <Field label={t("النوع", "Type")}>
             <select style={inputStyle} value={itemForm.type} onChange={(e) => setItemForm({ ...itemForm, type: e.target.value })}>
@@ -3509,12 +3586,7 @@ function EOSTab({ employees }) {
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 20 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
           <Field label={t("الموظف", "Employee")}>
-            <select style={inputStyle} value={empId} onChange={(e) => setEmpId(e.target.value)}>
-              <option value="">{t("اختر الموظف", "Select employee")}</option>
-              {employees.map((e) => (
-                <option key={e.id} value={e.id}>{e.name}</option>
-              ))}
-            </select>
+            <EmployeeSelect employees={employees} value={empId} onChange={(id) => setEmpId(id)} />
           </Field>
           <Field label={t("تاريخ انتهاء الخدمة", "Service End Date")}>
             <DateField style={inputStyle} value={endDate} onChange={(v) => setEndDate(v)} />
@@ -4113,12 +4185,7 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }} className="no-print">
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
           <Field label={t("الموظف", "Employee")}>
-            <select style={inputStyle} value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })}>
-              <option value="">{t("اختر الموظف", "Select employee")}</option>
-              {employees.map((e) => (
-                <option key={e.id} value={e.id}>{e.name}</option>
-              ))}
-            </select>
+            <EmployeeSelect employees={employees} value={form.employeeId} onChange={(id) => setForm({ ...form, employeeId: id })} />
           </Field>
           <Field label={t("عنوان المهمة", "Task Title")}>
             <input type="text" style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
@@ -4882,12 +4949,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
           )}
           {form.role === "employee" && (
             <Field label={t("الموظف المرتبط", "Linked Employee")}>
-              <select style={inputStyle} value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })}>
-                <option value="">{t("اختر الموظف", "Select employee")}</option>
-                {employees.map((e) => (
-                  <option key={e.id} value={e.id}>{e.name}</option>
-                ))}
-              </select>
+              <EmployeeSelect employees={employees} value={form.employeeId} onChange={(id) => setForm({ ...form, employeeId: id })} />
             </Field>
           )}
         </div>
