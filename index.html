@@ -388,6 +388,7 @@ const NAV = [
   { key: "branches", label: "الكيانات والفروع", labelEn: "Entities & Branches", icon: "◫" },
   { key: "attendance", label: "الحضور والإجازات", labelEn: "Attendance & Leave", icon: "◔" },
   { key: "leaveRequests", label: "طلبات الإجازات", labelEn: "Leave Requests", icon: "✉" },
+  { key: "advanceRequests", label: "طلبات السلف", labelEn: "Advance Requests", icon: "❖" },
   { key: "tasks", label: "مهام الموظفين", labelEn: "Employee Tasks", icon: "☑" },
   { key: "payroll", label: "الرواتب و GOSI", labelEn: "Payroll & GOSI", icon: "◎" },
   { key: "eos", label: "نهاية الخدمة", labelEn: "End of Service", icon: "◆" },
@@ -400,8 +401,14 @@ const USERS_SEED = [
   { id: "u1", username: "admin", password: "admin123", role: "admin", name: "المدير العام", branchId: "", employeeId: "" },
 ];
 
-const ROLE_LABELS = { admin: "أدمن", manager: "مسؤول عام", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", employee: "موظف" };
-const ROLE_LABELS_EN = { admin: "Admin", manager: "General Manager", entity_manager: "Entity Manager", branch_manager: "Branch Manager", employee: "Employee" };
+const ROLE_LABELS = { admin: "أدمن", manager: "مسؤول عام", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", accountant: "محاسب", cashier: "أمين صندوق", employee: "موظف" };
+const ROLE_LABELS_EN = { admin: "Admin", manager: "General Manager", entity_manager: "Entity Manager", branch_manager: "Branch Manager", accountant: "Accountant", cashier: "Cashier", employee: "Employee" };
+/* اسم الدور المعروض — لو الدور "custom" (دور مخصص كتبه الأدمن يدويًا) بيرجّع الاسم اللي كتبه، وإلا بيرجّع الترجمة القياسية */
+function roleLabel(u, t) {
+  if (!u) return "—";
+  if (u.role === "custom") return u.customRoleLabel || t("دور مخصص", "Custom Role");
+  return t(ROLE_LABELS[u.role], ROLE_LABELS_EN[u.role]) || u.role || "—";
+}
 
 /* ترجمة نصوص العرض فقط لقيم مخزّنة بالعربي (الحالة/الجنسية/إلخ) — القيمة المخزّنة في البيانات تفضل عربي دايمًا */
 const STATUS_LABELS_EN = { "نشط": "Active", "موقوف": "Suspended", "منتهي الخدمة": "Terminated" };
@@ -415,6 +422,11 @@ const LEAVE_REQUEST_STATUS_LABELS_EN = {
   "موافقة نهائية": "Final Approved",
   "مرفوضة نهائيًا": "Finally Rejected",
 };
+const ADVANCE_REQUEST_STATUS_LABELS_EN = {
+  "قيد المراجعة": "Pending Review",
+  "موافقة": "Approved",
+  "مرفوض": "Rejected",
+};
 const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late" };
 const PAYROLL_ITEM_TYPE_LABELS_EN = { "سلفة": "Advance", "خصم": "Deduction", "حافز": "Incentive" };
 const TASK_STATUS_LABELS_EN = { "قيد التنفيذ": "In Progress", "مكتملة": "Completed", "متأخرة": "Overdue" };
@@ -423,12 +435,25 @@ function trLabel(t, dict, v) {
   return t(v, dict[v] || v);
 }
 
-const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null };
-const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "tasks", "payroll", "eos", "settings"];
+const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "" };
+const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "advanceRequests", "tasks", "payroll", "eos", "settings"];
+
+/* التبويبات الافتراضية المقترحة لكل دور — تظهر مُفعّلة تلقائيًا عند اختيار الدور، وتقدر تعدّلها يدويًا بعد كده */
+const ROLE_DEFAULT_TABS = {
+  accountant: ["dash", "employees", "iqamas", "licenses", "payroll", "eos", "advanceRequests"],
+  cashier: ["dash", "advanceRequests", "payroll"],
+  custom: ["dash"],
+};
+function defaultTabsForRole(role) {
+  if (ROLE_DEFAULT_TABS[role]) return ROLE_DEFAULT_TABS[role];
+  return navForRole(role).map((n) => n.key).filter((k) => CUSTOMIZABLE_TAB_KEYS.includes(k));
+}
 
 function navForRole(role) {
   if (role === "admin") return [...NAV, { key: "users", label: "المستخدمون", labelEn: "Users", icon: "◑" }];
   if (role === "manager") return NAV.filter((n) => n.key !== "reports"); // كل التبويبات فيما عدا التقارير، وبدون تبويب المستخدمين
+  if (role === "accountant" || role === "cashier" || role === "custom")
+    return NAV.filter((n) => n.key !== "reports"); // محاسب/أمين صندوق/دور مخصص: وصول لكل الكيانات والفروع (بدون تقييد بكيان واحد)، فيما عدا التقارير وتبويب المستخدمين
   if (role === "entity_manager") return NAV.filter((n) => n.key !== "reports"); // كل التبويبات عدا التقارير (سجل الدخول حصري للأدمن العام) وبدون تبويب المستخدمين
   if (role === "branch_manager")
     return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "tasks", "payroll", "eos"].includes(n.key));
@@ -766,6 +791,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [employees, setEmployees] = useState([]);
   const [leaves, setLeaves] = useState([]);
   const [leaveRequests, setLeaveRequests] = useState([]);
+  const [advanceRequests, setAdvanceRequests] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [vehicles, setVehicles] = useState([]);
   const [payrollItems, setPayrollItems] = useState([]);
@@ -818,6 +844,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             employees: d.employees || [],
             leaves: d.leaves || [],
             leaveRequests: d.leaveRequests || [],
+            advanceRequests: d.advanceRequests || [],
             attendance: d.attendance || [],
             gosiRates: d.gosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
             vehicles: d.vehicles || [],
@@ -829,6 +856,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setEmployees(next.employees);
           setLeaves(next.leaves);
           setLeaveRequests(next.leaveRequests);
+          setAdvanceRequests(next.advanceRequests);
           setAttendance(next.attendance);
           setVehicles(next.vehicles);
           setGosiRates(next.gosiRates);
@@ -837,7 +865,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           lastSyncedRef.current = JSON.stringify(next);
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [] }).catch(() => {});
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [] }).catch(() => {});
         }
         setSyncError("");
         setLoaded(true);
@@ -856,7 +884,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
      لباقي الأدوار (أدمن، مدير كيان، مسؤول فرع...): الحفظ يدوي فقط عند ضغط أيقونة الحفظ. */
   useEffect(() => {
     if (!loaded) return;
-    const payload = { entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, tasks };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -882,11 +910,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return () => clearTimeout(t);
     }
     setDirty(true);
-  }, [entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, tasks, loaded, role]);
+  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, loaded, role]);
 
   /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
   const saveNow = () => {
-    const payload = { entities, branches, employees, leaves, leaveRequests, attendance, gosiRates, vehicles, payrollItems, tasks };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -929,6 +957,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const scopedLeaveRequests = isEntityManager
     ? leaveRequests.filter((r) => scopedEmployees.some((e) => e.id === r.employeeId))
     : leaveRequests;
+  const scopedAdvanceRequests = isBranchManager || isEntityManager
+    ? advanceRequests.filter((r) => scopedEmployees.some((e) => e.id === r.employeeId))
+    : advanceRequests;
   const scopedAttendance = isBranchManager || isEntityManager
     ? attendance.filter((a) => scopedEmployees.some((e) => e.id === a.employeeId))
     : attendance;
@@ -1000,6 +1031,28 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     logActivity && logActivity("رفض نهائي لطلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
   };
 
+  /* دورة اعتماد طلبات السلف: خطوة واحدة — موافقة أو رفض من الأدمن/المسؤول العام/مدير الكيان.
+     عند الموافقة، بيتسجّل تلقائيًا كقيد "سلفة" في كشف رواتب الشهر الحالي فيتخصم من صافي الموظف */
+  const approveAdvanceRequest = (reqId) => {
+    const req = advanceRequests.find((r) => r.id === reqId);
+    if (!req) return;
+    setAdvanceRequests((prev) =>
+      prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة", decidedBy: currentUser.name, decidedAt: new Date().toISOString() } : r))
+    );
+    const month = new Date().toISOString().slice(0, 7);
+    setPayrollItems((prev) => [
+      ...prev,
+      { id: uid(), employeeId: req.employeeId, type: "سلفة", amount: req.amount, month, note: req.reason || "", advanceRequestId: req.id },
+    ]);
+    logActivity && logActivity("موافقة على طلب سلفة", "advanceRequests", `${employees.find((e) => e.id === req.employeeId)?.name || ""}: ${fmt(req.amount)} ﷼`);
+  };
+  const rejectAdvanceRequest = (reqId) => {
+    setAdvanceRequests((prev) =>
+      prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوض", decidedBy: currentUser.name, decidedAt: new Date().toISOString() } : r))
+    );
+    logActivity && logActivity("رفض طلب سلفة", "advanceRequests", employees.find((e) => e.id === advanceRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
+  };
+
   /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل */
   if (role === "employee") {
     const myEmployee = employees.find((e) => e.id === currentUser.employeeId);
@@ -1013,6 +1066,17 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       };
       setLeaveRequests((prev) => [newReq, ...prev]);
       logActivity && logActivity("تقديم طلب إجازة", "leaveRequests", myEmployee?.name || "");
+    };
+    const submitAdvanceRequest = (req) => {
+      const newReq = {
+        ...req,
+        id: uid(),
+        employeeId: myEmployee?.id,
+        status: "قيد المراجعة",
+        requestedAt: new Date().toISOString(),
+      };
+      setAdvanceRequests((prev) => [newReq, ...prev]);
+      logActivity && logActivity("تقديم طلب سلفة", "advanceRequests", `${myEmployee?.name || ""}: ${fmt(req.amount)} ﷼`);
     };
 
     const todayISO = new Date().toISOString().slice(0, 10);
@@ -1123,6 +1187,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         leaves={leaves}
         leaveRequests={leaveRequests.filter((r) => r.employeeId === myEmployee?.id)}
         onSubmitLeaveRequest={submitLeaveRequest}
+        advanceRequests={advanceRequests.filter((r) => r.employeeId === myEmployee?.id)}
+        onSubmitAdvanceRequest={submitAdvanceRequest}
         attendance={attendance}
         onClockIn={clockIn}
         onClockOut={clockOut}
@@ -1285,7 +1351,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         >
           <div style={{ fontSize: 12.5, fontWeight: 700, color: "#fff" }}>{currentUser.name}</div>
           <div style={{ fontSize: 10.5, color: COLORS.goldLight, marginTop: 2, marginBottom: 10 }}>
-            {t(ROLE_LABELS[role], ROLE_LABELS_EN[role])}
+            {roleLabel(currentUser, t)}
             {isBranchManager && ` · ${branchName(currentUser.branchId)}`}
             {isEntityManager && ` · ${entityName(currentUser.entityId)}`}
           </div>
@@ -1404,6 +1470,15 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             onPreliminaryReject={preliminaryRejectLeaveRequest}
             onFinalApprove={finalApproveLeaveRequest}
             onFinalReject={finalRejectLeaveRequest}
+            branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
+          />
+        )}
+        {tab === "advanceRequests" && (
+          <AdvanceRequestsTab
+            employees={scopedEmployees}
+            advanceRequests={scopedAdvanceRequests}
+            onApprove={approveAdvanceRequest}
+            onReject={rejectAdvanceRequest}
             branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
           />
         )}
@@ -4542,7 +4617,70 @@ function LeaveRequestsTab({ employees, leaveRequests, isEntityManager, isFinalAp
   );
 }
 
-/* ============ مهام الموظفين ============ */
+/* ============ طلبات السلف ============ */
+function AdvanceRequestsTab({ employees, advanceRequests, onApprove, onReject, branchName }) {
+  const { t } = useLang();
+  const empName = (id) => employees.find((e) => e.id === id)?.name || t("موظف محذوف", "Deleted employee");
+
+  const pending = advanceRequests.filter((r) => r.status === "قيد المراجعة");
+  const history = advanceRequests.filter((r) => r.status !== "قيد المراجعة");
+
+  const statusTone = (s) => (s === "موافقة" ? "green" : s === "قيد المراجعة" ? "gold" : "brick");
+
+  const RequestRow = ({ r, actions }) => (
+    <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+        <div>
+          <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{empName(r.employeeId)}</div>
+          <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{branchName(r.employeeId)}</div>
+          <div style={{ fontSize: 14, fontWeight: 700, marginTop: 6, color: COLORS.coffee, fontFamily: "Consolas, monospace" }}>
+            {fmt(r.amount)} ﷼
+          </div>
+          {r.reason && <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 4 }}>{r.reason}</div>}
+          {r.decidedBy && (
+            <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 4 }}>
+              {t("بواسطة", "By")} {r.decidedBy} — {r.decidedAt ? new Date(r.decidedAt).toLocaleString(t("ar-SA", "en-US")) : ""}
+            </div>
+          )}
+        </div>
+        <Stamp tone={statusTone(r.status)}>{trLabel(t, ADVANCE_REQUEST_STATUS_LABELS_EN, r.status)}</Stamp>
+      </div>
+      {actions && <div style={{ display: "flex", gap: 8, marginTop: 10 }}>{actions}</div>}
+    </div>
+  );
+
+  return (
+    <div>
+      <Header
+        title={t("طلبات السلف", "Advance Requests")}
+        subtitle={t(
+          "عند الموافقة، تُسجَّل السلفة تلقائيًا كخصم في كشف رواتب الشهر الحالي للموظف",
+          "On approval, the advance is automatically recorded as a deduction in the employee's current-month payroll"
+        )}
+      />
+
+      <SectionTitle>{t("بانتظار الموافقة", "Awaiting Approval")} ({pending.length})</SectionTitle>
+      {pending.length === 0 && <Empty text={t("لا توجد طلبات سلف بانتظار الموافقة", "No advance requests awaiting approval")} />}
+      {pending.map((r) => (
+        <RequestRow
+          key={r.id}
+          r={r}
+          actions={
+            <>
+              <Btn small onClick={() => onApprove(r.id)}>{t("✔ موافقة", "✔ Approve")}</Btn>
+              <Btn small tone="danger" onClick={() => onReject(r.id)}>{t("✕ رفض", "✕ Reject")}</Btn>
+            </>
+          }
+        />
+      ))}
+
+      <SectionTitle>{t("السجل", "History")} ({history.length})</SectionTitle>
+      {history.length === 0 && <Empty text={t("لا يوجد سجل بعد", "No history yet")} />}
+      {history.map((r) => <RequestRow key={r.id} r={r} />)}
+    </div>
+  );
+}
+
 function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, onRemoveTask, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, branchName }) {
   const { t } = useLang();
   const [form, setForm] = useState({ employeeId: "", title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "" });
@@ -4820,7 +4958,53 @@ function LeaveRequestForm({ onSubmit, t }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, dirty, saving, syncError, onSave }) {
+function AdvanceRequestForm({ onSubmit, t }) {
+  const [form, setForm] = useState({ amount: "", reason: "" });
+  const [sent, setSent] = useState(false);
+  const [err, setErr] = useState("");
+
+  const submit = () => {
+    const amt = Number(form.amount);
+    if (!amt || amt <= 0) {
+      setErr(t("الرجاء إدخال مبلغ صحيح", "Please enter a valid amount"));
+      return;
+    }
+    onSubmit && onSubmit({ amount: amt, reason: form.reason.trim() });
+    setForm({ amount: "", reason: "" });
+    setErr("");
+    setSent(true);
+    setTimeout(() => setSent(false), 2500);
+  };
+
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+        <Field label={t("المبلغ المطلوب (﷼)", "Requested Amount (SAR)")}>
+          <input
+            type="number"
+            style={{ ...inputStyle, width: 130 }}
+            value={form.amount}
+            onChange={(e) => setForm({ ...form, amount: e.target.value })}
+          />
+        </Field>
+        <Field label={t("السبب (اختياري)", "Reason (optional)")}>
+          <input style={inputStyle} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
+        </Field>
+        <div style={{ display: "flex", alignItems: "flex-end" }}>
+          <Btn onClick={submit}>{t("إرسال طلب السلفة", "Submit Advance Request")}</Btn>
+        </div>
+      </div>
+      {err && <div style={{ marginTop: 10, fontSize: 12, color: COLORS.brick }}>{err}</div>}
+      {sent && (
+        <div style={{ marginTop: 10, fontSize: 12, color: COLORS.green }}>
+          {t("تم إرسال طلبك — بانتظار الموافقة.", "Your request has been sent — awaiting approval.")}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, advanceRequests, onSubmitAdvanceRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, dirty, saving, syncError, onSave }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
@@ -5201,6 +5385,29 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
           ))}
         </div>
 
+        <SectionTitle>{t("طلب سلفة جديد", "New Advance Request")}</SectionTitle>
+        <AdvanceRequestForm onSubmit={onSubmitAdvanceRequest} t={t} />
+
+        <SectionTitle>{t("طلبات السلف الخاصة بي", "My Advance Requests")}</SectionTitle>
+        <div style={{ marginBottom: 20 }}>
+          {(!advanceRequests || advanceRequests.length === 0) && (
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+              <Empty text={t("لا توجد طلبات سلف مقدَّمة", "No advance requests submitted")} />
+            </div>
+          )}
+          {(advanceRequests || []).map((r) => (
+            <div key={r.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div style={{ fontSize: 12.5 }}>
+                <span style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{fmt(r.amount)} ﷼</span>
+                {r.reason && <span style={{ color: "#8a7a63" }}> — {r.reason}</span>}
+              </div>
+              <Stamp tone={r.status === "موافقة" ? "green" : r.status === "مرفوض" ? "brick" : "gold"}>
+                {trLabel(t, ADVANCE_REQUEST_STATUS_LABELS_EN, r.status)}
+              </Stamp>
+            </div>
+          ))}
+        </div>
+
         <SectionTitle>{t("سجل الإجازات", "Leave Record")}</SectionTitle>
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 20 }}>
           {myLeaves.length === 0 && <Empty text={t("لا توجد إجازات مسجّلة", "No registered leaves")} />}
@@ -5270,17 +5477,21 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
       setErr(t("الرجاء تعبئة الاسم واسم المستخدم وكلمة المرور", "Please fill in the name, username, and password"));
       return;
     }
+    if (form.role === "custom" && !form.customRoleLabel.trim()) {
+      setErr(t("الرجاء كتابة اسم الدور المخصص", "Please enter the custom role name"));
+      return;
+    }
     const dup = users.find((u) => u.username === form.username.trim() && u.id !== editingId);
     if (dup) {
       setErr(t("اسم المستخدم مستخدم بالفعل، اختر اسمًا آخر", "This username is already taken, please choose another"));
       return;
     }
-    const customizableRole = ["manager", "entity_manager", "branch_manager"].includes(form.role);
-    const payload = { ...form, username: form.username.trim() };
+    const customizableRole = ["manager", "entity_manager", "branch_manager", "accountant", "cashier", "custom"].includes(form.role);
+    const payload = { ...form, username: form.username.trim(), customRoleLabel: form.role === "custom" ? form.customRoleLabel.trim() : "" };
     if (!customizableRole) {
       payload.customTabs = null;
     } else if (!Array.isArray(payload.customTabs)) {
-      payload.customTabs = navForRole(form.role).map((n) => n.key).filter((k) => CUSTOMIZABLE_TAB_KEYS.includes(k));
+      payload.customTabs = defaultTabsForRole(form.role);
     }
     if (editingId) {
       setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...payload, id: editingId } : u)));
@@ -5293,7 +5504,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
   };
 
   const edit = (u) => {
-    const defaultTabs = navForRole(u.role).map((n) => n.key).filter((k) => CUSTOMIZABLE_TAB_KEYS.includes(k));
+    const defaultTabs = defaultTabsForRole(u.role);
     setForm({ ...u, customTabs: Array.isArray(u.customTabs) ? u.customTabs : defaultTabs });
     setEditingId(u.id);
     setErr("");
@@ -5333,7 +5544,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
               value={form.role}
               onChange={(e) => {
                 const newRole = e.target.value;
-                const defaultTabs = navForRole(newRole).map((n) => n.key).filter((k) => CUSTOMIZABLE_TAB_KEYS.includes(k));
+                const defaultTabs = defaultTabsForRole(newRole);
                 setForm({ ...form, role: newRole, branchId: "", employeeId: "", entityId: "", customTabs: defaultTabs });
               }}
             >
@@ -5341,9 +5552,22 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
               <option value="manager">{t("مسؤول عام", "General Manager")}</option>
               <option value="entity_manager">{t("مدير كيان", "Entity Manager")}</option>
               <option value="branch_manager">{t("مسؤول فرع", "Branch Manager")}</option>
+              <option value="accountant">{t("محاسب (كل الكيانات)", "Accountant (all entities)")}</option>
+              <option value="cashier">{t("أمين صندوق (كل الكيانات)", "Cashier (all entities)")}</option>
+              <option value="custom">{t("دور مخصص (اكتب اسمه)", "Custom role (type name)")}</option>
               <option value="employee">{t("موظف", "Employee")}</option>
             </select>
           </Field>
+          {form.role === "custom" && (
+            <Field label={t("اسم الدور", "Role Name")}>
+              <input
+                style={inputStyle}
+                placeholder={t("مثال: مشرف مبيعات", "e.g. Sales Supervisor")}
+                value={form.customRoleLabel}
+                onChange={(e) => setForm({ ...form, customRoleLabel: e.target.value })}
+              />
+            </Field>
+          )}
           {form.role === "entity_manager" && (
             <Field label={t("الكيان", "Entity")}>
               <select style={inputStyle} value={form.entityId} onChange={(e) => setForm({ ...form, entityId: e.target.value })}>
@@ -5371,7 +5595,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
           )}
         </div>
 
-        {["manager", "entity_manager", "branch_manager"].includes(form.role) && (
+        {["manager", "entity_manager", "branch_manager", "accountant", "cashier", "custom"].includes(form.role) && (
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px dashed ${COLORS.line}` }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8, color: COLORS.espresso }}>
               {t("التبويبات المسموح بها لهذا الحساب", "Tabs allowed for this account")}
@@ -5460,7 +5684,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
                       {u.name} <span style={{ fontWeight: 400, color: "#8a7a63" }}>({u.username})</span>
                     </div>
                     <div style={{ fontSize: 11.5, color: "#8a7a63" }}>
-                      {t(ROLE_LABELS[u.role], ROLE_LABELS_EN[u.role])}
+                      {roleLabel(u, t)}
                       {u.role === "entity_manager" && ` · ${entities.find((en) => en.id === u.entityId)?.name || "—"}`}
                       {u.role === "branch_manager" && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
                       {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
@@ -5579,7 +5803,7 @@ function ReportsTab({ activityLog, users }) {
                   <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
                     <td data-label={t("التاريخ والوقت", "Date & Time")} style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{fmtDT(r.timestamp)}</td>
                     <td data-label={t("المستخدم", "User")} style={{ padding: "9px 12px", fontWeight: 700 }}>{r.userName} <span style={{ color: "#a3927a", fontWeight: 400 }}>({r.username})</span></td>
-                    <td data-label={t("الدور", "Role")} style={{ padding: "9px 12px" }}>{t(ROLE_LABELS[r.role], ROLE_LABELS_EN[r.role]) || "—"}</td>
+                    <td data-label={t("الدور", "Role")} style={{ padding: "9px 12px" }}>{roleLabel({ role: r.role, customRoleLabel: r.customRoleLabel }, t)}</td>
                     <td data-label={t("العملية", "Action")} style={{ padding: "9px 12px" }}>
                       <Stamp tone={ACTION_TONE(r.action)}>{r.action}</Stamp>
                     </td>
@@ -5679,6 +5903,7 @@ function Root() {
       username: user?.username || "—",
       userName: user?.name || user?.username || "—",
       role: user?.role || "",
+      customRoleLabel: user?.customRoleLabel || "",
       action,
       targetType: targetType || "",
       targetLabel: targetLabel || "",
