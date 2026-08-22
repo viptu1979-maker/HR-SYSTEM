@@ -1092,10 +1092,18 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     const [geoBusy, setGeoBusy] = useState(false);
     const [geoError, setGeoError] = useState("");
 
-    const verifyAtBranch = async (branchId) => {
-      const branch = branches.find((b) => b.id === branchId);
-      if (!branch || branch.lat == null || branch.lng == null) {
-        return { ok: false, message: t("لم يتم تحديد موقع الفرع بعد — تواصل مع الإدارة لضبط موقع الفرع من تبويب \"الكيانات والفروع\".", "The branch location hasn't been set yet — contact management to set it from the \"Entities & Branches\" tab.") };
+    /* لموظفين يشتغلوا على أكتر من فرع: بيتفحص موقعهم مقابل كل فروعهم (الأساسي + الإضافية)،
+       وبينجح التسجيل لو كانوا داخل نطاق أي فرع منهم — مع تسجيل الفرع الفعلي اللي سجّلوا منه */
+    const verifyAtAnyBranch = async (branchIds) => {
+      const validBranches = branchIds.map((id) => branches.find((b) => b.id === id)).filter((b) => b && b.lat != null && b.lng != null);
+      if (validBranches.length === 0) {
+        return {
+          ok: false,
+          message: t(
+            "لم يتم تحديد موقع أي من فروعك بعد — تواصل مع الإدارة لضبط مواقع الفروع من تبويب \"الكيانات والفروع\".",
+            "None of your branches have a location set yet — contact management to set them from the \"Entities & Branches\" tab."
+          ),
+        };
       }
       let pos;
       try {
@@ -1109,18 +1117,22 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         }
         return { ok: false, message: t("تعذّر تحديد موقعك. تأكد من تفعيل GPS ووجود اتصال، ثم حاول مرة أخرى.", "Couldn't get your location. Make sure GPS is enabled and you have a connection, then try again.") };
       }
-      const dist = distanceMeters(pos.coords.latitude, pos.coords.longitude, branch.lat, branch.lng);
-      const radius = branch.radius || 150;
-      if (dist > radius) {
-        return {
-          ok: false,
-          message: t(
-            `أنت على بُعد ${Math.round(dist)} متر تقريبًا من الفرع — يجب أن تكون داخل نطاق ${radius} متر لتسجيل الحضور/الانصراف.`,
-            `You're about ${Math.round(dist)}m away from the branch — you must be within ${radius}m to clock in/out.`
-          ),
-        };
+      let closest = null;
+      for (const branch of validBranches) {
+        const dist = distanceMeters(pos.coords.latitude, pos.coords.longitude, branch.lat, branch.lng);
+        const radius = branch.radius || 150;
+        if (dist <= radius) {
+          return { ok: true, branchId: branch.id, lat: pos.coords.latitude, lng: pos.coords.longitude, distance: Math.round(dist), accuracy: pos.coords.accuracy };
+        }
+        if (!closest || dist < closest.dist) closest = { dist, branch, radius };
       }
-      return { ok: true, lat: pos.coords.latitude, lng: pos.coords.longitude, distance: Math.round(dist), accuracy: pos.coords.accuracy };
+      return {
+        ok: false,
+        message: t(
+          `أنت لست داخل نطاق أي من فروعك — أقرب فرع لك هو "${closest.branch.name}" وتبعد عنه ${Math.round(closest.dist)} متر تقريبًا (النطاق المسموح ${closest.radius} متر).`,
+          `You're not within range of any of your branches — the closest is "${closest.branch.name}", about ${Math.round(closest.dist)}m away (allowed range ${closest.radius}m).`
+        ),
+      };
     };
 
     const clockIn = async () => {
@@ -1129,7 +1141,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       if (already) return;
       setGeoError("");
       setGeoBusy(true);
-      const check = await verifyAtBranch(myEmployee.branchId);
+      const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
+      const check = await verifyAtAnyBranch(myBranchIds);
       setGeoBusy(false);
       if (!check.ok) {
         setGeoError(check.message);
@@ -1148,10 +1161,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         overtimeHours: 0,
         checkInTime: timeStr,
         checkOutTime: "",
+        branchId: check.branchId,
         checkInLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
       };
       setAttendance((prev) => [...prev, rec]);
-      logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+      const checkInBranchName = branches.find((b) => b.id === check.branchId)?.name || "";
+      logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
     };
 
     const clockOut = async () => {
@@ -1160,7 +1175,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       if (!rec || rec.checkOutTime) return;
       setGeoError("");
       setGeoBusy(true);
-      const check = await verifyAtBranch(myEmployee.branchId);
+      const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
+      const check = await verifyAtAnyBranch(myBranchIds);
       setGeoBusy(false);
       if (!check.ok) {
         setGeoError(check.message);
@@ -1663,6 +1679,7 @@ const EMPTY_EMP = {
   nationalId: "",
   nationality: "سعودي",
   branchId: "",
+  additionalBranchIds: [],
   position: "",
   salary: "",
   joinDate: "",
@@ -1751,18 +1768,19 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 
   const submit = () => {
     if (!form.name || !form.branchId) return;
+    const cleanForm = { ...form, additionalBranchIds: (form.additionalBranchIds || []).filter((id) => id !== form.branchId) };
     if (editingId) {
-      setEmployees((prev) => prev.map((e) => (e.id === editingId ? { ...form, id: editingId } : e)));
+      setEmployees((prev) => prev.map((e) => (e.id === editingId ? { ...cleanForm, id: editingId } : e)));
       logActivity && logActivity("تعديل موظف", "employees", form.name);
     } else {
-      setEmployees((prev) => [...prev, { ...form, id: uid() }]);
+      setEmployees((prev) => [...prev, { ...cleanForm, id: uid() }]);
       logActivity && logActivity("إضافة موظف", "employees", form.name);
     }
     resetForm();
   };
 
   const edit = (emp) => {
-    setForm(emp);
+    setForm({ ...EMPTY_EMP, ...emp, additionalBranchIds: Array.isArray(emp.additionalBranchIds) ? emp.additionalBranchIds : [] });
     setEditingId(emp.id);
   };
 
@@ -1871,7 +1889,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
               <option value="غير سعودي">{t("غير سعودي", "Non-Saudi")}</option>
             </select>
           </Field>
-          <Field label={t("الفرع", "Branch")}>
+          <Field label={t("الفرع الأساسي", "Primary Branch")}>
             <select style={inputStyle} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
               <option value="">{t("اختر الفرع", "Select branch")}</option>
               {branches.map((b) => (
@@ -1923,6 +1941,47 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
             <DateField style={inputStyle} value={form.contractEnd} onChange={(v) => setForm({ ...form, contractEnd: v })} />
           </Field>
         </div>
+
+        <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.coffee, margin: "14px 0 8px" }}>
+          {t("فروع إضافية للحضور", "Additional Branches for Attendance")}
+        </div>
+        <div style={{ fontSize: 11, color: "#a3927a", marginBottom: 8 }}>
+          {t(
+            "للموظفين اللي شغالين على أكتر من فرع: حدّد هنا الفروع الإضافية اللي يقدر يسجّل منها حضوره/انصرافه بالموقع الجغرافي، غير الفرع الأساسي أعلاه.",
+            "For employees who work across multiple branches: select the additional branches where they can clock in/out by geolocation, besides their primary branch above."
+          )}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+          {branches
+            .filter((b) => b.id !== form.branchId)
+            .map((b) => {
+              const active = (form.additionalBranchIds || []).includes(b.id);
+              return (
+                <button
+                  key={b.id}
+                  type="button"
+                  onClick={() => {
+                    const cur = form.additionalBranchIds || [];
+                    const next = cur.includes(b.id) ? cur.filter((id) => id !== b.id) : [...cur, b.id];
+                    setForm({ ...form, additionalBranchIds: next });
+                  }}
+                  style={{
+                    padding: "6px 11px",
+                    borderRadius: 7,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    border: `1px solid ${active ? COLORS.espresso : COLORS.line}`,
+                    background: active ? COLORS.espresso : "#fff",
+                    color: active ? "#fff" : COLORS.coffee,
+                  }}
+                >
+                  {b.name}
+                </button>
+              );
+            })}
+        </div>
+
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
           <Btn onClick={submit}>{editingId ? t("حفظ التعديل", "Save Changes") : t("إضافة الموظف", "Add Employee")}</Btn>
           {editingId && <Btn tone="secondary" onClick={resetForm}>{t("إلغاء", "Cancel")}</Btn>}
@@ -2020,7 +2079,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
                   >
                     {e.name}
                   </td>
-                  <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === e.branchId)?.name || "—"}</td>
+                  <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px" }}>
+                    {branches.find((b) => b.id === e.branchId)?.name || "—"}
+                    {Array.isArray(e.additionalBranchIds) && e.additionalBranchIds.length > 0 && (
+                      <span style={{ color: "#a3927a", fontSize: 11 }}> (+{e.additionalBranchIds.length})</span>
+                    )}
+                  </td>
                   <td data-label={t("الوظيفة", "Position")} style={{ padding: "9px 12px" }}>{e.position}</td>
                   <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px" }}>{trLabel(t, NATIONALITY_LABELS_EN, e.nationality)}</td>
                   <td data-label={t("الراتب", "Salary")} style={{ padding: "9px 12px", fontFamily: "Consolas, monospace" }}>{fmt(e.salary)} ﷼</td>
@@ -5092,6 +5156,9 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
               <div style={{ fontSize: 18, fontWeight: 800, color: COLORS.espresso }}>{t("مرحبًا", "Welcome")}، {employee.name}</div>
               <div style={{ fontSize: 12, color: "#8a7a63", marginTop: 3 }}>
                 {branchName(employee.branchId)} · {employee.position}
+                {Array.isArray(employee.additionalBranchIds) && employee.additionalBranchIds.length > 0 && (
+                  <span> · {t("+ فروع إضافية:", "+ additional branches:")} {employee.additionalBranchIds.map((id) => branchName(id)).join("، ")}</span>
+                )}
               </div>
             </div>
           </div>
