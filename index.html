@@ -6087,6 +6087,7 @@ function ReportsTab({ activityLog, users }) {
   const [userFilter, setUserFilter] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
 
   const fmtDT = (iso) => {
     const d = new Date(iso);
@@ -6094,10 +6095,19 @@ function ReportsTab({ activityLog, users }) {
     return d.toLocaleString(t("ar-SA-u-nu-latn", "en-US"), { dateStyle: "medium", timeStyle: "short" });
   };
 
+  const q = searchQuery.trim().toLowerCase();
   const rows = activityLog
     .filter((e) => !userFilter || e.username === userFilter)
     .filter((e) => !fromDate || (e.timestamp || "").slice(0, 10) >= fromDate)
     .filter((e) => !toDate || (e.timestamp || "").slice(0, 10) <= toDate)
+    .filter(
+      (e) =>
+        !q ||
+        (e.userName || "").toLowerCase().includes(q) ||
+        (e.username || "").toLowerCase().includes(q) ||
+        (e.action || "").toLowerCase().includes(q) ||
+        (e.targetLabel || "").toLowerCase().includes(q)
+    )
     .slice()
     .reverse();
 
@@ -6112,6 +6122,14 @@ function ReportsTab({ activityLog, users }) {
       <Header title={t("تقرير الدخول والعمليات", "Login & Activity Report")} subtitle={t("سجلّ بمن دخل النظام ومتى وماذا فعل، مبني على آخر 500 عملية", "A log of who accessed the system, when, and what they did — based on the last 500 actions")} />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }} className="no-print">
+        <Field label={t("بحث", "Search")}>
+          <input
+            style={inputStyle}
+            placeholder={t("ابحث بالاسم أو العملية أو التفاصيل...", "Search by name, action, or details...")}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </Field>
         <Field label={t("المستخدم", "User")}>
           <select style={inputStyle} value={userFilter} onChange={(e) => setUserFilter(e.target.value)}>
             <option value="">{t("كل المستخدمين", "All Users")}</option>
