@@ -1595,6 +1595,8 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, branchName
     if (isUrgent(v.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين سيارة", "Vehicle Insurance"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.insuranceExpiry, t) });
   });
   urgentAlerts.sort((a, b) => a.status.days - b.status.days);
+  const expiredAlerts = urgentAlerts.filter((a) => a.status.days < 0);
+  const expiringAlerts = urgentAlerts.filter((a) => a.status.days >= 0);
 
   /* تجميع الموظفين حسب الكيان، ثم حسب الفروع التابعة لكل كيان */
   const byEntity = entities.map((ent) => {
@@ -1623,13 +1625,46 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, branchName
         <ReceiptCard label={t("في إجازة اليوم", "On Leave Today")} value={fmt(onLeaveToday)} tone={onLeaveToday > 0 ? COLORS.brick : COLORS.green} />
       </div>
 
-      {urgentAlerts.length > 0 && (
+      {expiredAlerts.length > 0 && (
         <>
           <SectionTitle>
-            {t("⚠ تنبيهات عاجلة — تنتهي خلال 7 أيام", "⚠ Urgent Alerts — Expiring Within 7 Days")} ({urgentAlerts.length})
+            {t("🔴 منتهية بالفعل", "🔴 Already Expired")} ({expiredAlerts.length})
+          </SectionTitle>
+          <div style={{ background: "#fff", border: `2px solid ${COLORS.brick}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
+            {expiredAlerts.map((a, i) => (
+              <div
+                key={i}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "11px 16px",
+                  background: "rgba(200,90,70,0.06)",
+                  borderTop: i > 0 ? `1px dashed ${COLORS.line}` : "none",
+                  flexWrap: "wrap",
+                  gap: 8,
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>
+                    {a.label} — {a.name}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#8a7a63" }}>{a.sub}</div>
+                </div>
+                <Stamp tone="brick">{a.status.label}</Stamp>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {expiringAlerts.length > 0 && (
+        <>
+          <SectionTitle>
+            {t("⚠ تنتهي خلال 7 أيام", "⚠ Expiring Within 7 Days")} ({expiringAlerts.length})
           </SectionTitle>
           <div style={{ background: "#fff", border: `1px solid ${COLORS.brick}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
-            {urgentAlerts.map((a, i) => (
+            {expiringAlerts.map((a, i) => (
               <div
                 key={i}
                 style={{
@@ -1648,7 +1683,7 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, branchName
                   </div>
                   <div style={{ fontSize: 11, color: "#8a7a63" }}>{a.sub}</div>
                 </div>
-                <Stamp tone="brick">{a.status.label}</Stamp>
+                <Stamp tone="gold">{a.status.label}</Stamp>
               </div>
             ))}
           </div>
