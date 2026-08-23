@@ -604,10 +604,13 @@ function ReceiptCard({ label, value, sub, tone }) {
   );
 }
 
-function Field({ label, children }) {
+function Field({ label, children, required = false }) {
   return (
     <label style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 13, flex: "1 1 160px" }}>
-      <span style={{ color: COLORS.coffee, fontWeight: 600 }}>{label}</span>
+      <span style={{ color: COLORS.coffee, fontWeight: 600 }}>
+        {label}
+        {required && <span style={{ color: COLORS.brick }}> *</span>}
+      </span>
       {children}
     </label>
   );
@@ -1902,14 +1905,28 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
   const [editingId, setEditingId] = useState(null);
   const [filterBranch, setFilterBranch] = useState("");
   const [profileEmp, setProfileEmp] = useState(null);
+  const [formErr, setFormErr] = useState("");
 
   const resetForm = () => {
     setForm(EMPTY_EMP);
     setEditingId(null);
+    setFormErr("");
   };
 
   const submit = () => {
-    if (!form.name || !form.branchId) return;
+    const missing = [];
+    if (!form.name.trim()) missing.push(t("الاسم الكامل", "Full Name"));
+    if (!form.nationalId.trim()) missing.push(t("رقم الهوية / الإقامة", "National ID / Iqama No."));
+    if (!form.branchId) missing.push(t("الفرع الأساسي", "Primary Branch"));
+    if (!form.position.trim()) missing.push(t("المسمى الوظيفي", "Job Title"));
+    if (!String(form.salary).trim()) missing.push(t("الراتب الأساسي", "Basic Salary"));
+    if (!form.joinDate) missing.push(t("تاريخ التعيين", "Hire Date"));
+    if (!form.phone.trim()) missing.push(t("رقم الجوال", "Mobile Number"));
+    if (missing.length) {
+      setFormErr(t(`الرجاء تعبئة الحقول الإلزامية: ${missing.join("، ")}`, `Please fill in the required fields: ${missing.join(", ")}`));
+      return;
+    }
+    setFormErr("");
     const cleanForm = { ...form, additionalBranchIds: (form.additionalBranchIds || []).filter((id) => id !== form.branchId) };
     if (editingId) {
       setEmployees((prev) => prev.map((e) => (e.id === editingId ? { ...cleanForm, id: editingId } : e)));
@@ -2019,10 +2036,10 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           </Field>
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 12 }}>
-          <Field label={t("الاسم الكامل", "Full Name")}>
+          <Field label={t("الاسم الكامل", "Full Name")} required>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
-          <Field label={t("رقم الهوية / الإقامة", "National ID / Iqama No.")}>
+          <Field label={t("رقم الهوية / الإقامة", "National ID / Iqama No.")} required>
             <input style={inputStyle} value={form.nationalId} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} />
           </Field>
           <Field label={t("الجنسية", "Nationality")}>
@@ -2031,7 +2048,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
               <option value="غير سعودي">{t("غير سعودي", "Non-Saudi")}</option>
             </select>
           </Field>
-          <Field label={t("الفرع الأساسي", "Primary Branch")}>
+          <Field label={t("الفرع الأساسي", "Primary Branch")} required>
             <select style={inputStyle} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
               <option value="">{t("اختر الفرع", "Select branch")}</option>
               {branches.map((b) => (
@@ -2041,16 +2058,16 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
               ))}
             </select>
           </Field>
-          <Field label={t("المسمى الوظيفي", "Job Title")}>
+          <Field label={t("المسمى الوظيفي", "Job Title")} required>
             <input style={inputStyle} value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} />
           </Field>
-          <Field label={t("الراتب الأساسي (﷼)", "Basic Salary (SAR)")}>
+          <Field label={t("الراتب الأساسي (﷼)", "Basic Salary (SAR)")} required>
             <input type="number" style={inputStyle} value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
           </Field>
-          <Field label={t("تاريخ التعيين", "Hire Date")}>
+          <Field label={t("تاريخ التعيين", "Hire Date")} required>
             <DateField style={inputStyle} value={form.joinDate} onChange={(v) => setForm({ ...form, joinDate: v })} />
           </Field>
-          <Field label={t("رقم الجوال", "Mobile Number")}>
+          <Field label={t("رقم الجوال", "Mobile Number")} required>
             <input style={inputStyle} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
           </Field>
           <Field label={t("الحالة", "Status")}>
@@ -2128,6 +2145,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           <Btn onClick={submit}>{editingId ? t("حفظ التعديل", "Save Changes") : t("إضافة الموظف", "Add Employee")}</Btn>
           {editingId && <Btn tone="secondary" onClick={resetForm}>{t("إلغاء", "Cancel")}</Btn>}
         </div>
+        {formErr && <div style={{ marginTop: 10, fontSize: 12, color: COLORS.brick }}>{formErr}</div>}
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
