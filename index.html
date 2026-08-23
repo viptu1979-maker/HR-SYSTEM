@@ -3775,6 +3775,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [searchQuery, setSearchQuery] = useState("");
   const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", month: new Date().toISOString().slice(0, 7), note: "", repayment: "دفعة واحدة", installments: 2 });
   const [payslip, setPayslip] = useState(null);
 
@@ -3808,9 +3809,11 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const removeItem = (id) => setPayrollItems((prev) => prev.filter((p) => p.id !== id));
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
 
+  const q = searchQuery.trim().toLowerCase();
   const rows = employees
     .filter((e) => e.status === "نشط")
     .filter((e) => !branchFilter || e.branchId === branchFilter)
+    .filter((e) => !q || (e.name || "").toLowerCase().includes(q) || (e.nationalId || "").toLowerCase().includes(q))
     .map((e) => {
       const salary = Number(e.salary || 0);
       const isSaudi = e.nationality === "سعودي";
@@ -3982,7 +3985,13 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("كشف الرواتب", "Payroll Sheet")}</SectionTitle>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }} className="no-print">
+          <input
+            style={{ ...inputStyle, maxWidth: 220 }}
+            placeholder={t("ابحث بالاسم أو رقم الهوية...", "Search by name or ID...")}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
           <select style={{ ...inputStyle, maxWidth: 220 }} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
             <option value="">{t("كل الفروع", "All Branches")}</option>
             {branches.map((b) => (
