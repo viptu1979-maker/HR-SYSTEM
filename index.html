@@ -1904,6 +1904,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
   const [form, setForm] = useState(EMPTY_EMP);
   const [editingId, setEditingId] = useState(null);
   const [filterBranch, setFilterBranch] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [profileEmp, setProfileEmp] = useState(null);
   const [formErr, setFormErr] = useState("");
 
@@ -1998,7 +1999,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, careerHistory: (prev.careerHistory || []).filter((h) => h.id !== entryId) } : prev));
   };
 
-  const list = employees.filter((e) => !filterBranch || e.branchId === filterBranch);
+  const q = searchQuery.trim().toLowerCase();
+  const list = employees.filter(
+    (e) =>
+      (!filterBranch || e.branchId === filterBranch) &&
+      (!q || (e.name || "").toLowerCase().includes(q) || (e.nationalId || "").toLowerCase().includes(q))
+  );
 
   return (
     <div>
@@ -2150,7 +2156,13 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("قائمة الموظفين", "Employee List")} ({fmt(list.length)})</SectionTitle>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            style={{ ...inputStyle, maxWidth: 220 }}
+            placeholder={t("ابحث بالاسم أو رقم الهوية...", "Search by name or ID...")}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
           <select style={{ ...inputStyle, maxWidth: 220 }} value={filterBranch} onChange={(e) => setFilterBranch(e.target.value)}>
             <option value="">{t("كل الفروع", "All Branches")}</option>
             {branches.map((b) => (
