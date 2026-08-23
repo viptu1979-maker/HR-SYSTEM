@@ -20,6 +20,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
   html, body { margin: 0; padding: 0; }
   * { box-sizing: border-box; }
@@ -170,6 +171,26 @@ const db = window.__hrDb;
 const DATA_DOC = db.collection("hrSystem").doc("data");
 const USERS_DOC = db.collection("hrSystem").doc("users");
 const LOG_DOC = db.collection("hrSystem").doc("activityLog");
+
+/* ============ إعدادات EmailJS — لإرسال كود تأكيد الدخول بالإيميل (تحقق ثنائي) ============
+   لازم تسجّل حساب مجاني على https://www.emailjs.com وتحط بياناتك هنا:
+   - Service ID: من "Email Services" بعد ما تربط بريدك مثل Gmail
+   - Template ID: من "Email Templates" — أنشئ قالب فيه متغيرين {{to_email}} و {{code}}
+   - Public Key: من "Account" ثم "General"
+   لحد ما تحط القيم الحقيقية، تسجيل الدخول هيشتغل عادي بدون كود تأكيد (تخطّي تلقائي) */
+const EMAILJS_SERVICE_ID = "service_0vtqa4e";
+const EMAILJS_TEMPLATE_ID = "template_8vsbx3v";
+const EMAILJS_PUBLIC_KEY = "y0LzSNUfCdyuenGVL";
+const EMAILJS_CONFIGURED = ![EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, EMAILJS_PUBLIC_KEY].some((v) => !v || v.startsWith("YOUR_"));
+if (EMAILJS_CONFIGURED && window.emailjs) {
+  window.emailjs.init({ publicKey: EMAILJS_PUBLIC_KEY });
+}
+function sendVerificationEmail(toEmail, code) {
+  if (!EMAILJS_CONFIGURED || !window.emailjs) {
+    return Promise.reject(new Error("EMAILJS_NOT_CONFIGURED"));
+  }
+  return window.emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, { to_email: toEmail, code });
+}
 
 /* ============ اللغة (عربي/إنجليزي) ============ */
 const LangContext = createContext({ lang: "ar", dir: "rtl", t: (ar) => ar, toggleLang: () => {} });
@@ -435,7 +456,7 @@ function trLabel(t, dict, v) {
   return t(v, dict[v] || v);
 }
 
-const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "" };
+const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "" };
 const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "advanceRequests", "tasks", "payroll", "eos", "settings"];
 
 /* التبويبات الافتراضية المقترحة لكل دور — تظهر مُفعّلة تلقائيًا عند اختيار الدور، وتقدر تعدّلها يدويًا بعد كده */
@@ -1422,6 +1443,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             branches={scopedBranches}
             employees={scopedEmployees}
             leaves={scopedLeaves}
+            vehicles={scopedVehicles}
             branchName={branchName}
             entityName={entityName}
           />
@@ -1540,12 +1562,39 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 }
 
 /* ============ لوحة التحكم ============ */
-function Dashboard({ entities, branches, employees, leaves, branchName, entityName }) {
+function Dashboard({ entities, branches, employees, leaves, vehicles, branchName, entityName }) {
   const { t } = useLang();
   const activeCount = employees.filter((e) => e.status === "نشط").length;
   const totalSalaries = employees.filter((e) => e.status === "نشط").reduce((s, e) => s + Number(e.salary || 0), 0);
   const today = new Date().toISOString().slice(0, 10);
   const onLeaveToday = leaves.filter((l) => l.from <= today && l.to >= today).length;
+
+  /* تنبيهات عاجلة: أي ترخيص أو إقامة أو تأمين منتهي أو هينتهي خلال 7 أيام — تشمل الموظفين والفروع والسيارات */
+  const isUrgent = (dateStr) => {
+    if (!dateStr) return false;
+    const st = expiryStatus(dateStr, t);
+    return st.days !== null && st.days <= 7;
+  };
+  const urgentAlerts = [];
+  employees
+    .filter((e) => e.status === "نشط")
+    .forEach((e) => {
+      if (isUrgent(e.iqamaExpiry)) urgentAlerts.push({ label: t("إقامة", "Iqama"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.iqamaExpiry, t) });
+      if (e.contractType !== "غير محدد المدة" && isUrgent(e.contractEnd)) urgentAlerts.push({ label: t("عقد عمل", "Work Contract"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.contractEnd, t) });
+      if (isUrgent(e.healthCertExpiry)) urgentAlerts.push({ label: t("شهادة صحية", "Health Certificate"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.healthCertExpiry, t) });
+      if (isUrgent(e.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين طبي", "Medical Insurance"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.insuranceExpiry, t) });
+    });
+  branches.forEach((b) => {
+    if (isUrgent(b.crExpiry)) urgentAlerts.push({ label: t("سجل تجاري", "Commercial Register"), name: b.name, sub: entityName(b.entityId), status: expiryStatus(b.crExpiry, t) });
+    if (isUrgent(b.civilDefenseExpiry)) urgentAlerts.push({ label: t("رخصة دفاع مدني", "Civil Defense License"), name: b.name, sub: entityName(b.entityId), status: expiryStatus(b.civilDefenseExpiry, t) });
+    if (isUrgent(b.municipalityExpiry)) urgentAlerts.push({ label: t("رخصة بلدية", "Municipality License"), name: b.name, sub: entityName(b.entityId), status: expiryStatus(b.municipalityExpiry, t) });
+  });
+  (vehicles || []).forEach((v) => {
+    if (isUrgent(v.istimaraExpiry)) urgentAlerts.push({ label: t("استمارة سيارة", "Vehicle Registration"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.istimaraExpiry, t) });
+    if (isUrgent(v.periodicInspectionExpiry)) urgentAlerts.push({ label: t("فحص دوري", "Periodic Inspection"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.periodicInspectionExpiry, t) });
+    if (isUrgent(v.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين سيارة", "Vehicle Insurance"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.insuranceExpiry, t) });
+  });
+  urgentAlerts.sort((a, b) => a.status.days - b.status.days);
 
   /* تجميع الموظفين حسب الكيان، ثم حسب الفروع التابعة لكل كيان */
   const byEntity = entities.map((ent) => {
@@ -1573,6 +1622,38 @@ function Dashboard({ entities, branches, employees, leaves, branchName, entityNa
         <ReceiptCard label={t("عدد الفروع", "Number of Branches")} value={fmt(branches.length)} sub={t(`عبر ${fmt(entities.length)} كيانات`, `across ${fmt(entities.length)} entities`)} />
         <ReceiptCard label={t("في إجازة اليوم", "On Leave Today")} value={fmt(onLeaveToday)} tone={onLeaveToday > 0 ? COLORS.brick : COLORS.green} />
       </div>
+
+      {urgentAlerts.length > 0 && (
+        <>
+          <SectionTitle>
+            {t("⚠ تنبيهات عاجلة — تنتهي خلال 7 أيام", "⚠ Urgent Alerts — Expiring Within 7 Days")} ({urgentAlerts.length})
+          </SectionTitle>
+          <div style={{ background: "#fff", border: `1px solid ${COLORS.brick}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
+            {urgentAlerts.map((a, i) => (
+              <div
+                key={i}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  padding: "11px 16px",
+                  borderTop: i > 0 ? `1px dashed ${COLORS.line}` : "none",
+                  flexWrap: "wrap",
+                  gap: 8,
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>
+                    {a.label} — {a.name}
+                  </div>
+                  <div style={{ fontSize: 11, color: "#8a7a63" }}>{a.sub}</div>
+                </div>
+                <Stamp tone="brick">{a.status.label}</Stamp>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <SectionTitle>{t("تقسيم الموظفين حسب الكيان والفروع", "Employee Breakdown by Entity & Branch")}</SectionTitle>
       {byEntity.length === 0 && orphanBranches.length === 0 && (
@@ -4595,6 +4676,120 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
   );
 }
 
+/* ============ شاشة إدخال كود التأكيد المُرسَل بالإيميل (تحقق ثنائي عند الدخول) ============ */
+function VerifyCodeScreen({ user, code, setCode, onSubmit, onResend, onCancel, error, sending, resendCooldown }) {
+  const { t } = useLang();
+  const maskedEmail = (() => {
+    const parts = (user.email || "").split("@");
+    if (parts.length !== 2) return user.email || "";
+    const name = parts[0];
+    const visible = name.slice(0, Math.min(2, name.length));
+    return `${visible}${"•".repeat(Math.max(name.length - 2, 2))}@${parts[1]}`;
+  })();
+
+  return (
+    <div
+      dir="rtl"
+      style={{
+        fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+        background: `linear-gradient(180deg, ${COLORS.paper} 0%, #EFE6D2 60%, #E7DAC0 100%)`,
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      <NYSkyline />
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
+        style={{
+          background: "#fff",
+          border: `1px solid ${COLORS.line}`,
+          borderRadius: 14,
+          padding: "34px 30px",
+          width: 340,
+          maxWidth: "100%",
+          boxShadow: "0 10px 34px rgba(59,42,29,0.16)",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
+        <div style={{ textAlign: "center", marginBottom: 20 }}>
+          <div style={{ fontSize: 30, marginBottom: 6 }}>✉️</div>
+          <div style={{ fontSize: 17, fontWeight: 800, color: COLORS.espresso }}>{t("تأكيد الدخول", "Verify Sign-in")}</div>
+          <div style={{ fontSize: 12, color: COLORS.coffee, marginTop: 6, lineHeight: 1.6 }}>
+            {sending
+              ? t("جارِ إرسال كود التأكيد...", "Sending verification code...")
+              : t(`أرسلنا كود مكوّن من 6 أرقام إلى ${maskedEmail}`, `We sent a 6-digit code to ${maskedEmail}`)}
+          </div>
+        </div>
+        <Field label={t("كود التأكيد", "Verification Code")}>
+          <input
+            style={{ ...inputStyle, textAlign: "center", fontSize: 20, letterSpacing: 6, fontFamily: "Consolas, monospace" }}
+            value={code}
+            maxLength={6}
+            inputMode="numeric"
+            onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            autoFocus
+          />
+        </Field>
+        {error && <div style={{ color: COLORS.brick, fontSize: 12, marginTop: 10, textAlign: "center" }}>{error}</div>}
+        <div style={{ marginTop: 18 }}>
+          <button
+            type="submit"
+            disabled={sending}
+            style={{
+              width: "100%",
+              background: COLORS.espresso,
+              color: "#fff",
+              border: "none",
+              borderRadius: 8,
+              padding: "10px 16px",
+              fontSize: 13.5,
+              fontWeight: 700,
+              cursor: sending ? "default" : "pointer",
+              opacity: sending ? 0.6 : 1,
+            }}
+          >
+            {t("تأكيد الدخول", "Confirm")}
+          </button>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14 }}>
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{ background: "transparent", border: "none", color: "#8a7a63", fontSize: 12, cursor: "pointer", padding: 4 }}
+          >
+            {t("رجوع", "Back")}
+          </button>
+          <button
+            type="button"
+            onClick={onResend}
+            disabled={resendCooldown > 0 || sending}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: resendCooldown > 0 ? "#c9bda3" : COLORS.brick,
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: resendCooldown > 0 ? "default" : "pointer",
+              padding: 4,
+            }}
+          >
+            {resendCooldown > 0 ? t(`إعادة الإرسال (${resendCooldown})`, `Resend (${resendCooldown})`) : t("إعادة إرسال الكود", "Resend Code")}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
 /* ============ حساب موظف: عرض شخصي فقط ============ */
 /* ============ طلبات الإجازات: موافقة مبدئية (مدير الكيان) ثم موافقة نهائية (الأدمن/المسؤول العام) ============ */
 function LeaveRequestsTab({ employees, leaveRequests, isEntityManager, isFinalApprover, onPreliminaryApprove, onPreliminaryReject, onFinalApprove, onFinalReject, branchName }) {
@@ -5605,6 +5800,15 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
           <Field label={t("كلمة المرور", "Password")}>
             <input style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           </Field>
+          <Field label={t("البريد الإلكتروني (لتأكيد الدخول)", "Email (for login verification)")}>
+            <input
+              type="email"
+              style={inputStyle}
+              placeholder={t("اختياري — بدونه يتخطّى النظام كود التأكيد", "Optional — without it, the system skips the confirmation code")}
+              value={form.email || ""}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+            />
+          </Field>
           <Field label={t("الدور", "Role")}>
             <select
               style={inputStyle}
@@ -5984,6 +6188,52 @@ function Root() {
 
   const currentUser = users.find((u) => u.username === currentUsername) || null;
 
+  /* حالة التحقق الثنائي بالإيميل — تُستخدم مؤقتًا فقط أثناء خطوة إدخال الكود، ومحلية على الجهاز */
+  const [pendingUser, setPendingUser] = useState(null);
+  const [sentCode, setSentCode] = useState("");
+  const [codeExpiresAt, setCodeExpiresAt] = useState(0);
+  const [codeInput, setCodeInput] = useState("");
+  const [verifyError, setVerifyError] = useState("");
+  const [sendingCode, setSendingCode] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
+
+  const completeLogin = (user) => {
+    setCurrentUsername(user.username);
+    try {
+      localStorage.setItem("hr-system-session", user.username);
+    } catch (e) {}
+    setLoginForm({ username: "", password: "" });
+    setLoginError("");
+    setPendingUser(null);
+    setSentCode("");
+    setCodeInput("");
+    setVerifyError("");
+    logActivity(user, "دخول", "", "");
+  };
+
+  const dispatchVerificationCode = (user) => {
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    setSentCode(code);
+    setCodeExpiresAt(Date.now() + 5 * 60 * 1000);
+    setSendingCode(true);
+    setVerifyError("");
+    sendVerificationEmail(user.email, code)
+      .then(() => {
+        setSendingCode(false);
+        setResendCooldown(30);
+      })
+      .catch(() => {
+        setSendingCode(false);
+        setVerifyError("تعذّر إرسال كود التأكيد إلى بريدك الإلكتروني — تأكد من إعداد خدمة الإيميل أو تواصل مع الأدمن.");
+      });
+  };
+
   const login = () => {
     const match = users.find(
       (u) => u.username === loginForm.username.trim() && u.password === loginForm.password
@@ -5992,13 +6242,35 @@ function Root() {
       setLoginError("اسم المستخدم أو كلمة المرور غير صحيحة");
       return;
     }
-    setCurrentUsername(match.username);
-    try {
-      localStorage.setItem("hr-system-session", match.username);
-    } catch (e) {}
-    setLoginForm({ username: "", password: "" });
     setLoginError("");
-    logActivity(match, "دخول", "", "");
+    if (match.email && EMAILJS_CONFIGURED) {
+      setPendingUser(match);
+      dispatchVerificationCode(match);
+      return;
+    }
+    /* لا يوجد بريد مسجّل لهذا الحساب أو خدمة الإيميل غير مُفعّلة بعد — يتخطّى النظام كود التأكيد */
+    completeLogin(match);
+  };
+
+  const verifyCode = () => {
+    if (!pendingUser) return;
+    if (Date.now() > codeExpiresAt) {
+      setVerifyError("انتهت صلاحية الكود — اضغط \"إعادة إرسال الكود\" للحصول على كود جديد");
+      return;
+    }
+    if (codeInput.trim() !== sentCode) {
+      setVerifyError("الكود غير صحيح، حاول مرة أخرى");
+      return;
+    }
+    completeLogin(pendingUser);
+  };
+
+  const cancelVerification = () => {
+    setPendingUser(null);
+    setSentCode("");
+    setCodeInput("");
+    setVerifyError("");
+    setResendCooldown(0);
   };
 
   const logout = () => {
@@ -6010,6 +6282,22 @@ function Root() {
   };
 
   if (!authLoaded || !usersLoaded) return null;
+
+  if (pendingUser) {
+    return (
+      <VerifyCodeScreen
+        user={pendingUser}
+        code={codeInput}
+        setCode={setCodeInput}
+        onSubmit={verifyCode}
+        onResend={() => dispatchVerificationCode(pendingUser)}
+        onCancel={cancelVerification}
+        error={verifyError}
+        sending={sendingCode}
+        resendCooldown={resendCooldown}
+      />
+    );
+  }
 
   if (!currentUser) {
     return (
