@@ -628,8 +628,20 @@ const inputStyle = {
    لفتح تقويم الاختيار — بديل عن الاعتماد الكامل على input type="date" لأن بعض المتصفحات (خصوصًا Safari/iOS)
    تتجاهل خاصية lang وتعرض أرقامًا هندية حسب لغة نظام الجهاز، بغض النظر عن أي إعداد في الصفحة نفسها */
 function DateField({ value, onChange, style, placeholder = "YYYY-MM-DD" }) {
+  const inputRef = useRef(null);
+  const openPicker = () => {
+    const el = inputRef.current;
+    if (!el || el.disabled) return;
+    if (typeof el.showPicker === "function") {
+      try {
+        el.showPicker();
+        return;
+      } catch (e) {}
+    }
+    el.focus();
+  };
   return (
-    <span style={{ position: "relative", display: "inline-flex", flex: style?.flex }}>
+    <span style={{ position: "relative", display: "inline-flex", flex: style?.flex }} onClick={openPicker}>
       <input
         type="text"
         readOnly
@@ -639,6 +651,7 @@ function DateField({ value, onChange, style, placeholder = "YYYY-MM-DD" }) {
         style={{ ...inputStyle, ...style, cursor: "pointer" }}
       />
       <input
+        ref={inputRef}
         type="date"
         lang="en"
         value={value || ""}
@@ -652,8 +665,20 @@ function DateField({ value, onChange, style, placeholder = "YYYY-MM-DD" }) {
 
 /* حقل وقت مخصّص بنفس منطق DateField أعلاه — لضمان عرض الأرقام إنجليزية دايمًا بغض النظر عن لغة نظام الجهاز */
 function TimeField({ value, onChange, style, placeholder = "HH:MM" }) {
+  const inputRef = useRef(null);
+  const openPicker = () => {
+    const el = inputRef.current;
+    if (!el || el.disabled) return;
+    if (typeof el.showPicker === "function") {
+      try {
+        el.showPicker();
+        return;
+      } catch (e) {}
+    }
+    el.focus();
+  };
   return (
-    <span style={{ position: "relative", display: "inline-flex", flex: style?.flex }}>
+    <span style={{ position: "relative", display: "inline-flex", flex: style?.flex }} onClick={openPicker}>
       <input
         type="text"
         readOnly
@@ -663,6 +688,7 @@ function TimeField({ value, onChange, style, placeholder = "HH:MM" }) {
         style={{ ...inputStyle, ...style, cursor: "pointer" }}
       />
       <input
+        ref={inputRef}
         type="time"
         lang="en"
         value={value || ""}
