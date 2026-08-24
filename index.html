@@ -713,6 +713,147 @@ function DateField({ value, onChange, style, placeholder = "YYYY-MM-DD" }) {
   );
 }
 
+/* حقل تاريخ بتقويم منبثق مبني بالكامل بالجافاسكريبت (بدون الاعتماد على منتقي التاريخ الأصلي للمتصفح)
+   عشان نضمن عرض الأرقام وأسماء الشهور بالإنجليزية دايمًا، بغض النظر عن لغة نظام تشغيل الجهاز/المتصفح
+   (منتقي التاريخ الأصلي <input type="date"> بيتجاهل أحيانًا خاصية lang ويعرض حسب لغة نظام الجهاز) */
+function EnDatePicker({ value, onChange, style, placeholder = "YYYY-MM-DD" }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const parsed = value ? new Date(value + "T00:00:00") : null;
+  const [viewDate, setViewDate] = useState(parsed && !isNaN(parsed) ? parsed : new Date());
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggleOpen = () => {
+    if (!open) {
+      const p = value ? new Date(value + "T00:00:00") : null;
+      setViewDate(p && !isNaN(p) ? p : new Date());
+    }
+    setOpen((o) => !o);
+  };
+
+  const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const WEEKDAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+  const pad = (n) => String(n).padStart(2, "0");
+
+  const year = viewDate.getFullYear();
+  const month = viewDate.getMonth();
+  const firstDay = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDay; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) cells.push(d);
+
+  const selectDay = (d) => {
+    onChange(`${year}-${pad(month + 1)}-${pad(d)}`);
+    setOpen(false);
+  };
+  const goToday = () => {
+    const now = new Date();
+    setViewDate(now);
+    onChange(`${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`);
+    setOpen(false);
+  };
+  const clearVal = () => {
+    onChange("");
+    setOpen(false);
+  };
+  const prevMonth = () => setViewDate(new Date(year, month - 1, 1));
+  const nextMonth = () => setViewDate(new Date(year, month + 1, 1));
+
+  return (
+    <span ref={wrapRef} style={{ position: "relative", display: "inline-flex", flex: style?.flex }}>
+      <input
+        type="text"
+        readOnly
+        dir="ltr"
+        value={value || ""}
+        placeholder={placeholder}
+        onClick={toggleOpen}
+        style={{ ...inputStyle, ...style, cursor: "pointer" }}
+      />
+      {open && (
+        <div
+          dir="ltr"
+          style={{
+            position: "absolute",
+            top: "100%",
+            insetInlineStart: 0,
+            zIndex: 60,
+            marginTop: 4,
+            width: 220,
+            background: "#fff",
+            border: `1px solid ${COLORS.line}`,
+            borderRadius: 8,
+            padding: 10,
+            boxShadow: "0 8px 24px rgba(59,42,29,0.18)",
+          }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <button type="button" onClick={prevMonth} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 15, color: COLORS.coffee, padding: "2px 6px" }}>
+              ‹
+            </button>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: COLORS.coffee }}>
+              {MONTH_NAMES[month]} {year}
+            </div>
+            <button type="button" onClick={nextMonth} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 15, color: COLORS.coffee, padding: "2px 6px" }}>
+              ›
+            </button>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2, fontSize: 10.5, color: "#a3927a", marginBottom: 4 }}>
+            {WEEKDAYS.map((w) => (
+              <div key={w} style={{ textAlign: "center" }}>
+                {w}
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 2 }}>
+            {cells.map((d, i) => {
+              if (d === null) return <div key={i} />;
+              const iso = `${year}-${pad(month + 1)}-${pad(d)}`;
+              const selected = value === iso;
+              return (
+                <button
+                  type="button"
+                  key={i}
+                  onClick={() => selectDay(d)}
+                  style={{
+                    border: "none",
+                    borderRadius: 6,
+                    padding: "5px 0",
+                    fontSize: 11.5,
+                    cursor: "pointer",
+                    background: selected ? COLORS.gold : "transparent",
+                    color: selected ? "#fff" : COLORS.coffee,
+                    fontWeight: selected ? 700 : 500,
+                  }}
+                >
+                  {d}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, paddingTop: 8, borderTop: `1px dashed ${COLORS.line}` }}>
+            <button type="button" onClick={clearVal} style={{ border: "none", background: "transparent", color: COLORS.brick, fontSize: 11, cursor: "pointer" }}>
+              Clear
+            </button>
+            <button type="button" onClick={goToday} style={{ border: "none", background: "transparent", color: COLORS.gold, fontSize: 11, cursor: "pointer", fontWeight: 700 }}>
+              Today
+            </button>
+          </div>
+        </div>
+      )}
+    </span>
+  );
+}
+
 /* حقل وقت مخصّص بنفس منطق DateField أعلاه — لضمان عرض الأرقام إنجليزية دايمًا بغض النظر عن لغة نظام الجهاز */
 function TimeField({ value, onChange, style, placeholder = "HH:MM" }) {
   const inputRef = useRef(null);
@@ -3074,6 +3215,7 @@ const EMPTY_VEHICLE = {
 function BranchLicensesTab({ branches, setBranches, employees, setEmployees, vehicles, setVehicles, subTab = "cr" }) {
   const { t } = useLang();
   const [filterUrgency, setFilterUrgency] = useState("");
+  const [healthSearch, setHealthSearch] = useState("");
   const [vehicleForm, setVehicleForm] = useState(EMPTY_VEHICLE);
   const [editingVehicleId, setEditingVehicleId] = useState(null);
 
@@ -3122,11 +3264,30 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
   }));
 
   const activeEmployees = employees.filter((e) => e.status === "نشط");
-  const healthRows = activeEmployees.map((e) => ({
+  const healthRowsAll = activeEmployees.map((e) => ({
     ...e,
     healthCertStatus: expiryStatus(e.healthCertExpiry, t),
     insuranceStatus: expiryStatus(e.insuranceExpiry, t),
   }));
+  const healthRows = healthRowsAll.filter(
+    (r) => !healthSearch.trim() || (r.name || "").toLowerCase().includes(healthSearch.trim().toLowerCase())
+  );
+
+  const healthGroups = (() => {
+    const byBranch = {};
+    healthRows.forEach((r) => {
+      const key = r.branchId || "__none__";
+      if (!byBranch[key]) byBranch[key] = [];
+      byBranch[key].push(r);
+    });
+    const groups = branches
+      .filter((b) => byBranch[b.id]?.length)
+      .map((b) => ({ id: b.id, name: b.name, rows: byBranch[b.id] }));
+    if (byBranch.__none__?.length) {
+      groups.push({ id: "__none__", name: t("بدون فرع", "No Branch"), rows: byBranch.__none__ });
+    }
+    return groups;
+  })();
 
   const vehicleRows = vehicles.map((v) => ({
     ...v,
@@ -3146,8 +3307,8 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
   const crAlerts = branchRows.filter((r) => r.crStatus.days !== null && r.crStatus.days <= 30).length;
   const civilDefenseAlerts = branchRows.filter((r) => r.civilDefenseStatus.days !== null && r.civilDefenseStatus.days <= 30).length;
   const municipalityAlerts = branchRows.filter((r) => r.municipalityStatus.days !== null && r.municipalityStatus.days <= 30).length;
-  const healthAlerts = healthRows.filter((r) => r.healthCertStatus.days !== null && r.healthCertStatus.days <= 30).length;
-  const insuranceAlerts = healthRows.filter((r) => r.insuranceStatus.days !== null && r.insuranceStatus.days <= 30).length;
+  const healthAlerts = healthRowsAll.filter((r) => r.healthCertStatus.days !== null && r.healthCertStatus.days <= 30).length;
+  const insuranceAlerts = healthRowsAll.filter((r) => r.insuranceStatus.days !== null && r.insuranceStatus.days <= 30).length;
   const istimaraAlerts = vehicleRows.filter((r) => r.istimaraStatus.days !== null && r.istimaraStatus.days <= 30).length;
   const periodicInspectionAlerts = vehicleRows.filter((r) => r.periodicInspectionStatus.days !== null && r.periodicInspectionStatus.days <= 30).length;
   const vehicleInsuranceAlerts = vehicleRows.filter((r) => r.vehicleInsuranceStatus.days !== null && r.vehicleInsuranceStatus.days <= 30).length;
@@ -3391,101 +3552,130 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
 
       {subTab === "health" && (
       <React.Fragment>
-      <SectionTitle>{t("الشهادات الصحية والتأمين الطبي للموظفين", "Employee Health Certificates & Medical Insurance")}</SectionTitle>
-      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginTop: 10 }}>
-        {healthRows.length === 0 && <Empty text={t("لا يوجد موظفون نشطون", "No active employees")} />}
-        {healthRows.length > 0 && (
-          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1100 }}>
-            <thead>
-              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
-                <th
-                  style={{
-                    padding: "9px 12px",
-                    fontWeight: 700,
-                    color: COLORS.coffee,
-                    position: "sticky",
-                    insetInlineStart: 0,
-                    background: COLORS.paperDark,
-                    zIndex: 2,
-                    boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
-                  }}
-                >
-                  {t("الاسم", "Name")}
-                </th>
-                {[
-                  t("الفرع", "Branch"),
-                  t("الوظيفة", "Position"),
-                  t("انتهاء الشهادة الصحية", "Health Cert. Expiry"),
-                  t("حالة الشهادة الصحية", "Health Cert. Status"),
-                  t("شركة التأمين", "Insurance Company"),
-                  t("رقم وثيقة التأمين", "Policy Number"),
-                  t("انتهاء التأمين الطبي", "Medical Insurance Expiry"),
-                  t("حالة التأمين الطبي", "Medical Insurance Status"),
-                ].map((h, i) => (
-                  <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {healthRows.map((r) => (
-                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
-                  <td
-                    data-label={t("الاسم", "Name")}
-                    style={{
-                      padding: "9px 12px",
-                      fontWeight: 700,
-                      position: "sticky",
-                      insetInlineStart: 0,
-                      background: "#fff",
-                      zIndex: 1,
-                      boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
-                    }}
-                  >
-                    {r.name}
-                  </td>
-                  <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
-                  <td data-label={t("الوظيفة", "Position")} style={{ padding: "9px 12px" }}>{r.position}</td>
-                  <td data-label={t("انتهاء الشهادة الصحية", "Health Cert. Expiry")} style={{ padding: "9px 12px" }}>
-                    <DateField
-                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
-                      value={r.healthCertExpiry || ""}
-                      onChange={(v) => updateEmployee(r.id, "healthCertExpiry", v)}
-                    />
-                    <HijriNote dateStr={r.healthCertExpiry} />
-                  </td>
-                  <td data-label={t("حالة الشهادة الصحية", "Health Cert. Status")} style={{ padding: "9px 12px" }}>
-                    <Stamp tone={r.healthCertStatus.tone}>{r.healthCertStatus.label}</Stamp>
-                  </td>
-                  <td data-label={t("شركة التأمين", "Insurance Company")} style={{ padding: "9px 12px" }}>
-                    <input
-                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
-                      value={r.insuranceCompany || ""}
-                      onChange={(e) => updateEmployee(r.id, "insuranceCompany", e.target.value)}
-                    />
-                  </td>
-                  <td data-label={t("رقم وثيقة التأمين", "Policy Number")} style={{ padding: "9px 12px" }}>
-                    <input
-                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
-                      value={r.insurancePolicyNumber || ""}
-                      onChange={(e) => updateEmployee(r.id, "insurancePolicyNumber", e.target.value)}
-                    />
-                  </td>
-                  <td data-label={t("انتهاء التأمين الطبي", "Medical Insurance Expiry")} style={{ padding: "9px 12px" }}>
-                    <DateField
-                      style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
-                      value={r.insuranceExpiry || ""}
-                      onChange={(v) => updateEmployee(r.id, "insuranceExpiry", v)}
-                    />
-                    <HijriNote dateStr={r.insuranceExpiry} />
-                  </td>
-                  <td data-label={t("حالة التأمين الطبي", "Medical Insurance Status")} style={{ padding: "9px 12px" }}>
-                    <Stamp tone={r.insuranceStatus.tone}>{r.insuranceStatus.label}</Stamp>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
+        <SectionTitle>{t("الشهادات الصحية والتأمين الطبي للموظفين", "Employee Health Certificates & Medical Insurance")}</SectionTitle>
+        <input
+          style={{ ...inputStyle, maxWidth: 220 }}
+          placeholder={t("ابحث باسم الموظف...", "Search by employee name...")}
+          value={healthSearch}
+          onChange={(e) => setHealthSearch(e.target.value)}
+        />
+      </div>
+      <div style={{ marginTop: 10 }}>
+        {healthGroups.length === 0 && (
+          <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+            <Empty text={t("لا يوجد موظفون مطابقون", "No matching employees")} />
+          </div>
         )}
+        {healthGroups.map((grp) => (
+          <div key={grp.id} style={{ marginBottom: 22 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 700, color: COLORS.espresso }}>{grp.name}</span>
+              <span
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  color: COLORS.coffee,
+                  background: COLORS.paperDark,
+                  borderRadius: 20,
+                  padding: "2px 9px",
+                }}
+              >
+                {fmt(grp.rows.length)}
+              </span>
+            </div>
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
+              <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 980 }}>
+                <thead>
+                  <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                    <th
+                      style={{
+                        padding: "9px 12px",
+                        fontWeight: 700,
+                        color: COLORS.coffee,
+                        position: "sticky",
+                        insetInlineStart: 0,
+                        background: COLORS.paperDark,
+                        zIndex: 2,
+                        boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                      }}
+                    >
+                      {t("الاسم", "Name")}
+                    </th>
+                    {[
+                      t("الوظيفة", "Position"),
+                      t("انتهاء الشهادة الصحية", "Health Cert. Expiry"),
+                      t("حالة الشهادة الصحية", "Health Cert. Status"),
+                      t("شركة التأمين", "Insurance Company"),
+                      t("رقم وثيقة التأمين", "Policy Number"),
+                      t("انتهاء التأمين الطبي", "Medical Insurance Expiry"),
+                      t("حالة التأمين الطبي", "Medical Insurance Status"),
+                    ].map((h, i) => (
+                      <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {grp.rows.map((r) => (
+                    <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                      <td
+                        data-label={t("الاسم", "Name")}
+                        style={{
+                          padding: "9px 12px",
+                          fontWeight: 700,
+                          position: "sticky",
+                          insetInlineStart: 0,
+                          background: "#fff",
+                          zIndex: 1,
+                          boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                        }}
+                      >
+                        {r.name}
+                      </td>
+                      <td data-label={t("الوظيفة", "Position")} style={{ padding: "9px 12px" }}>{r.position}</td>
+                      <td data-label={t("انتهاء الشهادة الصحية", "Health Cert. Expiry")} style={{ padding: "9px 12px" }}>
+                        <EnDatePicker
+                          style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                          value={r.healthCertExpiry || ""}
+                          onChange={(v) => updateEmployee(r.id, "healthCertExpiry", v)}
+                        />
+                        <HijriNote dateStr={r.healthCertExpiry} />
+                      </td>
+                      <td data-label={t("حالة الشهادة الصحية", "Health Cert. Status")} style={{ padding: "9px 12px" }}>
+                        <Stamp tone={r.healthCertStatus.tone}>{r.healthCertStatus.label}</Stamp>
+                      </td>
+                      <td data-label={t("شركة التأمين", "Insurance Company")} style={{ padding: "9px 12px" }}>
+                        <input
+                          style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
+                          value={r.insuranceCompany || ""}
+                          onChange={(e) => updateEmployee(r.id, "insuranceCompany", e.target.value)}
+                        />
+                      </td>
+                      <td data-label={t("رقم وثيقة التأمين", "Policy Number")} style={{ padding: "9px 12px" }}>
+                        <input
+                          style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
+                          value={r.insurancePolicyNumber || ""}
+                          onChange={(e) => updateEmployee(r.id, "insurancePolicyNumber", e.target.value)}
+                        />
+                      </td>
+                      <td data-label={t("انتهاء التأمين الطبي", "Medical Insurance Expiry")} style={{ padding: "9px 12px" }}>
+                        <EnDatePicker
+                          style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                          value={r.insuranceExpiry || ""}
+                          onChange={(v) => updateEmployee(r.id, "insuranceExpiry", v)}
+                        />
+                        <HijriNote dateStr={r.insuranceExpiry} />
+                      </td>
+                      <td data-label={t("حالة التأمين الطبي", "Medical Insurance Status")} style={{ padding: "9px 12px" }}>
+                        <Stamp tone={r.insuranceStatus.tone}>{r.insuranceStatus.label}</Stamp>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ))}
       </div>
       </React.Fragment>
       )}
