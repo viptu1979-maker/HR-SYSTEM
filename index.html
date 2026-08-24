@@ -411,6 +411,7 @@ const NAV = [
   { key: "leaveRequests", label: "طلبات الإجازات", labelEn: "Leave Requests", icon: "✉" },
   { key: "advanceRequests", label: "طلبات السلف", labelEn: "Advance Requests", icon: "❖" },
   { key: "tasks", label: "مهام الموظفين", labelEn: "Employee Tasks", icon: "☑" },
+  { key: "messages", label: "الرسائل", labelEn: "Messages", icon: "✉" },
   { key: "payroll", label: "الرواتب و GOSI", labelEn: "Payroll & GOSI", icon: "◎" },
   { key: "eos", label: "نهاية الخدمة", labelEn: "End of Service", icon: "◆" },
   { key: "reports", label: "التقارير", labelEn: "Reports", icon: "▥" },
@@ -435,7 +436,7 @@ const NAV_GROUPS = [
     label: "شؤون الموظفين",
     labelEn: "Employee Affairs",
     icon: "◈",
-    items: ["employees", "iqamas", "tasks"],
+    items: ["employees", "iqamas", "tasks", "messages"],
   },
   {
     key: "grp-attendance",
@@ -508,7 +509,7 @@ function trLabel(t, dict, v) {
 }
 
 const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "", mustChangePassword: false };
-const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "advanceRequests", "tasks", "payroll", "eos", "settings"];
+const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "advanceRequests", "tasks", "messages", "payroll", "eos", "settings"];
 
 /* التبويبات الافتراضية المقترحة لكل دور — تظهر مُفعّلة تلقائيًا عند اختيار الدور، وتقدر تعدّلها يدويًا بعد كده */
 const ROLE_DEFAULT_TABS = {
@@ -1046,6 +1047,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [vehicles, setVehicles] = useState([]);
   const [payrollItems, setPayrollItems] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [messages, setMessages] = useState([]);
   const [gosiRates, setGosiRates] = useState({
     saudiEmployee: 9.75,
     saudiEmployer: 11.75,
@@ -1100,6 +1102,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             vehicles: d.vehicles || [],
             payrollItems: d.payrollItems || [],
             tasks: d.tasks || [],
+            messages: d.messages || [],
           };
           setEntities(next.entities);
           setBranches(next.branches);
@@ -1112,10 +1115,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setGosiRates(next.gosiRates);
           setPayrollItems(next.payrollItems);
           setTasks(next.tasks);
+          setMessages(next.messages);
           lastSyncedRef.current = JSON.stringify(next);
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [] }).catch(() => {});
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [], messages: [] }).catch(() => {});
         }
         setSyncError("");
         setLoaded(true);
@@ -1134,7 +1138,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
      لباقي الأدوار (أدمن، مدير كيان، مسؤول فرع...): الحفظ يدوي فقط عند ضغط أيقونة الحفظ. */
   useEffect(() => {
     if (!loaded) return;
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1164,7 +1168,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
   const saveNow = () => {
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1224,6 +1228,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const scopedTasks = isBranchManager || isEntityManager
     ? tasks.filter((ts) => scopedEmployees.some((e) => e.id === ts.employeeId))
     : tasks;
+  const scopedMessages = isBranchManager || isEntityManager
+    ? messages.filter(
+        (m) =>
+          (m.scope === "employee" && scopedEmployees.some((e) => e.id === m.employeeId)) ||
+          (m.scope === "branch" && scopedBranches.some((b) => b.id === m.branchId)) ||
+          (m.scope === "all" && !isBranchManager)
+      )
+    : messages;
 
   /* إدارة مهام الموظفين: تسجيل مهمة جديدة، تحديث حالتها، حذفها */
   const addTask = (task) => {
@@ -1257,6 +1269,36 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const removeTaskPhoto = (taskId, photoIndex) => {
     setTasks((prev) =>
       prev.map((ts) => (ts.id === taskId ? { ...ts, completionPhotos: (ts.completionPhotos || []).filter((_, i) => i !== photoIndex) } : ts))
+    );
+  };
+
+  /* ============ رسائل للموظفين ============
+     scope: "employee" (موظف واحد) / "branch" (كل موظفي فرع) / "all" (كل الموظفين النشطين)
+     كل رسالة بتتسجل مرة واحدة بغض النظر عن عدد المستلمين، وكل موظف بيشوفها في صفحته الذاتية
+     ويقدر يعلّمها "مقروءة" — والإدارة تقدر تشوف مين قراها ومين لسه */
+  const sendMessage = (msg) => {
+    const newMsg = {
+      ...msg,
+      id: uid(),
+      sentBy: currentUser.name,
+      sentAt: new Date().toISOString(),
+      readBy: [],
+    };
+    setMessages((prev) => [newMsg, ...prev]);
+    const scopeLabel =
+      msg.scope === "employee"
+        ? employees.find((e) => e.id === msg.employeeId)?.name || ""
+        : msg.scope === "branch"
+        ? branches.find((b) => b.id === msg.branchId)?.name || ""
+        : t("كل الموظفين", "All Employees");
+    logActivity && logActivity("إرسال رسالة للموظفين", "messages", scopeLabel);
+  };
+  const removeMessage = (msgId) => {
+    setMessages((prev) => prev.filter((m) => m.id !== msgId));
+  };
+  const markMessageRead = (msgId, employeeId) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId && !(m.readBy || []).includes(employeeId) ? { ...m, readBy: [...(m.readBy || []), employeeId] } : m))
     );
   };
 
@@ -1469,6 +1511,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         onAddTaskComment={addTaskComment}
         onAddTaskPhotos={addTaskPhotos}
         onRemoveTaskPhoto={removeTaskPhoto}
+        messages={messages.filter(
+          (m) => m.scope === "all" || (m.scope === "employee" && m.employeeId === myEmployee?.id) || (m.scope === "branch" && m.branchId === myEmployee?.branchId)
+        )}
+        onMarkMessageRead={(msgId) => markMessageRead(msgId, myEmployee?.id)}
         dirty={dirty}
         saving={saving}
         syncError={syncError}
@@ -1938,6 +1984,16 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             onAddTaskPhotos={addTaskPhotos}
             onRemoveTaskPhoto={removeTaskPhoto}
             branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
+          />
+        )}
+        {tab === "messages" && (
+          <MessagesTab
+            employees={scopedEmployees}
+            branches={scopedBranches}
+            messages={scopedMessages}
+            onSendMessage={sendMessage}
+            onRemoveMessage={removeMessage}
+            canBroadcastAll={isAdmin || isManager}
           />
         )}
         {tab === "payroll" && (
@@ -5883,6 +5939,198 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
 }
 
 
+/* ============ رسائل للموظفين ============ */
+function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMessage, canBroadcastAll = true }) {
+  const { t } = useLang();
+  const [scope, setScope] = useState("employee");
+  const [employeeId, setEmployeeId] = useState("");
+  const [branchId, setBranchId] = useState("");
+  const [text, setText] = useState("");
+  const [err, setErr] = useState("");
+  const [expandedId, setExpandedId] = useState(null);
+
+  const activeEmployees = employees.filter((e) => e.status === "نشط");
+
+  const recipientsOf = (m) => {
+    if (m.scope === "employee") return activeEmployees.filter((e) => e.id === m.employeeId);
+    if (m.scope === "branch") return activeEmployees.filter((e) => e.branchId === m.branchId);
+    return activeEmployees;
+  };
+
+  const scopeLabel = (m) => {
+    if (m.scope === "employee") return employees.find((e) => e.id === m.employeeId)?.name || t("موظف محذوف", "Deleted employee");
+    if (m.scope === "branch") return branches.find((b) => b.id === m.branchId)?.name || "—";
+    return t("كل الموظفين", "All Employees");
+  };
+
+  const waLink = (phone, body) => {
+    const digits = (phone || "").replace(/[^\d]/g, "");
+    const withCountry = digits.startsWith("966") ? digits : digits.startsWith("0") ? `966${digits.slice(1)}` : `966${digits}`;
+    return `https://wa.me/${withCountry}?text=${encodeURIComponent(body)}`;
+  };
+
+  const submit = () => {
+    setErr("");
+    if (!text.trim()) {
+      setErr(t("اكتب نص الرسالة", "Please write the message text"));
+      return;
+    }
+    if (scope === "employee" && !employeeId) {
+      setErr(t("اختر الموظف المرسَل إليه", "Please select the employee to send to"));
+      return;
+    }
+    if (scope === "branch" && !branchId) {
+      setErr(t("اختر الفرع المرسَل إليه", "Please select the branch to send to"));
+      return;
+    }
+    onSendMessage({ scope, employeeId: scope === "employee" ? employeeId : "", branchId: scope === "branch" ? branchId : "", text: text.trim() });
+    setText("");
+    setEmployeeId("");
+    setBranchId("");
+  };
+
+  return (
+    <div>
+      <Header
+        title={t("الرسائل", "Messages")}
+        subtitle={t(
+          "إرسال رسائل إعلامية للموظفين — تظهر لهم في صفحتهم الذاتية، مع إمكانية إرسالها كمان مباشرة عبر واتساب",
+          "Send notice messages to employees — visible in their self-service page, with a direct WhatsApp send option too"
+        )}
+      />
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
+          {t("رسالة جديدة", "New Message")}
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          <Field label={t("المرسَل إليهم", "Recipients")}>
+            <select
+              style={inputStyle}
+              value={scope}
+              onChange={(e) => {
+                setScope(e.target.value);
+                setEmployeeId("");
+                setBranchId("");
+              }}
+            >
+              <option value="employee">{t("موظف واحد", "A single employee")}</option>
+              <option value="branch">{t("كل موظفي فرع", "All employees of a branch")}</option>
+              {canBroadcastAll && <option value="all">{t("كل الموظفين", "All employees")}</option>}
+            </select>
+          </Field>
+          {scope === "employee" && (
+            <Field label={t("الموظف", "Employee")}>
+              <EmployeeSelect employees={activeEmployees} value={employeeId} onChange={setEmployeeId} />
+            </Field>
+          )}
+          {scope === "branch" && (
+            <Field label={t("الفرع", "Branch")}>
+              <select style={inputStyle} value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+                <option value="">{t("اختر الفرع", "Select branch")}</option>
+                {branches.map((b) => (
+                  <option key={b.id} value={b.id}>{b.name}</option>
+                ))}
+              </select>
+            </Field>
+          )}
+        </div>
+        <div style={{ marginTop: 12 }}>
+          <Field label={t("نص الرسالة", "Message Text")}>
+            <textarea
+              style={{ ...inputStyle, minHeight: 90, resize: "vertical", fontFamily: "inherit" }}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder={t("اكتب الرسالة هنا...", "Write the message here...")}
+            />
+          </Field>
+        </div>
+        {err && <div style={{ color: COLORS.brick, fontSize: 12, marginTop: 10 }}>{err}</div>}
+        <div style={{ marginTop: 14 }}>
+          <Btn onClick={submit}>{t("إرسال الرسالة", "Send Message")}</Btn>
+        </div>
+      </div>
+
+      <SectionTitle>{t("الرسائل المرسَلة", "Sent Messages")} ({fmt(messages.length)})</SectionTitle>
+      {messages.length === 0 && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+          <Empty text={t("لا توجد رسائل مرسَلة بعد", "No messages sent yet")} />
+        </div>
+      )}
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {messages.map((m) => {
+          const recipients = recipientsOf(m);
+          const readCount = (m.readBy || []).length;
+          const expanded = expandedId === m.id;
+          return (
+            <div key={m.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap" }}>
+                <div style={{ flex: 1, minWidth: 200 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <Stamp>{scopeLabel(m)}</Stamp>
+                    <span style={{ fontSize: 11, color: "#a3927a" }}>
+                      {new Date(m.sentAt).toLocaleString(t("ar-SA-u-nu-latn", "en-US"))} · {t("بواسطة", "by")} {m.sentBy}
+                    </span>
+                  </div>
+                  <div style={{ marginTop: 8, fontSize: 13, color: COLORS.ink, whiteSpace: "pre-wrap" }}>{m.text}</div>
+                  <div style={{ marginTop: 6, fontSize: 11.5, color: "#8a7a63" }}>
+                    {t(`قرأها ${readCount} من ${recipients.length}`, `Read by ${readCount} of ${recipients.length}`)}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <Btn small tone="secondary" onClick={() => setExpandedId(expanded ? null : m.id)}>
+                    {t("واتساب", "WhatsApp")}
+                  </Btn>
+                  <Btn small tone="danger" onClick={() => onRemoveMessage(m.id)}>{t("حذف", "Delete")}</Btn>
+                </div>
+              </div>
+              {expanded && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${COLORS.line}`, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {recipients.length === 0 && (
+                    <span style={{ fontSize: 11.5, color: "#a3927a" }}>{t("لا يوجد مستلمون", "No recipients")}</span>
+                  )}
+                  {recipients.map((e) =>
+                    e.phone ? (
+                      <a
+                        key={e.id}
+                        href={waLink(e.phone, m.text)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "6px 11px",
+                          borderRadius: 7,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          textDecoration: "none",
+                          border: `1px solid ${COLORS.line}`,
+                          color: COLORS.green,
+                          background: COLORS.greenBg,
+                        }}
+                      >
+                        📲 {e.name}
+                      </a>
+                    ) : (
+                      <span
+                        key={e.id}
+                        style={{ padding: "6px 11px", borderRadius: 7, fontSize: 12, color: "#a3927a", border: `1px dashed ${COLORS.line}` }}
+                      >
+                        {e.name} ({t("بدون جوال", "no phone")})
+                      </span>
+                    )
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function LeaveRequestForm({ onSubmit, t }) {
   const [form, setForm] = useState({ type: "سنوية", from: "", to: "", note: "" });
   const [sent, setSent] = useState(false);
@@ -5975,7 +6223,7 @@ function AdvanceRequestForm({ onSubmit, t }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, advanceRequests, onSubmitAdvanceRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, dirty, saving, syncError, onSave }) {
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, advanceRequests, onSubmitAdvanceRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, messages = [], onMarkMessageRead, dirty, saving, syncError, onSave }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
@@ -6099,6 +6347,48 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
             value={formatOffDays(getOffDays(employee), t)}
           />
         </div>
+
+        {messages.length > 0 && (
+          <React.Fragment>
+            <SectionTitle>
+              {t("الرسائل", "Messages")}
+              {messages.some((m) => !(m.readBy || []).includes(employee.id)) && (
+                <span style={{ marginInlineStart: 8 }}>
+                  <Stamp tone="brick">{t("جديد", "New")}</Stamp>
+                </span>
+              )}
+            </SectionTitle>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 22 }}>
+              {messages
+                .slice()
+                .sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt))
+                .map((m) => {
+                  const isRead = (m.readBy || []).includes(employee.id);
+                  return (
+                    <div
+                      key={m.id}
+                      onClick={() => !isRead && onMarkMessageRead && onMarkMessageRead(m.id)}
+                      style={{
+                        background: isRead ? "#fff" : COLORS.goldBg || "#FBF1DD",
+                        border: `1px solid ${COLORS.line}`,
+                        borderRadius: 10,
+                        padding: 14,
+                        cursor: isRead ? "default" : "pointer",
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11, color: "#8a7a63" }}>
+                          {new Date(m.sentAt).toLocaleString(t("ar-SA-u-nu-latn", "en-US"))} · {m.sentBy}
+                        </span>
+                        {!isRead && <Stamp tone="brick">{t("لم تُقرأ — اضغط للتعليم كمقروءة", "Unread — tap to mark as read")}</Stamp>}
+                      </div>
+                      <div style={{ marginTop: 8, fontSize: 13.5, color: COLORS.ink, whiteSpace: "pre-wrap" }}>{m.text}</div>
+                    </div>
+                  );
+                })}
+            </div>
+          </React.Fragment>
+        )}
 
         <SectionTitle>{t("تسجيل الحضور والانصراف", "Clock In / Clock Out")}</SectionTitle>
         <div
