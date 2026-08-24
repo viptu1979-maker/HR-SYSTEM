@@ -470,6 +470,9 @@ const USERS_SEED = [
   { id: "u1", username: "admin", password: "admin123", role: "admin", name: "المدير العام", branchId: "", employeeId: "" },
 ];
 
+/* كلمة المرور الافتراضية عند توليد حسابات جماعية للموظفين — يُجبر الموظف على تغييرها أول ما يدخل بيها */
+const DEFAULT_BULK_PASSWORD = "admin@123";
+
 const ROLE_LABELS = { admin: "أدمن", manager: "مسؤول عام", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", accountant: "محاسب", cashier: "أمين صندوق", employee: "موظف" };
 const ROLE_LABELS_EN = { admin: "Admin", manager: "General Manager", entity_manager: "Entity Manager", branch_manager: "Branch Manager", accountant: "Accountant", cashier: "Cashier", employee: "Employee" };
 /* اسم الدور المعروض — لو الدور "custom" (دور مخصص كتبه الأدمن يدويًا) بيرجّع الاسم اللي كتبه، وإلا بيرجّع الترجمة القياسية */
@@ -504,7 +507,7 @@ function trLabel(t, dict, v) {
   return t(v, dict[v] || v);
 }
 
-const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "" };
+const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "", mustChangePassword: false };
 const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "advanceRequests", "tasks", "payroll", "eos", "settings"];
 
 /* التبويبات الافتراضية المقترحة لكل دور — تظهر مُفعّلة تلقائيًا عند اختيار الدور، وتقدر تعدّلها يدويًا بعد كده */
@@ -5062,8 +5065,10 @@ function NYSkyline() {
   );
 }
 
-/* ============ نافذة تغيير كلمة المرور (لكل مستخدم لحسابه الخاص) ============ */
-function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity }) {
+/* ============ نافذة تغيير كلمة المرور (لكل مستخدم لحسابه الخاص) ============
+   forced=true: تُستخدم لإجبار المستخدم على تغيير كلمة المرور الافتراضية (admin@123) أول ما يسجّل دخول —
+   بدون زر إغلاق أو إلغاء، لحد ما يغيّرها فعليًا */
+function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forced = false }) {
   const { t } = useLang();
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -5093,7 +5098,7 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity }) {
       setError(t("كلمة المرور الجديدة يجب أن تختلف عن الحالية", "New password must be different from the current one"));
       return;
     }
-    setUsers((prev) => prev.map((u) => (u.username === currentUser.username ? { ...u, password: newPassword } : u)));
+    setUsers((prev) => prev.map((u) => (u.username === currentUser.username ? { ...u, password: newPassword, mustChangePassword: false } : u)));
     logActivity && logActivity("تغيير كلمة المرور", "users", currentUser.username);
     setSuccess(true);
     setOldPassword("");
@@ -5127,13 +5132,32 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity }) {
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
           <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 15 }}>{t("تغيير كلمة المرور", "Change Password")}</div>
-          <button
-            onClick={onClose}
-            style={{ background: "transparent", border: "none", fontSize: 18, cursor: "pointer", color: "#8a7a63", lineHeight: 1 }}
-          >
-            ✕
-          </button>
+          {!forced && (
+            <button
+              onClick={onClose}
+              style={{ background: "transparent", border: "none", fontSize: 18, cursor: "pointer", color: "#8a7a63", lineHeight: 1 }}
+            >
+              ✕
+            </button>
+          )}
         </div>
+        {forced && (
+          <div
+            style={{
+              background: COLORS.goldBg || "#FBF1DD",
+              color: COLORS.coffee,
+              padding: "10px 12px",
+              borderRadius: 8,
+              fontSize: 12.5,
+              marginBottom: 14,
+            }}
+          >
+            {t(
+              "هذا أول تسجيل دخول لك — لازم تغيّر كلمة المرور الافتراضية قبل الاستمرار.",
+              "This is your first login — you must change the default password before continuing."
+            )}
+          </div>
+        )}
 
         {success ? (
           <div>
@@ -5203,9 +5227,11 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity }) {
               <div style={{ flex: 1 }}>
                 <Btn onClick={submit}>{t("حفظ", "Save")}</Btn>
               </div>
-              <div style={{ flex: 1 }}>
-                <Btn tone="secondary" onClick={onClose}>{t("إلغاء", "Cancel")}</Btn>
-              </div>
+              {!forced && (
+                <div style={{ flex: 1 }}>
+                  <Btn tone="secondary" onClick={onClose}>{t("إلغاء", "Cancel")}</Btn>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -6351,11 +6377,55 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
   const [form, setForm] = useState(EMPTY_USER);
   const [editingId, setEditingId] = useState(null);
   const [err, setErr] = useState("");
+  const [bulkResult, setBulkResult] = useState(null);
 
   const resetForm = () => {
     setForm(EMPTY_USER);
     setEditingId(null);
     setErr("");
+  };
+
+  /* توليد حسابات دخول لكل الموظفين اللي معندهمش حساب بعد:
+     اسم المستخدم = رقم الهوية/الإقامة، كلمة المرور الافتراضية = admin@123،
+     ومطلوب من الموظف تغييرها إجباريًا أول ما يدخل بيها (mustChangePassword) */
+  const generateAccountsForAllEmployees = () => {
+    const linkedEmployeeIds = new Set(users.filter((u) => u.role === "employee" && u.employeeId).map((u) => u.employeeId));
+    const existingUsernames = new Set(users.map((u) => u.username));
+    const created = [];
+    const skippedNoId = [];
+    const skippedDup = [];
+    employees.forEach((e) => {
+      if (linkedEmployeeIds.has(e.id)) return; /* عنده حساب مرتبط بيه بالفعل */
+      const uname = (e.nationalId || "").trim();
+      if (!uname) {
+        skippedNoId.push(e.name || e.id);
+        return;
+      }
+      if (existingUsernames.has(uname)) {
+        skippedDup.push(e.name || e.id);
+        return;
+      }
+      created.push({
+        id: uid(),
+        username: uname,
+        password: DEFAULT_BULK_PASSWORD,
+        role: "employee",
+        name: e.name || uname,
+        branchId: "",
+        employeeId: e.id,
+        entityId: "",
+        customTabs: null,
+        customRoleLabel: "",
+        email: "",
+        mustChangePassword: true,
+      });
+      existingUsernames.add(uname);
+    });
+    if (created.length) {
+      setUsers((prev) => [...prev, ...created]);
+      logActivity && logActivity("توليد حسابات جماعي للموظفين", "users", `${created.length} حساب`);
+    }
+    setBulkResult({ created: created.length, skippedNoId, skippedDup });
   };
 
   const submit = () => {
@@ -6409,6 +6479,56 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
   return (
     <div>
       <Header title={t("المستخدمون والصلاحيات", "Users & Permissions")} subtitle={t("إدارة حسابات الدخول: أدمن، مسؤول فرع، موظف — كل حساب بباسورد خاص به", "Manage login accounts: admin, branch manager, employee — each with its own password")} />
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.espresso }}>
+              {t("توليد حسابات لكل الموظفين", "Generate accounts for all employees")}
+            </div>
+            <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 3 }}>
+              {t(
+                "ينشئ حساب دخول لكل موظف معندوش حساب بعد: اسم المستخدم = رقم الهوية/الإقامة، كلمة المرور: admin@123 — وهيُطلب من الموظف تغييرها إجباريًا أول ما يسجّل دخول.",
+                "Creates a login account for every employee who doesn't have one yet: username = National ID/Iqama No., password: admin@123 — the employee will be forced to change it on first login."
+              )}
+            </div>
+          </div>
+          <Btn
+            tone="secondary"
+            onClick={() => {
+              if (window.confirm(t("توليد حسابات لكل الموظفين اللي معندهمش حساب؟", "Generate accounts for all employees who don't have one yet?"))) {
+                generateAccountsForAllEmployees();
+              }
+            }}
+          >
+            {t("توليد الحسابات", "Generate Accounts")}
+          </Btn>
+        </div>
+        {bulkResult && (
+          <div style={{ marginTop: 12, fontSize: 12, color: COLORS.coffee, background: COLORS.paperDark, borderRadius: 8, padding: "10px 12px" }}>
+            {t(
+              `تم إنشاء ${bulkResult.created} حساب جديد.`,
+              `${bulkResult.created} new account(s) created.`
+            )}
+            {bulkResult.skippedDup.length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                {t(
+                  `تم تخطي ${bulkResult.skippedDup.length} موظف لتكرار رقم الهوية كاسم مستخدم.`,
+                  `Skipped ${bulkResult.skippedDup.length} employee(s) — duplicate National ID used as username.`
+                )}
+              </div>
+            )}
+            {bulkResult.skippedNoId.length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                {t(
+                  `تم تخطي ${bulkResult.skippedNoId.length} موظف لعدم وجود رقم هوية مسجَّل: ${bulkResult.skippedNoId.join("، ")}`,
+                  `Skipped ${bulkResult.skippedNoId.length} employee(s) with no National ID on file: ${bulkResult.skippedNoId.join(", ")}`
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
@@ -6577,6 +6697,11 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 13 }}>
                       {u.name} <span style={{ fontWeight: 400, color: "#8a7a63" }}>({u.username})</span>
+                      {u.mustChangePassword && (
+                        <span style={{ marginInlineStart: 8 }}>
+                          <Stamp tone="gold">{t("لم يغيّر كلمة المرور بعد", "Hasn't changed password yet")}</Stamp>
+                        </span>
+                      )}
                     </div>
                     <div style={{ fontSize: 11.5, color: "#8a7a63" }}>
                       {roleLabel(u, t)}
@@ -6948,6 +7073,19 @@ function Root() {
         setForm={setLoginForm}
         onSubmit={login}
         error={loginError || authSyncError}
+      />
+    );
+  }
+
+  /* أول تسجيل دخول بحساب مُولَّد بكلمة مرور افتراضية — لازم يغيّرها قبل ما يدخل النظام */
+  if (currentUser.mustChangePassword) {
+    return (
+      <ChangePasswordModal
+        currentUser={currentUser}
+        setUsers={setUsers}
+        onClose={() => {}}
+        logActivity={(action, targetType, targetLabel) => logActivity(currentUser, action, targetType, targetLabel)}
+        forced
       />
     );
   }
