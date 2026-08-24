@@ -22,8 +22,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <!-- Leaflet: خريطة مجانية (OpenStreetMap) بدون مفتاح API — لتحديد موقع الفرع بالنقر على الخريطة -->
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
   html, body { margin: 0; padding: 0; }
   * { box-sizing: border-box; }
@@ -397,9 +397,9 @@ function getCurrentPosition(options) {
 if (typeof L !== "undefined") {
   delete L.Icon.Default.prototype._getIconUrl;
   L.Icon.Default.mergeOptions({
-    iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
-    iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
-    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+    iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+    iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+    shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
   });
 }
 
@@ -443,8 +443,9 @@ function MapPickerModal({ initialLat, initialLng, onConfirm, onClose }) {
 
     map.on("click", (e) => placeMarker(e.latlng.lat, e.latlng.lng));
 
-    /* بعض المتصفحات محتاجة إعادة حساب مقاس الخريطة بعد ما تتحط في المودال */
+    /* بعض المتصفحات محتاجة إعادة حساب مقاس الخريطة أكتر من مرة بعد ما تتحط في المودال عشان تبان بوضوح كامل */
     setTimeout(() => map.invalidateSize(), 150);
+    setTimeout(() => map.invalidateSize(), 400);
 
     return () => {
       map.remove();
@@ -501,7 +502,7 @@ function MapPickerModal({ initialLat, initialLng, onConfirm, onClose }) {
         style={{
           background: "#fff",
           borderRadius: 12,
-          maxWidth: 640,
+          maxWidth: 720,
           width: "100%",
           boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
           padding: 18,
@@ -516,10 +517,16 @@ function MapPickerModal({ initialLat, initialLng, onConfirm, onClose }) {
         <div style={{ fontSize: 11.5, color: "#8a7a63", marginBottom: 10 }}>
           {t("دوس على أي مكان بالخريطة لتحديد موقع الفرع، أو اسحب العلامة لضبطها بدقة — أو استخدم موقعك الحالي بالجوال.", "Tap anywhere on the map to set the branch location, or drag the marker to fine-tune it — or use your current phone location.")}
         </div>
-        <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
           <Btn small tone="secondary" onClick={useMyLocation} disabled={locBusy}>
             {locBusy ? t("⏳ جارِ التحديد...", "⏳ Locating...") : t("📍 استخدام موقعي الحالي (الجوال)", "📍 Use my current location (phone)")}
           </Btn>
+          <Field label={t("خط العرض (Latitude)", "Latitude")}>
+            <input readOnly dir="ltr" style={{ ...inputStyle, width: 140, fontFamily: "Consolas, monospace" }} value={picked ? picked.lat.toFixed(6) : ""} />
+          </Field>
+          <Field label={t("خط الطول (Longitude)", "Longitude")}>
+            <input readOnly dir="ltr" style={{ ...inputStyle, width: 140, fontFamily: "Consolas, monospace" }} value={picked ? picked.lng.toFixed(6) : ""} />
+          </Field>
         </div>
         {locErr && (
           <div style={{ fontSize: 12, color: COLORS.brick, marginBottom: 10, padding: "8px 10px", background: "#FBEAEA", borderRadius: 8 }}>
@@ -528,15 +535,11 @@ function MapPickerModal({ initialLat, initialLng, onConfirm, onClose }) {
         )}
         <div
           ref={mapRef}
-          style={{ width: "100%", height: 340, borderRadius: 8, border: `1px solid ${COLORS.line}`, overflow: "hidden" }}
+          style={{ width: "100%", height: 420, borderRadius: 8, border: `1px solid ${COLORS.line}`, overflow: "hidden" }}
         />
-        <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 8 }}>
-          {picked ? (
-            <span>{t("الموقع المحدد", "Selected location")}: {picked.lat.toFixed(5)}, {picked.lng.toFixed(5)}</span>
-          ) : (
-            <span>{t("لسه ما حددتش موقع", "No location selected yet")}</span>
-          )}
-        </div>
+        {!picked && (
+          <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 8 }}>{t("لسه ما حددتش موقع", "No location selected yet")}</div>
+        )}
         <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
           <div style={{ flex: 1 }}>
             <Btn onClick={() => picked && onConfirm(picked)} disabled={!picked}>{t("تأكيد الموقع", "Confirm Location")}</Btn>
