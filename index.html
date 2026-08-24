@@ -3970,6 +3970,10 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
   const [branchForm, setBranchForm] = useState({ entityId: entities.length === 1 ? entities[0].id : "", name: "", city: "" });
   const [locatingId, setLocatingId] = useState(null);
   const [locError, setLocError] = useState("");
+  const [editingEntityId, setEditingEntityId] = useState(null);
+  const [editEntityName, setEditEntityName] = useState("");
+  const [editingBranchId, setEditingBranchId] = useState(null);
+  const [editBranchForm, setEditBranchForm] = useState({ name: "", city: "" });
 
   const addEntity = () => {
     if (!entityName.trim()) return;
@@ -3979,6 +3983,36 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
   const removeEntity = (id) => {
     setEntities((prev) => prev.filter((e) => e.id !== id));
     setBranches((prev) => prev.filter((b) => b.entityId !== id));
+  };
+  const startEditEntity = (en) => {
+    setEditingEntityId(en.id);
+    setEditEntityName(en.name);
+  };
+  const cancelEditEntity = () => {
+    setEditingEntityId(null);
+    setEditEntityName("");
+  };
+  /* تعديل اسم الكيان فقط — بقية بياناته (الفروع التابعة له وكل تفاصيلها) تفضل زي ما هي بدون أي تغيير */
+  const saveEditEntity = () => {
+    if (!editEntityName.trim()) return;
+    setEntities((prev) => prev.map((en) => (en.id === editingEntityId ? { ...en, name: editEntityName.trim() } : en)));
+    cancelEditEntity();
+  };
+  const startEditBranch = (b) => {
+    setEditingBranchId(b.id);
+    setEditBranchForm({ name: b.name || "", city: b.city || "" });
+  };
+  const cancelEditBranch = () => {
+    setEditingBranchId(null);
+    setEditBranchForm({ name: "", city: "" });
+  };
+  /* تعديل اسم الفرع/المدينة فقط — الإحداثيات الجغرافية (lat/lng) والنطاق ومركز الجيوفنس وبقية بيانات الفرع تفضل زي ما هي بدون أي تغيير */
+  const saveEditBranch = () => {
+    if (!editBranchForm.name.trim()) return;
+    setBranches((prev) =>
+      prev.map((b) => (b.id === editingBranchId ? { ...b, name: editBranchForm.name.trim(), city: editBranchForm.city.trim() } : b))
+    );
+    cancelEditBranch();
   };
   const addBranch = () => {
     if (!branchForm.name.trim() || !branchForm.entityId) return;
@@ -4032,15 +4066,35 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
         {entities.map((en) => (
           <div
             key={en.id}
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 4px", borderTop: `1px dashed ${COLORS.line}` }}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 4px", borderTop: `1px dashed ${COLORS.line}`, flexWrap: "wrap", gap: 8 }}
           >
-            <div style={{ fontSize: 13, fontWeight: 600 }}>{en.name}</div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <Stamp>{branches.filter((b) => b.entityId === en.id).length} {t("فرع", "branches")}</Stamp>
-              {canManageEntities && (
-                <Btn small tone="danger" onClick={() => removeEntity(en.id)}>{t("حذف", "Delete")}</Btn>
-              )}
-            </div>
+            {editingEntityId === en.id ? (
+              <React.Fragment>
+                <input
+                  style={{ ...inputStyle, flex: 1, minWidth: 160 }}
+                  value={editEntityName}
+                  onChange={(e) => setEditEntityName(e.target.value)}
+                  autoFocus
+                />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <Btn small onClick={saveEditEntity}>{t("حفظ", "Save")}</Btn>
+                  <Btn small tone="secondary" onClick={cancelEditEntity}>{t("إلغاء", "Cancel")}</Btn>
+                </div>
+              </React.Fragment>
+            ) : (
+              <React.Fragment>
+                <div style={{ fontSize: 13, fontWeight: 600 }}>{en.name}</div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <Stamp>{branches.filter((b) => b.entityId === en.id).length} {t("فرع", "branches")}</Stamp>
+                  {canManageEntities && (
+                    <React.Fragment>
+                      <Btn small tone="secondary" onClick={() => startEditEntity(en)}>{t("تعديل", "Edit")}</Btn>
+                      <Btn small tone="danger" onClick={() => removeEntity(en.id)}>{t("حذف", "Delete")}</Btn>
+                    </React.Fragment>
+                  )}
+                </div>
+              </React.Fragment>
+            )}
           </div>
         ))}
       </div>
@@ -4097,45 +4151,74 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
             key={b.id}
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 4px", borderTop: `1px dashed ${COLORS.line}`, flexWrap: "wrap", gap: 8 }}
           >
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 700 }}>{b.name}</div>
-              <div style={{ fontSize: 11, color: "#8a7a63" }}>{entities.find((en) => en.id === b.entityId)?.name || "—"} · {b.city}</div>
-              <div style={{ fontSize: 11, marginTop: 4 }}>
-                {b.lat != null && b.lng != null ? (
-                  <span style={{ color: COLORS.green, fontWeight: 700 }}>
-                    ✅ {t("الموقع محدد", "Location set")} ({b.lat.toFixed(5)}, {b.lng.toFixed(5)})
-                  </span>
-                ) : (
-                  <span style={{ color: COLORS.brick, fontWeight: 700 }}>⚠️ {t("الموقع غير محدد — الحضور بالموقع معطّل لهذا الفرع", "Location not set — location-based attendance is disabled for this branch")}</span>
-                )}
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-              {canManageGeofence ? (
-                <>
-                  {b.lat != null && (
-                    <Field label={t("النطاق (متر)", "Radius (m)")}>
-                      <input
-                        type="number"
-                        style={{ ...inputStyle, width: 90 }}
-                        value={b.radius || 150}
-                        onChange={(e) => updateRadius(b.id, e.target.value)}
-                      />
-                    </Field>
+            {editingBranchId === b.id ? (
+              <React.Fragment>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, flex: 1, minWidth: 220 }}>
+                  <Field label={t("اسم الفرع", "Branch Name")}>
+                    <input
+                      style={inputStyle}
+                      value={editBranchForm.name}
+                      onChange={(e) => setEditBranchForm({ ...editBranchForm, name: e.target.value })}
+                      autoFocus
+                    />
+                  </Field>
+                  <Field label={t("المدينة", "City")}>
+                    <input
+                      style={inputStyle}
+                      value={editBranchForm.city}
+                      onChange={(e) => setEditBranchForm({ ...editBranchForm, city: e.target.value })}
+                    />
+                  </Field>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+                  <Btn small onClick={saveEditBranch}>{t("حفظ", "Save")}</Btn>
+                  <Btn small tone="secondary" onClick={cancelEditBranch}>{t("إلغاء", "Cancel")}</Btn>
+                </div>
+              </React.Fragment>
+            ) : (
+              <React.Fragment>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700 }}>{b.name}</div>
+                  <div style={{ fontSize: 11, color: "#8a7a63" }}>{entities.find((en) => en.id === b.entityId)?.name || "—"} · {b.city}</div>
+                  <div style={{ fontSize: 11, marginTop: 4 }}>
+                    {b.lat != null && b.lng != null ? (
+                      <span style={{ color: COLORS.green, fontWeight: 700 }}>
+                        ✅ {t("الموقع محدد", "Location set")} ({b.lat.toFixed(5)}, {b.lng.toFixed(5)})
+                      </span>
+                    ) : (
+                      <span style={{ color: COLORS.brick, fontWeight: 700 }}>⚠️ {t("الموقع غير محدد — الحضور بالموقع معطّل لهذا الفرع", "Location not set — location-based attendance is disabled for this branch")}</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                  {canManageGeofence ? (
+                    <>
+                      {b.lat != null && (
+                        <Field label={t("النطاق (متر)", "Radius (m)")}>
+                          <input
+                            type="number"
+                            style={{ ...inputStyle, width: 90 }}
+                            value={b.radius || 150}
+                            onChange={(e) => updateRadius(b.id, e.target.value)}
+                          />
+                        </Field>
+                      )}
+                      <Btn small onClick={() => captureLocation(b.id)} disabled={locatingId === b.id}>
+                        {locatingId === b.id ? t("⏳ جارِ التحديد...", "⏳ Locating...") : t("📍 التقط الموقع الحالي", "📍 Capture current location")}
+                      </Btn>
+                      {b.lat != null && (
+                        <Btn small tone="secondary" onClick={() => clearLocation(b.id)}>{t("إلغاء الموقع", "Clear location")}</Btn>
+                      )}
+                    </>
+                  ) : (
+                    b.lat != null && <Stamp>{t("النطاق", "Radius")}: {b.radius || 150}{t("م", "m")}</Stamp>
                   )}
-                  <Btn small onClick={() => captureLocation(b.id)} disabled={locatingId === b.id}>
-                    {locatingId === b.id ? t("⏳ جارِ التحديد...", "⏳ Locating...") : t("📍 التقط الموقع الحالي", "📍 Capture current location")}
-                  </Btn>
-                  {b.lat != null && (
-                    <Btn small tone="secondary" onClick={() => clearLocation(b.id)}>{t("إلغاء الموقع", "Clear location")}</Btn>
-                  )}
-                </>
-              ) : (
-                b.lat != null && <Stamp>{t("النطاق", "Radius")}: {b.radius || 150}{t("م", "m")}</Stamp>
-              )}
-              <Stamp>{employees.filter((e) => e.branchId === b.id).length} {t("موظف", "employees")}</Stamp>
-              <Btn small tone="danger" onClick={() => removeBranch(b.id)}>{t("حذف", "Delete")}</Btn>
-            </div>
+                  <Stamp>{employees.filter((e) => e.branchId === b.id).length} {t("موظف", "employees")}</Stamp>
+                  <Btn small tone="secondary" onClick={() => startEditBranch(b)}>{t("تعديل", "Edit")}</Btn>
+                  <Btn small tone="danger" onClick={() => removeBranch(b.id)}>{t("حذف", "Delete")}</Btn>
+                </div>
+              </React.Fragment>
+            )}
           </div>
         ))}
       </div>
