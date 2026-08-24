@@ -1986,6 +1986,7 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, branchName
     .filter((e) => e.status === "نشط")
     .forEach((e) => {
       if (isUrgent(e.iqamaExpiry)) urgentAlerts.push({ label: t("إقامة", "Iqama"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.iqamaExpiry, t) });
+      if (e.nationality !== "سعودي" && isUrgent(e.exitReentryExpiry)) urgentAlerts.push({ label: t("تأشيرة خروج وعودة", "Exit/Re-entry Visa"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.exitReentryExpiry, t) });
       if (e.contractType !== "غير محدد المدة" && isUrgent(e.contractEnd)) urgentAlerts.push({ label: t("عقد عمل", "Work Contract"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.contractEnd, t) });
       if (isUrgent(e.healthCertExpiry)) urgentAlerts.push({ label: t("شهادة صحية", "Health Certificate"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.healthCertExpiry, t) });
       if (isUrgent(e.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين طبي", "Medical Insurance"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.insuranceExpiry, t) });
@@ -2209,6 +2210,8 @@ const EMPTY_EMP = {
   status: "نشط",
   iqamaExpiry: "",
   iqamaProfession: "",
+  exitReentryNumber: "",
+  exitReentryExpiry: "",
   contractType: "محدد المدة",
   contractStart: "",
   contractEnd: "",
@@ -2470,6 +2473,20 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           <Field label={t("المهنة على الإقامة", "Profession on Iqama")}>
             <input style={inputStyle} value={form.iqamaProfession} onChange={(e) => setForm({ ...form, iqamaProfession: e.target.value })} />
           </Field>
+          {form.nationality !== "سعودي" && (
+            <React.Fragment>
+              <Field label={t("رقم تأشيرة الخروج والعودة", "Exit/Re-entry Visa No.")}>
+                <input
+                  style={inputStyle}
+                  value={form.exitReentryNumber}
+                  onChange={(e) => setForm({ ...form, exitReentryNumber: e.target.value })}
+                />
+              </Field>
+              <Field label={t("تاريخ انتهاء تأشيرة الخروج والعودة", "Exit/Re-entry Visa Expiry")}>
+                <DateField style={inputStyle} value={form.exitReentryExpiry} onChange={(v) => setForm({ ...form, exitReentryExpiry: v })} />
+              </Field>
+            </React.Fragment>
+          )}
           <Field label={t("نوع العقد", "Contract Type")}>
             <select style={inputStyle} value={form.contractType} onChange={(e) => setForm({ ...form, contractType: e.target.value })}>
               <option value="محدد المدة">{t("محدد المدة", "Fixed-term")}</option>
@@ -2883,6 +2900,15 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
               </div>
             </div>
             <InfoRow label={t("المهنة على الإقامة", "Profession on Iqama")} value={emp.iqamaProfession} />
+            {emp.nationality !== "سعودي" && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0" }}>
+                <span style={{ fontSize: 12.5, color: "#a3927a" }}>{t("تأشيرة الخروج والعودة", "Exit/Re-entry Visa")}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontWeight: 700, fontSize: 12.5 }}>{emp.exitReentryExpiry || "—"}</span>
+                  <Stamp tone={expiryStatus(emp.exitReentryExpiry, t).tone}>{expiryStatus(emp.exitReentryExpiry, t).label}</Stamp>
+                </div>
+              </div>
+            )}
             <InfoRow label={t("نوع العقد", "Contract Type")} value={trLabel(t, CONTRACT_TYPE_LABELS_EN, emp.contractType)} />
             <InfoRow label={t("بداية العقد", "Contract Start")} value={emp.contractStart} />
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0" }}>
@@ -3046,17 +3072,20 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
     ...e,
     iqamaStatus: expiryStatus(e.iqamaExpiry, t),
     contractStatus: expiryStatus(e.contractEnd, t),
+    exitReentryStatus: expiryStatus(e.exitReentryExpiry, t),
   }));
 
   const filtered = rows.filter((r) => {
     if (!filterUrgency) return true;
     if (filterUrgency === "iqama") return r.iqamaStatus.days !== null && r.iqamaStatus.days <= 90;
     if (filterUrgency === "contract") return r.contractStatus.days !== null && r.contractStatus.days <= 90;
+    if (filterUrgency === "exitReentry") return r.exitReentryStatus.days !== null && r.exitReentryStatus.days <= 90;
     return true;
   });
 
   const iqamaAlerts = rows.filter((r) => r.iqamaStatus.days !== null && r.iqamaStatus.days <= 30).length;
   const contractAlerts = rows.filter((r) => r.contractStatus.days !== null && r.contractStatus.days <= 30).length;
+  const exitReentryAlerts = rows.filter((r) => r.nationality !== "سعودي" && r.exitReentryStatus.days !== null && r.exitReentryStatus.days <= 30).length;
 
   return (
     <div>
@@ -3065,6 +3094,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
         <ReceiptCard label={t("إقامات تنتهي خلال 30 يوم", "Iqamas expiring within 30 days")} value={fmt(iqamaAlerts)} tone={iqamaAlerts > 0 ? COLORS.brick : COLORS.green} />
         <ReceiptCard label={t("عقود تنتهي خلال 30 يوم", "Contracts expiring within 30 days")} value={fmt(contractAlerts)} tone={contractAlerts > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard label={t("تأشيرات خروج وعودة تنتهي خلال 30 يوم", "Exit/re-entry visas expiring within 30 days")} value={fmt(exitReentryAlerts)} tone={exitReentryAlerts > 0 ? COLORS.brick : COLORS.green} />
         <ReceiptCard label={t("إجمالي الموظفين النشطين", "Total Active Employees")} value={fmt(rows.length)} />
       </div>
 
@@ -3075,6 +3105,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
             <option value="">{t("عرض الكل", "Show All")}</option>
             <option value="iqama">{t("إقامات مقتربة من الانتهاء (90 يوم)", "Iqamas nearing expiry (90 days)")}</option>
             <option value="contract">{t("عقود مقتربة من الانتهاء (90 يوم)", "Contracts nearing expiry (90 days)")}</option>
+            <option value="exitReentry">{t("تأشيرات خروج وعودة مقتربة من الانتهاء (90 يوم)", "Exit/re-entry visas nearing expiry (90 days)")}</option>
           </select>
           <Btn onClick={() => window.print()}>{t("🖶 طباعة الجدول", "🖶 Print Table")}</Btn>
         </div>
@@ -3092,7 +3123,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto" }}>
         {filtered.length === 0 && <Empty text={t("لا توجد بيانات مطابقة", "No matching data")} />}
         {filtered.length > 0 && (
-          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 980 }}>
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1560 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 <th
@@ -3115,6 +3146,9 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                   t("رقم الهوية/الإقامة", "National ID/Iqama No."),
                   t("انتهاء الإقامة", "Iqama Expiry"),
                   t("حالة الإقامة", "Iqama Status"),
+                  t("رقم تأشيرة الخروج والعودة", "Exit/Re-entry Visa No."),
+                  t("انتهاء تأشيرة الخروج والعودة", "Exit/Re-entry Visa Expiry"),
+                  t("حالة تأشيرة الخروج والعودة", "Exit/Re-entry Visa Status"),
                   t("نوع العقد", "Contract Type"),
                   t("نهاية العقد", "Contract End"),
                   t("حالة العقد", "Contract Status"),
@@ -3153,6 +3187,34 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                   </td>
                   <td data-label={t("حالة الإقامة", "Iqama Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.iqamaStatus.tone}>{r.iqamaStatus.label}</Stamp>
+                  </td>
+                  <td data-label={t("رقم تأشيرة الخروج والعودة", "Exit/Re-entry Visa No.")} style={{ padding: "9px 12px" }}>
+                    {r.nationality === "سعودي" ? (
+                      "—"
+                    ) : (
+                      <input
+                        style={{ ...inputStyle, padding: "5px 8px", fontSize: 12, width: 110 }}
+                        value={r.exitReentryNumber || ""}
+                        onChange={(e) => update(r.id, "exitReentryNumber", e.target.value)}
+                      />
+                    )}
+                  </td>
+                  <td data-label={t("انتهاء تأشيرة الخروج والعودة", "Exit/Re-entry Visa Expiry")} style={{ padding: "9px 12px" }}>
+                    {r.nationality === "سعودي" ? (
+                      "—"
+                    ) : (
+                      <React.Fragment>
+                        <DateField
+                          style={{ ...inputStyle, padding: "5px 8px", fontSize: 12 }}
+                          value={r.exitReentryExpiry || ""}
+                          onChange={(v) => update(r.id, "exitReentryExpiry", v)}
+                        />
+                        <HijriNote dateStr={r.exitReentryExpiry} />
+                      </React.Fragment>
+                    )}
+                  </td>
+                  <td data-label={t("حالة تأشيرة الخروج والعودة", "Exit/Re-entry Visa Status")} style={{ padding: "9px 12px" }}>
+                    {r.nationality === "سعودي" ? "—" : <Stamp tone={r.exitReentryStatus.tone}>{r.exitReentryStatus.label}</Stamp>}
                   </td>
                   <td data-label={t("نوع العقد", "Contract Type")} style={{ padding: "9px 12px" }}>
                     <select
