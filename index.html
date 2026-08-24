@@ -2026,6 +2026,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 /* ============ لوحة التحكم ============ */
 function Dashboard({ entities, branches, employees, leaves, vehicles, branchName, entityName }) {
   const { t } = useLang();
+  const [alertSearch, setAlertSearch] = useState("");
   const activeCount = employees.filter((e) => e.status === "نشط").length;
   const totalSalaries = employees.filter((e) => e.status === "نشط").reduce((s, e) => s + Number(e.salary || 0), 0);
   const today = new Date().toISOString().slice(0, 10);
@@ -2058,8 +2059,15 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, branchName
     if (isUrgent(v.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين سيارة", "Vehicle Insurance"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.insuranceExpiry, t) });
   });
   urgentAlerts.sort((a, b) => a.status.days - b.status.days);
-  const expiredAlerts = urgentAlerts.filter((a) => a.status.days < 0);
-  const expiringAlerts = urgentAlerts.filter((a) => a.status.days >= 0);
+  const alertQ = alertSearch.trim().toLowerCase();
+  const matchesAlertSearch = (a) =>
+    !alertQ ||
+    (a.name || "").toLowerCase().includes(alertQ) ||
+    (a.sub || "").toLowerCase().includes(alertQ) ||
+    (a.label || "").toLowerCase().includes(alertQ);
+  const expiredAlerts = urgentAlerts.filter((a) => a.status.days < 0 && matchesAlertSearch(a));
+  const expiringAlerts = urgentAlerts.filter((a) => a.status.days >= 0 && matchesAlertSearch(a));
+  const totalAlertsCount = urgentAlerts.length;
 
   /* تجميع الموظفين حسب الكيان، ثم حسب الفروع التابعة لكل كيان */
   const byEntity = entities.map((ent) => {
@@ -2087,6 +2095,23 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, branchName
         <ReceiptCard label={t("عدد الفروع", "Number of Branches")} value={fmt(branches.length)} sub={t(`عبر ${fmt(entities.length)} كيانات`, `across ${fmt(entities.length)} entities`)} />
         <ReceiptCard label={t("في إجازة اليوم", "On Leave Today")} value={fmt(onLeaveToday)} tone={onLeaveToday > 0 ? COLORS.brick : COLORS.green} />
       </div>
+
+      {totalAlertsCount > 0 && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
+          <SectionTitle>{t("التنبيهات", "Alerts")} ({fmt(totalAlertsCount)})</SectionTitle>
+          <input
+            style={{ ...inputStyle, maxWidth: 260 }}
+            placeholder={t("ابحث في التنبيهات بالاسم أو الفرع أو النوع...", "Search alerts by name, branch, or type...")}
+            value={alertSearch}
+            onChange={(e) => setAlertSearch(e.target.value)}
+          />
+        </div>
+      )}
+      {totalAlertsCount > 0 && expiredAlerts.length === 0 && expiringAlerts.length === 0 && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, marginBottom: 24 }}>
+          <Empty text={t("لا توجد تنبيهات مطابقة للبحث", "No alerts match your search")} />
+        </div>
+      )}
 
       {expiredAlerts.length > 0 && (
         <>
