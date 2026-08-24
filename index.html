@@ -21,6 +21,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<!-- Leaflet: خريطة مجانية (OpenStreetMap) بدون مفتاح API — لتحديد موقع الفرع بالنقر على الخريطة -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
 <style>
   html, body { margin: 0; padding: 0; }
   * { box-sizing: border-box; }
@@ -386,6 +389,165 @@ function getCurrentPosition(options) {
       options || { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   });
+}
+
+/* ============ نافذة اختيار الموقع من الخريطة (Leaflet / OpenStreetMap — بدون مفتاح API) ============
+   تُستخدم لتحديد موقع الفرع إما بالنقر/السحب على الخريطة يدويًا، أو بالتقاط موقع الجوال الحالي مباشرة داخل نفس النافذة */
+/* إصلاح مشكلة معروفة: أيقونة العلامة الافتراضية في Leaflet ما بتتحمّلش صح لما المكتبة تتحمّل من CDN */
+if (typeof L !== "undefined") {
+  delete L.Icon.Default.prototype._getIconUrl;
+  L.Icon.Default.mergeOptions({
+    iconRetinaUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+    iconUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+    shadowUrl: "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+  });
+}
+
+function MapPickerModal({ initialLat, initialLng, onConfirm, onClose }) {
+  const { t } = useLang();
+  const mapRef = useRef(null);
+  const mapObjRef = useRef(null);
+  const markerRef = useRef(null);
+  const [picked, setPicked] = useState(
+    initialLat != null && initialLng != null ? { lat: initialLat, lng: initialLng } : null
+  );
+  const [locBusy, setLocBusy] = useState(false);
+  const [locErr, setLocErr] = useState("");
+
+  useEffect(() => {
+    if (!mapRef.current || mapObjRef.current) return;
+    /* مركز افتراضي: السعودية (لو معندناش إحداثيات محفوظة أصلاً) */
+    const startLat = initialLat != null ? initialLat : 24.0;
+    const startLng = initialLng != null ? initialLng : 45.0;
+    const map = L.map(mapRef.current).setView([startLat, startLng], initialLat != null ? 16 : 6);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "© OpenStreetMap contributors",
+      maxZoom: 19,
+    }).addTo(map);
+    mapObjRef.current = map;
+
+    const placeMarker = (lat, lng) => {
+      setPicked({ lat, lng });
+      if (markerRef.current) {
+        markerRef.current.setLatLng([lat, lng]);
+      } else {
+        markerRef.current = L.marker([lat, lng], { draggable: true }).addTo(map);
+        markerRef.current.on("dragend", () => {
+          const p = markerRef.current.getLatLng();
+          setPicked({ lat: p.lat, lng: p.lng });
+        });
+      }
+    };
+
+    if (initialLat != null && initialLng != null) placeMarker(initialLat, initialLng);
+
+    map.on("click", (e) => placeMarker(e.latlng.lat, e.latlng.lng));
+
+    /* بعض المتصفحات محتاجة إعادة حساب مقاس الخريطة بعد ما تتحط في المودال */
+    setTimeout(() => map.invalidateSize(), 150);
+
+    return () => {
+      map.remove();
+      mapObjRef.current = null;
+      markerRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const useMyLocation = async () => {
+    setLocErr("");
+    setLocBusy(true);
+    try {
+      const pos = await getCurrentPosition();
+      const { latitude, longitude } = pos.coords;
+      const map = mapObjRef.current;
+      if (map) {
+        map.setView([latitude, longitude], 17);
+        if (markerRef.current) {
+          markerRef.current.setLatLng([latitude, longitude]);
+        } else {
+          markerRef.current = L.marker([latitude, longitude], { draggable: true }).addTo(map);
+          markerRef.current.on("dragend", () => {
+            const p = markerRef.current.getLatLng();
+            setPicked({ lat: p.lat, lng: p.lng });
+          });
+        }
+      }
+      setPicked({ lat: latitude, lng: longitude });
+    } catch (err) {
+      if (err && err.code === 1) setLocErr(t("تم رفض إذن الوصول للموقع — فعّله من إعدادات المتصفح/الجهاز.", "Location permission denied — enable it in browser/device settings."));
+      else if (err && err.message === "NOT_SUPPORTED") setLocErr(t("جهازك أو متصفحك لا يدعم تحديد الموقع.", "Your device or browser doesn't support geolocation."));
+      else setLocErr(t("تعذّر تحديد موقعك — تأكد من تفعيل GPS وحاول مرة أخرى.", "Couldn't get your location — make sure GPS is enabled and try again."));
+    } finally {
+      setLocBusy(false);
+    }
+  };
+
+  return (
+    <div
+      className="no-print"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(36,24,17,0.55)",
+        zIndex: 80,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          background: "#fff",
+          borderRadius: 12,
+          maxWidth: 640,
+          width: "100%",
+          boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+          padding: 18,
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 15 }}>{t("تحديد الموقع من الخريطة", "Pick Location on Map")}</div>
+          <button onClick={onClose} style={{ background: "transparent", border: "none", fontSize: 18, cursor: "pointer", color: "#8a7a63", lineHeight: 1 }}>
+            ✕
+          </button>
+        </div>
+        <div style={{ fontSize: 11.5, color: "#8a7a63", marginBottom: 10 }}>
+          {t("دوس على أي مكان بالخريطة لتحديد موقع الفرع، أو اسحب العلامة لضبطها بدقة — أو استخدم موقعك الحالي بالجوال.", "Tap anywhere on the map to set the branch location, or drag the marker to fine-tune it — or use your current phone location.")}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+          <Btn small tone="secondary" onClick={useMyLocation} disabled={locBusy}>
+            {locBusy ? t("⏳ جارِ التحديد...", "⏳ Locating...") : t("📍 استخدام موقعي الحالي (الجوال)", "📍 Use my current location (phone)")}
+          </Btn>
+        </div>
+        {locErr && (
+          <div style={{ fontSize: 12, color: COLORS.brick, marginBottom: 10, padding: "8px 10px", background: "#FBEAEA", borderRadius: 8 }}>
+            {locErr}
+          </div>
+        )}
+        <div
+          ref={mapRef}
+          style={{ width: "100%", height: 340, borderRadius: 8, border: `1px solid ${COLORS.line}`, overflow: "hidden" }}
+        />
+        <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 8 }}>
+          {picked ? (
+            <span>{t("الموقع المحدد", "Selected location")}: {picked.lat.toFixed(5)}, {picked.lng.toFixed(5)}</span>
+          ) : (
+            <span>{t("لسه ما حددتش موقع", "No location selected yet")}</span>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+          <div style={{ flex: 1 }}>
+            <Btn onClick={() => picked && onConfirm(picked)} disabled={!picked}>{t("تأكيد الموقع", "Confirm Location")}</Btn>
+          </div>
+          <div style={{ flex: 1 }}>
+            <Btn tone="secondary" onClick={onClose}>{t("إلغاء", "Cancel")}</Btn>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 const ENTITIES_SEED = [
@@ -3999,6 +4161,7 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
   const [editEntityName, setEditEntityName] = useState("");
   const [editingBranchId, setEditingBranchId] = useState(null);
   const [editBranchForm, setEditBranchForm] = useState({ name: "", city: "" });
+  const [mapPickerBranchId, setMapPickerBranchId] = useState(null);
 
   const addEntity = () => {
     if (!entityName.trim()) return;
@@ -4069,6 +4232,12 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
 
   const clearLocation = (branchId) => {
     setBranches((prev) => prev.map((b) => (b.id === branchId ? { ...b, lat: null, lng: null } : b)));
+  };
+
+  /* تأكيد الموقع المُختار من نافذة الخريطة وربطه بالفرع */
+  const confirmMapLocation = (branchId, picked) => {
+    setBranches((prev) => prev.map((b) => (b.id === branchId ? { ...b, lat: picked.lat, lng: picked.lng } : b)));
+    setMapPickerBranchId(null);
   };
 
   return (
@@ -4231,6 +4400,9 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
                       <Btn small onClick={() => captureLocation(b.id)} disabled={locatingId === b.id}>
                         {locatingId === b.id ? t("⏳ جارِ التحديد...", "⏳ Locating...") : t("📍 التقط الموقع الحالي", "📍 Capture current location")}
                       </Btn>
+                      <Btn small tone="secondary" onClick={() => setMapPickerBranchId(b.id)}>
+                        {t("🗺️ تحديد من الخريطة", "🗺️ Pick on map")}
+                      </Btn>
                       {b.lat != null && (
                         <Btn small tone="secondary" onClick={() => clearLocation(b.id)}>{t("إلغاء الموقع", "Clear location")}</Btn>
                       )}
@@ -4247,6 +4419,15 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
           </div>
         ))}
       </div>
+
+      {mapPickerBranchId && (
+        <MapPickerModal
+          initialLat={branches.find((b) => b.id === mapPickerBranchId)?.lat}
+          initialLng={branches.find((b) => b.id === mapPickerBranchId)?.lng}
+          onConfirm={(picked) => confirmMapLocation(mapPickerBranchId, picked)}
+          onClose={() => setMapPickerBranchId(null)}
+        />
+      )}
     </div>
   );
 }
@@ -6056,6 +6237,7 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
   const [text, setText] = useState("");
   const [err, setErr] = useState("");
   const [expandedId, setExpandedId] = useState(null);
+  const [copiedId, setCopiedId] = useState("");
 
   const activeEmployees = employees.filter((e) => e.status === "نشط");
 
@@ -6075,6 +6257,20 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
     const digits = (phone || "").replace(/[^\d]/g, "");
     const withCountry = digits.startsWith("966") ? digits : digits.startsWith("0") ? `966${digits.slice(1)}` : `966${digits}`;
     return `https://wa.me/${withCountry}?text=${encodeURIComponent(body)}`;
+  };
+
+  /* واتساب لا يسمح تقنيًا بإرسال جماعي تلقائي من موقع ويب بدون WhatsApp Business API مدفوع من ميتا —
+     هذا قيد من واتساب نفسه ضد السبام. البديل العملي: نسخ الرسالة وكل الأرقام دفعة واحدة،
+     عشان تنشئ "قائمة بث" (Broadcast List) مرة واحدة في واتساب على جوالك، وبعدها أي رسالة
+     تدوس عليها إرسال واحدة بس بتوصل لكل اللي في القائمة، بدل ما تفتح 35 محادثة لوحدها */
+  const copyText = async (value, id) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(""), 2000);
+    } catch (e) {
+      /* تجاهل فشل النسخ (مثلاً متصفح قديم) */
+    }
   };
 
   const submit = () => {
@@ -6102,10 +6298,28 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
       <Header
         title={t("الرسائل", "Messages")}
         subtitle={t(
-          "إرسال رسائل إعلامية للموظفين — تظهر لهم في صفحتهم الذاتية، مع إمكانية إرسالها كمان مباشرة عبر واتساب",
-          "Send notice messages to employees — visible in their self-service page, with a direct WhatsApp send option too"
+          "إرسال رسائل إعلامية للموظفين — تظهر لهم في صفحتهم الذاتية، مع إمكانية إرسالها كمان عبر واتساب",
+          "Send notice messages to employees — visible in their self-service page, with a WhatsApp send option too"
         )}
       />
+
+      <div
+        style={{
+          background: "#FAF6EC",
+          border: `1px dashed ${COLORS.line}`,
+          borderRadius: 10,
+          padding: "10px 14px",
+          fontSize: 11.5,
+          color: "#8a7a63",
+          marginBottom: 18,
+        }}
+      >
+        ℹ️{" "}
+        {t(
+          "واتساب لا يسمح بإرسال جماعي تلقائي من موقع ويب (قيد من واتساب نفسه ضد السبام) — لازم تدوس \"إرسال\" داخل واتساب لكل شخص بنفسك. لتسهيل إرسال نفس الرسالة لعدد كبير: انسخ نص الرسالة وأرقام الجوال (زر \"نسخ الأرقام\" تحت كل رسالة) وأنشئ \"قائمة بث\" في واتساب على جوالك مرة واحدة — بعدها أي رسالة تبعتها للقائمة توصل للكل بضغطة واحدة.",
+          "WhatsApp doesn't allow automated bulk sending from a website (a WhatsApp anti-spam restriction) — you must tap \"Send\" inside WhatsApp for each person yourself. To make sending to many people easier: copy the message text and phone numbers (\"Copy Numbers\" button under each message) and create a WhatsApp \"Broadcast List\" on your phone once — after that, any message you send to the list reaches everyone with a single tap."
+        )}
+      </div>
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
@@ -6185,7 +6399,22 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
                     {t(`قرأها ${readCount} من ${recipients.length}`, `Read by ${readCount} of ${recipients.length}`)}
                   </div>
                 </div>
-                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
+                  <Btn small tone="secondary" onClick={() => copyText(m.text, `text-${m.id}`)}>
+                    {copiedId === `text-${m.id}` ? t("✓ اتنسخت", "✓ Copied") : t("نسخ الرسالة", "Copy Message")}
+                  </Btn>
+                  <Btn
+                    small
+                    tone="secondary"
+                    onClick={() =>
+                      copyText(
+                        recipients.filter((e) => e.phone).map((e) => e.phone).join("\n"),
+                        `nums-${m.id}`
+                      )
+                    }
+                  >
+                    {copiedId === `nums-${m.id}` ? t("✓ اتنسخت", "✓ Copied") : t("نسخ الأرقام", "Copy Numbers")}
+                  </Btn>
                   <Btn small tone="secondary" onClick={() => setExpandedId(expanded ? null : m.id)}>
                     {t("واتساب", "WhatsApp")}
                   </Btn>
@@ -6193,7 +6422,14 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
                 </div>
               </div>
               {expanded && (
-                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${COLORS.line}`, display: "flex", flexWrap: "wrap", gap: 8 }}>
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px dashed ${COLORS.line}` }}>
+                  <div style={{ fontSize: 11, color: "#a3927a", marginBottom: 8 }}>
+                    {t(
+                      "كل زر بيفتح واتساب برسالة جاهزة لهذا الموظف — لازم تدوس \"إرسال\" جوه واتساب بنفسك لكل واحد.",
+                      "Each button opens WhatsApp with the message pre-filled for that employee — you must tap \"Send\" inside WhatsApp yourself for each one."
+                    )}
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {recipients.length === 0 && (
                     <span style={{ fontSize: 11.5, color: "#a3927a" }}>{t("لا يوجد مستلمون", "No recipients")}</span>
                   )}
@@ -6229,6 +6465,7 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
                       </span>
                     )
                   )}
+                  </div>
                 </div>
               )}
             </div>
