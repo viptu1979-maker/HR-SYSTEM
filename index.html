@@ -417,6 +417,53 @@ const NAV = [
   { key: "settings", label: "الإعدادات", labelEn: "Settings", icon: "⚙" },
 ];
 
+/* ============ تجميع بنود القائمة الجانبية تحت أقسام رئيسية قابلة للطي ============
+   كل عنصر إما قسم مستقل (standalone: true, key يطابق مفتاح NAV)
+   أو قسم رئيسي له عنوان وأيقونة خاصة ومجموعة items (مفاتيح من NAV)
+   أو قسم رئيسي له بنود فرعية داخلية (subTabs) كلها تفتح نفس تبويب NAV (targetTab) وتُغيّر عرض المحتوى داخله فقط */
+const LICENSE_SUB_TABS = [
+  { key: "cr", label: "السجل التجاري", labelEn: "Commercial Registry" },
+  { key: "otherLicenses", label: "الرخص الحكومية", labelEn: "Government Licenses" },
+  { key: "health", label: "الشهادات الصحية والتأمين الطبي للموظفين", labelEn: "Health Certificates & Medical Insurance" },
+  { key: "vehicles", label: "السيارات", labelEn: "Vehicles" },
+];
+
+const NAV_GROUPS = [
+  { key: "dash", standalone: true },
+  {
+    key: "grp-employees",
+    label: "شؤون الموظفين",
+    labelEn: "Employee Affairs",
+    icon: "◈",
+    items: ["employees", "iqamas", "tasks"],
+  },
+  {
+    key: "grp-attendance",
+    label: "الحضور والإجازات",
+    labelEn: "Attendance & Leave",
+    icon: "◔",
+    items: ["attendance", "leaveRequests", "advanceRequests"],
+  },
+  { key: "branches", standalone: true },
+  {
+    key: "grp-licenses",
+    label: "تراخيص الفروع",
+    labelEn: "Branch Licenses",
+    icon: "▤",
+    targetTab: "licenses",
+    subTabs: LICENSE_SUB_TABS,
+  },
+  {
+    key: "grp-payroll",
+    label: "الرواتب ونهاية الخدمة",
+    labelEn: "Payroll & EOS",
+    icon: "◎",
+    items: ["payroll", "eos"],
+  },
+  { key: "reports", standalone: true },
+  { key: "settings", standalone: true },
+];
+
 /* ============ المستخدمون والصلاحيات ============ */
 const USERS_SEED = [
   { id: "u1", username: "admin", password: "admin123", role: "admin", name: "المدير العام", branchId: "", employeeId: "" },
@@ -836,6 +883,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       : navForRole(role);
   const hasTab = (key) => navItems.some((n) => n.key === key);
   const [tab, setTab] = useState(navItems[0]?.key || "dash");
+  /* أي قسم فرعي معروض حاليًا داخل تبويب "تراخيص الفروع" (السجل التجاري / باقي الرخص / الشهادات الصحية والتأمين الطبي / السيارات) */
+  const [licenseSubTab, setLicenseSubTab] = useState("cr");
+  /* أي الأقسام الرئيسية في القائمة الجانبية مفتوحة حاليًا — يُفتح تلقائيًا القسم الذي يحوي البند النشط */
+  const [expandedGroups, setExpandedGroups] = useState(() => {
+    const g = NAV_GROUPS.find((gr) => !gr.standalone && ((gr.items && gr.items.includes(tab)) || gr.targetTab === tab));
+    return g ? { [g.key]: true } : {};
+  });
+  const toggleGroup = (key) => setExpandedGroups((prev) => ({ ...prev, [key]: !prev[key] }));
   const [entities, setEntities] = useState(ENTITIES_SEED);
   const [branches, setBranches] = useState(BRANCHES_SEED);
   const [employees, setEmployees] = useState([]);
@@ -1377,33 +1432,209 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           </div>
         )}
         <nav style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          {navItems.map((n) => (
-            <button
-              key={n.key}
-              onClick={() => {
-                setTab(n.key);
-                if (isMobile) setNavOpen(false);
-              }}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 10,
-                textAlign: "right",
-                background: tab === n.key ? "rgba(216,168,90,0.18)" : "transparent",
-                border: "none",
-                borderRight: tab === n.key ? `3px solid ${COLORS.gold}` : "3px solid transparent",
-                color: tab === n.key ? "#fff" : "#D9CBB2",
-                padding: "12px 10px",
-                borderRadius: 6,
-                fontSize: 14,
-                fontWeight: tab === n.key ? 700 : 500,
-                cursor: "pointer",
-              }}
-            >
-              <span style={{ fontSize: 15, color: COLORS.goldLight }}>{n.icon}</span>
-              {t(n.label, n.labelEn)}
-            </button>
-          ))}
+          {NAV_GROUPS.map((grp) => {
+            if (grp.standalone) {
+              const n = navItems.find((it) => it.key === grp.key);
+              if (!n) return null;
+              return (
+                <button
+                  key={n.key}
+                  onClick={() => {
+                    setTab(n.key);
+                    if (isMobile) setNavOpen(false);
+                  }}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 10,
+                    textAlign: "right",
+                    background: tab === n.key ? "rgba(216,168,90,0.18)" : "transparent",
+                    border: "none",
+                    borderRight: tab === n.key ? `3px solid ${COLORS.gold}` : "3px solid transparent",
+                    color: tab === n.key ? "#fff" : "#D9CBB2",
+                    padding: "12px 10px",
+                    borderRadius: 6,
+                    fontSize: 14,
+                    fontWeight: tab === n.key ? 700 : 500,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span style={{ fontSize: 15, color: COLORS.goldLight }}>{n.icon}</span>
+                  {t(n.label, n.labelEn)}
+                </button>
+              );
+            }
+            /* قسم رئيسي له بنود فرعية داخلية (subTabs) — كلها تفتح نفس تبويب NAV (targetTab) وتُغيّر العرض داخله فقط */
+            if (grp.subTabs) {
+              if (!hasTab(grp.targetTab)) return null;
+              const isOpenSub = !!expandedGroups[grp.key] || tab === grp.targetTab;
+              return (
+                <div key={grp.key}>
+                  <button
+                    onClick={() => toggleGroup(grp.key)}
+                    style={{
+                      width: "100%",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      gap: 10,
+                      textAlign: "right",
+                      background: "transparent",
+                      border: "none",
+                      borderRight: "3px solid transparent",
+                      color: "#D9CBB2",
+                      padding: "12px 10px",
+                      borderRadius: 6,
+                      fontSize: 14,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ fontSize: 15, color: COLORS.goldLight }}>{grp.icon}</span>
+                      {t(grp.label, grp.labelEn)}
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 11,
+                        color: COLORS.goldLight,
+                        transition: "transform 0.15s ease",
+                        transform: isOpenSub ? "rotate(90deg)" : "rotate(0deg)",
+                      }}
+                    >
+                      ◂
+                    </span>
+                  </button>
+                  {isOpenSub && (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: 2,
+                        paddingInlineEnd: 14,
+                        marginBottom: 2,
+                      }}
+                    >
+                      {grp.subTabs.map((s) => {
+                        const active = tab === grp.targetTab && licenseSubTab === s.key;
+                        return (
+                          <button
+                            key={s.key}
+                            onClick={() => {
+                              setTab(grp.targetTab);
+                              setLicenseSubTab(s.key);
+                              if (isMobile) setNavOpen(false);
+                            }}
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 8,
+                              textAlign: "right",
+                              background: active ? "rgba(216,168,90,0.18)" : "transparent",
+                              border: "none",
+                              borderRight: active ? `3px solid ${COLORS.gold}` : "3px solid transparent",
+                              color: active ? "#fff" : "#C9BB9E",
+                              padding: "10px 10px",
+                              borderRadius: 6,
+                              fontSize: 13,
+                              fontWeight: active ? 700 : 500,
+                              cursor: "pointer",
+                            }}
+                          >
+                            {t(s.label, s.labelEn)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            /* قسم رئيسي: نعرضه فقط لو فيه بند واحد على الأقل ظاهر ضمن navItems (حسب الصلاحيات) */
+            const groupItems = grp.items
+              .map((key) => navItems.find((it) => it.key === key))
+              .filter(Boolean);
+            if (!groupItems.length) return null;
+            const isOpen = !!expandedGroups[grp.key] || groupItems.some((n) => n.key === tab);
+            return (
+              <div key={grp.key}>
+                <button
+                  onClick={() => toggleGroup(grp.key)}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 10,
+                    textAlign: "right",
+                    background: "transparent",
+                    border: "none",
+                    borderRight: "3px solid transparent",
+                    color: "#D9CBB2",
+                    padding: "12px 10px",
+                    borderRadius: 6,
+                    fontSize: 14,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 15, color: COLORS.goldLight }}>{grp.icon}</span>
+                    {t(grp.label, grp.labelEn)}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: COLORS.goldLight,
+                      transition: "transform 0.15s ease",
+                      transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
+                    }}
+                  >
+                    ◂
+                  </span>
+                </button>
+                {isOpen && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 2,
+                      paddingInlineEnd: 14,
+                      marginBottom: 2,
+                    }}
+                  >
+                    {groupItems.map((n) => (
+                      <button
+                        key={n.key}
+                        onClick={() => {
+                          setTab(n.key);
+                          if (isMobile) setNavOpen(false);
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          textAlign: "right",
+                          background: tab === n.key ? "rgba(216,168,90,0.18)" : "transparent",
+                          border: "none",
+                          borderRight: tab === n.key ? `3px solid ${COLORS.gold}` : "3px solid transparent",
+                          color: tab === n.key ? "#fff" : "#C9BB9E",
+                          padding: "10px 10px",
+                          borderRadius: 6,
+                          fontSize: 13,
+                          fontWeight: tab === n.key ? 700 : 500,
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span style={{ fontSize: 13, color: COLORS.goldLight }}>{n.icon}</span>
+                        {t(n.label, n.labelEn)}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </nav>
         <div style={{ marginTop: 30 }}>
           <SaveStatusIcon saving={saving} syncError={syncError} dirty={dirty} onSave={saveNow} />
@@ -1500,6 +1731,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             setEmployees={setEmployees}
             vehicles={scopedVehicles}
             setVehicles={setVehicles}
+            subTab={licenseSubTab}
           />
         )}
         {hasTab("branches") && tab === "branches" && (
@@ -2839,7 +3071,7 @@ const EMPTY_VEHICLE = {
   insuranceExpiry: "",
 };
 
-function BranchLicensesTab({ branches, setBranches, employees, setEmployees, vehicles, setVehicles }) {
+function BranchLicensesTab({ branches, setBranches, employees, setEmployees, vehicles, setVehicles, subTab = "cr" }) {
   const { t } = useLang();
   const [filterUrgency, setFilterUrgency] = useState("");
   const [vehicleForm, setVehicleForm] = useState(EMPTY_VEHICLE);
@@ -2920,41 +3152,69 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
   const periodicInspectionAlerts = vehicleRows.filter((r) => r.periodicInspectionStatus.days !== null && r.periodicInspectionStatus.days <= 30).length;
   const vehicleInsuranceAlerts = vehicleRows.filter((r) => r.vehicleInsuranceStatus.days !== null && r.vehicleInsuranceStatus.days <= 30).length;
 
+  const SUB_TITLES = {
+    cr: {
+      title: t("السجل التجاري", "Commercial Registry"),
+      subtitle: t("متابعة تواريخ انتهاء السجل التجاري للفروع", "Track commercial register expiry for branches"),
+    },
+    otherLicenses: {
+      title: t("الرخص الحكومية", "Government Licenses"),
+      subtitle: t("متابعة رخصة الدفاع المدني ورخصة البلدية للفروع", "Track civil defense and municipality license expiry for branches"),
+    },
+    health: {
+      title: t("الشهادات الصحية والتأمين الطبي للموظفين", "Employee Health Certificates & Medical Insurance"),
+      subtitle: t("متابعة الشهادات الصحية والتأمين الطبي للموظفين", "Track employee health certificates and medical insurance"),
+    },
+    vehicles: {
+      title: t("السيارات", "Vehicles"),
+      subtitle: t("استمارات وفحص دوري وتأمين سيارات الشركة", "Company vehicle registration, periodic inspection & insurance"),
+    },
+  };
+  const headerInfo = SUB_TITLES[subTab] || SUB_TITLES.cr;
+
   return (
     <div>
-      <Header
-        title={t("تراخيص الفروع", "Branch Licenses")}
-        subtitle={t(
-          "متابعة تواريخ انتهاء السجل التجاري ورخصة الدفاع المدني ورخصة البلدية للفروع، والشهادات الصحية والتأمين الطبي للموظفين، واستمارات وفحص دوري وتأمين سيارات الشركة",
-          "Track commercial register, civil defense, and municipality license expiry for branches, employee health certificates & medical insurance, and company vehicle registration, periodic inspection & insurance"
-        )}
-      />
+      <Header title={headerInfo.title} subtitle={headerInfo.subtitle} />
 
-      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
-        <ReceiptCard label={t("سجلات تجارية تنتهي خلال 30 يوم", "Commercial registers expiring in 30 days")} value={fmt(crAlerts)} tone={crAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("رخص دفاع مدني تنتهي خلال 30 يوم", "Civil defense licenses expiring in 30 days")} value={fmt(civilDefenseAlerts)} tone={civilDefenseAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("رخص بلدية تنتهي خلال 30 يوم", "Municipality licenses expiring in 30 days")} value={fmt(municipalityAlerts)} tone={municipalityAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("شهادات صحية تنتهي خلال 30 يوم", "Health certificates expiring in 30 days")} value={fmt(healthAlerts)} tone={healthAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("تأمين طبي ينتهي خلال 30 يوم", "Medical insurance expiring in 30 days")} value={fmt(insuranceAlerts)} tone={insuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("استمارات سيارات تنتهي خلال 30 يوم", "Vehicle registrations expiring in 30 days")} value={fmt(istimaraAlerts)} tone={istimaraAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("فحص دوري ينتهي خلال 30 يوم", "Periodic inspections expiring in 30 days")} value={fmt(periodicInspectionAlerts)} tone={periodicInspectionAlerts > 0 ? COLORS.brick : COLORS.green} />
-        <ReceiptCard label={t("تأمين سيارات ينتهي خلال 30 يوم", "Vehicle insurance expiring in 30 days")} value={fmt(vehicleInsuranceAlerts)} tone={vehicleInsuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
-      </div>
+      {subTab === "cr" && (
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+          <ReceiptCard label={t("سجلات تجارية تنتهي خلال 30 يوم", "Commercial registers expiring in 30 days")} value={fmt(crAlerts)} tone={crAlerts > 0 ? COLORS.brick : COLORS.green} />
+        </div>
+      )}
+      {subTab === "otherLicenses" && (
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+          <ReceiptCard label={t("رخص دفاع مدني تنتهي خلال 30 يوم", "Civil defense licenses expiring in 30 days")} value={fmt(civilDefenseAlerts)} tone={civilDefenseAlerts > 0 ? COLORS.brick : COLORS.green} />
+          <ReceiptCard label={t("رخص بلدية تنتهي خلال 30 يوم", "Municipality licenses expiring in 30 days")} value={fmt(municipalityAlerts)} tone={municipalityAlerts > 0 ? COLORS.brick : COLORS.green} />
+        </div>
+      )}
+      {subTab === "health" && (
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+          <ReceiptCard label={t("شهادات صحية تنتهي خلال 30 يوم", "Health certificates expiring in 30 days")} value={fmt(healthAlerts)} tone={healthAlerts > 0 ? COLORS.brick : COLORS.green} />
+          <ReceiptCard label={t("تأمين طبي ينتهي خلال 30 يوم", "Medical insurance expiring in 30 days")} value={fmt(insuranceAlerts)} tone={insuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
+        </div>
+      )}
+      {subTab === "vehicles" && (
+        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+          <ReceiptCard label={t("استمارات سيارات تنتهي خلال 30 يوم", "Vehicle registrations expiring in 30 days")} value={fmt(istimaraAlerts)} tone={istimaraAlerts > 0 ? COLORS.brick : COLORS.green} />
+          <ReceiptCard label={t("فحص دوري ينتهي خلال 30 يوم", "Periodic inspections expiring in 30 days")} value={fmt(periodicInspectionAlerts)} tone={periodicInspectionAlerts > 0 ? COLORS.brick : COLORS.green} />
+          <ReceiptCard label={t("تأمين سيارات ينتهي خلال 30 يوم", "Vehicle insurance expiring in 30 days")} value={fmt(vehicleInsuranceAlerts)} tone={vehicleInsuranceAlerts > 0 ? COLORS.brick : COLORS.green} />
+        </div>
+      )}
 
+      {subTab === "cr" && (
+      <React.Fragment>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
-        <SectionTitle>{t("تراخيص الفروع", "Branch Licenses")}</SectionTitle>
+        <SectionTitle>{t("السجل التجاري", "Commercial Registry")}</SectionTitle>
         <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
           <option value="">{t("عرض الكل", "Show All")}</option>
           <option value="cr">{t("سجل تجاري مقترب من الانتهاء (90 يوم)", "Commercial register nearing expiry (90 days)")}</option>
-          <option value="civilDefense">{t("دفاع مدني مقترب من الانتهاء (90 يوم)", "Civil defense nearing expiry (90 days)")}</option>
-          <option value="municipality">{t("رخصة بلدية مقتربة من الانتهاء (90 يوم)", "Municipality license nearing expiry (90 days)")}</option>
         </select>
       </div>
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginBottom: 26 }}>
         {filteredBranchRows.length === 0 && <Empty text={t("لا توجد فروع مطابقة", "No matching branches")} />}
         {filteredBranchRows.length > 0 && (
-          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 1080 }}>
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 480 }}>
             <thead>
               <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
                 <th
@@ -2975,12 +3235,6 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   t("رقم السجل التجاري", "CR Number"),
                   t("انتهاء السجل التجاري", "CR Expiry"),
                   t("حالة السجل التجاري", "CR Status"),
-                  t("رقم رخصة الدفاع المدني", "Civil Defense License No."),
-                  t("انتهاء الدفاع المدني", "Civil Defense Expiry"),
-                  t("حالة الدفاع المدني", "Civil Defense Status"),
-                  t("رقم رخصة البلدية", "Municipality License No."),
-                  t("انتهاء رخصة البلدية", "Municipality License Expiry"),
-                  t("حالة رخصة البلدية", "Municipality License Status"),
                 ].map((h, i) => (
                   <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
                 ))}
@@ -3020,6 +3274,75 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
                   </td>
                   <td data-label={t("حالة السجل التجاري", "CR Status")} style={{ padding: "9px 12px" }}>
                     <Stamp tone={r.crStatus.tone}>{r.crStatus.label}</Stamp>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      </React.Fragment>
+      )}
+
+      {subTab === "otherLicenses" && (
+      <React.Fragment>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
+        <SectionTitle>{t("الرخص الحكومية", "Government Licenses")}</SectionTitle>
+        <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
+          <option value="">{t("عرض الكل", "Show All")}</option>
+          <option value="civilDefense">{t("دفاع مدني مقترب من الانتهاء (90 يوم)", "Civil defense nearing expiry (90 days)")}</option>
+          <option value="municipality">{t("رخصة بلدية مقتربة من الانتهاء (90 يوم)", "Municipality license nearing expiry (90 days)")}</option>
+        </select>
+      </div>
+
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginBottom: 26 }}>
+        {filteredBranchRows.length === 0 && <Empty text={t("لا توجد فروع مطابقة", "No matching branches")} />}
+        {filteredBranchRows.length > 0 && (
+          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, minWidth: 900 }}>
+            <thead>
+              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                <th
+                  style={{
+                    padding: "9px 12px",
+                    fontWeight: 700,
+                    color: COLORS.coffee,
+                    position: "sticky",
+                    insetInlineStart: 0,
+                    background: COLORS.paperDark,
+                    zIndex: 2,
+                    boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                  }}
+                >
+                  {t("الفرع", "Branch")}
+                </th>
+                {[
+                  t("رقم رخصة الدفاع المدني", "Civil Defense License No."),
+                  t("انتهاء الدفاع المدني", "Civil Defense Expiry"),
+                  t("حالة الدفاع المدني", "Civil Defense Status"),
+                  t("رقم رخصة البلدية", "Municipality License No."),
+                  t("انتهاء رخصة البلدية", "Municipality License Expiry"),
+                  t("حالة رخصة البلدية", "Municipality License Status"),
+                ].map((h, i) => (
+                  <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filteredBranchRows.map((r) => (
+                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                  <td
+                    data-label={t("الفرع", "Branch")}
+                    style={{
+                      padding: "9px 12px",
+                      fontWeight: 700,
+                      position: "sticky",
+                      insetInlineStart: 0,
+                      background: "#fff",
+                      zIndex: 1,
+                      boxShadow: "2px 0 4px rgba(59,42,29,0.08)",
+                    }}
+                  >
+                    {r.name}
                   </td>
                   <td data-label={t("رقم رخصة الدفاع المدني", "Civil Defense License No.")} style={{ padding: "9px 12px" }}>
                     <input
@@ -3063,7 +3386,11 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
           </table>
         )}
       </div>
+      </React.Fragment>
+      )}
 
+      {subTab === "health" && (
+      <React.Fragment>
       <SectionTitle>{t("الشهادات الصحية والتأمين الطبي للموظفين", "Employee Health Certificates & Medical Insurance")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "auto", marginTop: 10 }}>
         {healthRows.length === 0 && <Empty text={t("لا يوجد موظفون نشطون", "No active employees")} />}
@@ -3160,7 +3487,11 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
           </table>
         )}
       </div>
+      </React.Fragment>
+      )}
 
+      {subTab === "vehicles" && (
+      <React.Fragment>
       <SectionTitle>{t("سيارات الشركة — الاستمارة والتأمين", "Company Vehicles — Registration & Insurance")}</SectionTitle>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginTop: 10, marginBottom: 16 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
@@ -3307,6 +3638,8 @@ function BranchLicensesTab({ branches, setBranches, employees, setEmployees, veh
           </table>
         )}
       </div>
+      </React.Fragment>
+      )}
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
         {t(
