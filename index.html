@@ -1512,6 +1512,16 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       prev.map((m) => (m.id === msgId && !(m.readBy || []).includes(employeeId) ? { ...m, readBy: [...(m.readBy || []), employeeId] } : m))
     );
   };
+  /* تسجيل إرسال الرسالة فعليًا عبر واتساب لموظف معيّن (عند الضغط على زر واتساب الخاص به) — يحتفظ بمن أُرسلت له الرسالة فعلًا ومتى */
+  const markMessageWhatsappSent = (msgId, employeeId) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === msgId && !(m.whatsappSentTo || []).some((w) => w.employeeId === employeeId)
+          ? { ...m, whatsappSentTo: [...(m.whatsappSentTo || []), { employeeId, sentAt: new Date().toISOString() }] }
+          : m
+      )
+    );
+  };
 
   /* دورة اعتماد طلبات الإجازة: موافقة مبدئية من مدير الكيان، ثم موافقة نهائية من الأدمن/المسؤول العام */
   const preliminaryApproveLeaveRequest = (reqId) => {
@@ -2269,6 +2279,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             messages={scopedMessages}
             onSendMessage={sendMessage}
             onRemoveMessage={removeMessage}
+            onMarkWhatsappSent={markMessageWhatsappSent}
             canBroadcastAll={isAdmin || isManager}
           />
         )}
@@ -6408,7 +6419,7 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
 
 
 /* ============ رسائل للموظفين ============ */
-function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMessage, canBroadcastAll = true }) {
+function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMessage, onMarkWhatsappSent, canBroadcastAll = true }) {
   const { t } = useLang();
   const [scope, setScope] = useState("employee");
   const [employeeId, setEmployeeId] = useState("");
@@ -6576,6 +6587,8 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
                   <div style={{ marginTop: 8, fontSize: 13, color: COLORS.ink, whiteSpace: "pre-wrap" }}>{m.text}</div>
                   <div style={{ marginTop: 6, fontSize: 11.5, color: "#8a7a63" }}>
                     {t(`قرأها ${readCount} من ${recipients.length}`, `Read by ${readCount} of ${recipients.length}`)}
+                    {" · "}
+                    {t(`أُرسلت واتساب لـ ${(m.whatsappSentTo || []).length} من ${recipients.length}`, `Sent via WhatsApp to ${(m.whatsappSentTo || []).length} of ${recipients.length}`)}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
@@ -6612,13 +6625,15 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
                   {recipients.length === 0 && (
                     <span style={{ fontSize: 11.5, color: "#a3927a" }}>{t("لا يوجد مستلمون", "No recipients")}</span>
                   )}
-                  {recipients.map((e) =>
-                    e.phone ? (
+                  {recipients.map((e) => {
+                    const wasSent = (m.whatsappSentTo || []).some((w) => w.employeeId === e.id);
+                    return e.phone ? (
                       <a
                         key={e.id}
                         href={waLink(e.phone, m.text)}
                         target="_blank"
                         rel="noopener noreferrer"
+                        onClick={() => onMarkWhatsappSent && onMarkWhatsappSent(m.id, e.id)}
                         style={{
                           display: "inline-flex",
                           alignItems: "center",
@@ -6628,12 +6643,13 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
                           fontSize: 12,
                           fontWeight: 700,
                           textDecoration: "none",
-                          border: `1px solid ${COLORS.line}`,
+                          border: `1px solid ${wasSent ? COLORS.green : COLORS.line}`,
                           color: COLORS.green,
                           background: COLORS.greenBg,
                         }}
+                        title={wasSent ? t("سبق إرسالها لهذا الموظف عبر واتساب", "Already sent to this employee via WhatsApp") : ""}
                       >
-                        📲 {e.name}
+                        📲 {e.name} {wasSent && "✓"}
                       </a>
                     ) : (
                       <span
@@ -6642,8 +6658,8 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
                       >
                         {e.name} ({t("بدون جوال", "no phone")})
                       </span>
-                    )
-                  )}
+                    );
+                  })}
                   </div>
                 </div>
               )}
