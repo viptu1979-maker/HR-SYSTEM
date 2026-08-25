@@ -600,6 +600,7 @@ const NAV = [
   { key: "licenses", label: "تراخيص الفروع", labelEn: "Branch Licenses", icon: "▤" },
   { key: "branches", label: "الكيانات والفروع", labelEn: "Entities & Branches", icon: "◫" },
   { key: "attendance", label: "الحضور والإجازات", labelEn: "Attendance & Leave", icon: "◔" },
+  { key: "attendanceLog", label: "سجل الحضور اليومي", labelEn: "Daily Attendance Log", icon: "🕒" },
   { key: "leaveRequests", label: "طلبات الإجازات", labelEn: "Leave Requests", icon: "✉" },
   { key: "advanceRequests", label: "طلبات السلف", labelEn: "Advance Requests", icon: "❖" },
   { key: "tasks", label: "مهام الموظفين", labelEn: "Employee Tasks", icon: "☑" },
@@ -635,7 +636,7 @@ const NAV_GROUPS = [
     label: "الحضور والإجازات",
     labelEn: "Attendance & Leave",
     icon: "◔",
-    items: ["attendance", "leaveRequests", "advanceRequests"],
+    items: ["attendance", "attendanceLog", "leaveRequests", "advanceRequests"],
   },
   { key: "branches", standalone: true },
   {
@@ -701,7 +702,7 @@ function trLabel(t, dict, v) {
 }
 
 const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "", mustChangePassword: false };
-const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "leaveRequests", "advanceRequests", "tasks", "messages", "payroll", "eos", "settings"];
+const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "attendanceLog", "leaveRequests", "advanceRequests", "tasks", "messages", "payroll", "eos", "settings"];
 
 /* التبويبات الافتراضية المقترحة لكل دور — تظهر مُفعّلة تلقائيًا عند اختيار الدور، وتقدر تعدّلها يدويًا بعد كده */
 const ROLE_DEFAULT_TABS = {
@@ -721,7 +722,7 @@ function navForRole(role) {
     return NAV.filter((n) => n.key !== "reports"); // محاسب/أمين صندوق/دور مخصص: وصول لكل الكيانات والفروع (بدون تقييد بكيان واحد)، فيما عدا التقارير وتبويب المستخدمين
   if (role === "entity_manager") return NAV.filter((n) => n.key !== "reports"); // كل التبويبات عدا التقارير (سجل الدخول حصري للأدمن العام) وبدون تبويب المستخدمين
   if (role === "branch_manager")
-    return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "tasks", "payroll", "eos"].includes(n.key));
+    return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "attendanceLog", "tasks", "payroll", "eos"].includes(n.key));
   return [];
 }
 
@@ -2209,9 +2210,17 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             setEmployees={setEmployees}
             leaves={scopedLeaves}
             setLeaves={setLeaves}
+            branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
+            logActivity={logActivity}
+            entities={scopedEntities}
+            branches={scopedBranches}
+          />
+        )}
+        {hasTab("attendanceLog") && tab === "attendanceLog" && (
+          <AttendanceLogTab
+            employees={scopedEmployees}
             attendance={scopedAttendance}
             setAttendance={setAttendance}
-            branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
             logActivity={logActivity}
             entities={scopedEntities}
             branches={scopedBranches}
@@ -4550,27 +4559,19 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
 }
 
 /* ============ الحضور والإجازات ============ */
-function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance, setAttendance, logActivity, entities, branches }) {
+function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity, entities, branches }) {
   const { t } = useLang();
   const [leaveForm, setLeaveForm] = useState({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
-  const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   /* تصفية جدول أرصدة الإجازة السنوية: بحث بالاسم + فرع */
   const [balSearch, setBalSearch] = useState("");
   const [balBranchFilter, setBalBranchFilter] = useState("");
 
-  /* فروع الكيان المختار، وموظفو الفرع المختار — لكل نموذج على حدة */
+  /* فروع الكيان المختار، وموظفو الفرع المختار */
   const leaveBranches = leaveForm.entityId ? branches.filter((b) => b.entityId === leaveForm.entityId) : branches;
   const leaveEmployees = leaveForm.branchId
     ? employees.filter((e) => e.branchId === leaveForm.branchId)
     : leaveForm.entityId
     ? employees.filter((e) => leaveBranches.some((b) => b.id === e.branchId))
-    : employees;
-
-  const attBranches = attForm.entityId ? branches.filter((b) => b.entityId === attForm.entityId) : branches;
-  const attEmployees = attForm.branchId
-    ? employees.filter((e) => e.branchId === attForm.branchId)
-    : attForm.entityId
-    ? employees.filter((e) => attBranches.some((b) => b.id === e.branchId))
     : employees;
 
   const addLeave = () => {
@@ -4581,20 +4582,6 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
     setLeaveForm({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
   };
   const removeLeave = (id) => setLeaves((prev) => prev.filter((l) => l.id !== id));
-
-  const addAtt = () => {
-    if (!attForm.employeeId || !attForm.date) return;
-    const { entityId, branchId, ...rest } = attForm;
-    const record = {
-      ...rest,
-      lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0,
-      overtimeHours: Number(attForm.overtimeHours || 0),
-    };
-    setAttendance((prev) => [...prev, { ...record, id: uid() }]);
-    logActivity && logActivity("تسجيل حضور", "attendance", empName(attForm.employeeId));
-    setAttForm({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
-  };
-  const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
 
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
 
@@ -4777,8 +4764,41 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
           "Leave balance calculation: Annual entitlement is 21 days (30 after 5 years of service). Balance accrues monthly based on completed months since the last hire anniversary, minus 'Annual' leave days taken during the current service year only, then any manual adjustment you entered is added or subtracted. This is an approximate calculation per Saudi labor law — review periodically."
         )}
       </div>
+    </div>
+  );
+}
 
-      <SectionTitle>{t("سجل حضور يومي", "Daily Attendance Log")}</SectionTitle>
+/* ============ سجل الحضور اليومي (قسم مستقل تحت الحضور والإجازات) ============ */
+function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches }) {
+  const { t } = useLang();
+  const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
+
+  const attBranches = attForm.entityId ? branches.filter((b) => b.entityId === attForm.entityId) : branches;
+  const attEmployees = attForm.branchId
+    ? employees.filter((e) => e.branchId === attForm.branchId)
+    : attForm.entityId
+    ? employees.filter((e) => attBranches.some((b) => b.id === e.branchId))
+    : employees;
+
+  const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
+
+  const addAtt = () => {
+    if (!attForm.employeeId || !attForm.date) return;
+    const { entityId, branchId, ...rest } = attForm;
+    const record = {
+      ...rest,
+      lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0,
+      overtimeHours: Number(attForm.overtimeHours || 0),
+    };
+    setAttendance((prev) => [...prev, { ...record, id: uid() }]);
+    logActivity && logActivity("تسجيل حضور", "attendance", empName(attForm.employeeId));
+    setAttForm({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
+  };
+  const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
+
+  return (
+    <div>
+      <Header title={t("سجل حضور يومي", "Daily Attendance Log")} subtitle={t("تسجيل حضور الموظفين اليومي ومتابعة التأخير والعمل الإضافي", "Register daily employee attendance and track lateness and overtime")} />
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
           <Field label={t("الكيان", "Entity")}>
