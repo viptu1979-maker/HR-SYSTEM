@@ -4554,6 +4554,9 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
   const { t } = useLang();
   const [leaveForm, setLeaveForm] = useState({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
+  /* تصفية جدول أرصدة الإجازة السنوية: بحث بالاسم + فرع */
+  const [balSearch, setBalSearch] = useState("");
+  const [balBranchFilter, setBalBranchFilter] = useState("");
 
   /* فروع الكيان المختار، وموظفو الفرع المختار — لكل نموذج على حدة */
   const leaveBranches = leaveForm.entityId ? branches.filter((b) => b.entityId === leaveForm.entityId) : branches;
@@ -4677,58 +4680,97 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, attendance,
           "The \"Manual Adjustment\" column lets you add or subtract days manually (e.g. an opening balance when starting the system, or a balance correction). Enter a positive number to add or negative to subtract; it saves automatically when you click away."
         )}
       </div>
-      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
-        {employees.length === 0 && <Empty text={t("لا يوجد موظفون", "No employees")} />}
-        {employees.length > 0 && (
-          <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
-            <thead>
-              <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
-                {[
-                  t("الاسم", "Name"),
-                  t("الاستحقاق السنوي", "Annual Entitlement"),
-                  t("الرصيد المتراكم", "Accrued"),
-                  t("المستخدم", "Used"),
-                  t("تسوية يدوية", "Manual Adjustment"),
-                  t("المتبقي", "Remaining"),
-                ].map((h, i) => (
-                  <th key={i} style={{ padding: "8px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {employees.map((e) => {
-                const bal = leaveBalanceInfo(e, leaves);
-                return (
-                  <tr key={e.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
-                    <td data-label={t("الاسم", "Name")} style={{ padding: "8px 12px", fontWeight: 700 }}>{e.name}</td>
-                    <td data-label={t("الاستحقاق السنوي", "Annual Entitlement")} style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.perYear)} ${t("يوم", "days")}` : "—"}</td>
-                    <td data-label={t("الرصيد المتراكم", "Accrued")} style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.accrued)} ${t("يوم", "days")}` : "—"}</td>
-                    <td data-label={t("المستخدم", "Used")} style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.usedDays)} ${t("يوم", "days")}` : "—"}</td>
-                    <td data-label={t("تسوية يدوية", "Manual Adjustment")} style={{ padding: "8px 12px" }}>
-                      <input
-                        type="number"
-                        step="0.5"
-                        defaultValue={e.leaveAdjustment || 0}
-                        style={{ ...inputStyle, width: 90, padding: "4px 8px" }}
-                        onBlur={(ev) => {
-                          const val = Number(ev.target.value || 0);
-                          if (val === Number(e.leaveAdjustment || 0)) return;
-                          setEmployees &&
-                            setEmployees((prev) => prev.map((emp) => (emp.id === e.id ? { ...emp, leaveAdjustment: val } : emp)));
-                          logActivity && logActivity("تسوية رصيد إجازة", "attendance", `${e.name}: ${val}`);
-                        }}
-                      />
-                    </td>
-                    <td data-label={t("المتبقي", "Remaining")} style={{ padding: "8px 12px", fontWeight: 700, color: bal && bal.balance < 0 ? COLORS.brick : COLORS.green }}>
-                      {bal ? `${fmt(bal.balance)} ${t("يوم", "days")}` : "—"}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }} className="no-print">
+        <input
+          style={{ ...inputStyle, maxWidth: 220 }}
+          placeholder={t("ابحث بالاسم...", "Search by name...")}
+          value={balSearch}
+          onChange={(e) => setBalSearch(e.target.value)}
+        />
+        <select style={{ ...inputStyle, maxWidth: 220 }} value={balBranchFilter} onChange={(e) => setBalBranchFilter(e.target.value)}>
+          <option value="">{t("كل الفروع", "All Branches")}</option>
+          {branches.map((b) => (
+            <option key={b.id} value={b.id}>{b.name}</option>
+          ))}
+        </select>
       </div>
+      {(() => {
+        const bq = balSearch.trim().toLowerCase();
+        const balEmployees = employees.filter(
+          (e) => (!balBranchFilter || e.branchId === balBranchFilter) && (!bq || (e.name || "").toLowerCase().includes(bq))
+        );
+        const branchesToShow = balBranchFilter ? branches.filter((b) => b.id === balBranchFilter) : branches;
+        const groups = branchesToShow
+          .map((b) => ({ branch: b, list: balEmployees.filter((e) => e.branchId === b.id) }))
+          .filter((g) => g.list.length > 0);
+        const unassigned = balEmployees.filter((e) => !branches.some((b) => b.id === e.branchId));
+        if (unassigned.length > 0) groups.push({ branch: null, list: unassigned });
+
+        if (balEmployees.length === 0) {
+          return (
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, marginBottom: 24 }}>
+              <Empty text={t("لا يوجد موظفون مطابقون", "No matching employees")} />
+            </div>
+          );
+        }
+
+        return groups.map((g) => (
+          <div key={g.branch ? g.branch.id : "unassigned"} style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>
+              {g.branch ? g.branch.name : t("بدون فرع", "No Branch")} ({fmt(g.list.length)})
+            </div>
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
+              <table className="responsive-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
+                <thead>
+                  <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                    {[
+                      t("الاسم", "Name"),
+                      t("الاستحقاق السنوي", "Annual Entitlement"),
+                      t("الرصيد المتراكم", "Accrued"),
+                      t("المستخدم", "Used"),
+                      t("تسوية يدوية", "Manual Adjustment"),
+                      t("المتبقي", "Remaining"),
+                    ].map((h, i) => (
+                      <th key={i} style={{ padding: "8px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {g.list.map((e) => {
+                    const bal = leaveBalanceInfo(e, leaves);
+                    return (
+                      <tr key={e.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                        <td data-label={t("الاسم", "Name")} style={{ padding: "8px 12px", fontWeight: 700 }}>{e.name}</td>
+                        <td data-label={t("الاستحقاق السنوي", "Annual Entitlement")} style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.perYear)} ${t("يوم", "days")}` : "—"}</td>
+                        <td data-label={t("الرصيد المتراكم", "Accrued")} style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.accrued)} ${t("يوم", "days")}` : "—"}</td>
+                        <td data-label={t("المستخدم", "Used")} style={{ padding: "8px 12px" }}>{bal ? `${fmt(bal.usedDays)} ${t("يوم", "days")}` : "—"}</td>
+                        <td data-label={t("تسوية يدوية", "Manual Adjustment")} style={{ padding: "8px 12px" }}>
+                          <input
+                            type="number"
+                            step="0.5"
+                            defaultValue={e.leaveAdjustment || 0}
+                            style={{ ...inputStyle, width: 90, padding: "4px 8px" }}
+                            onBlur={(ev) => {
+                              const val = Number(ev.target.value || 0);
+                              if (val === Number(e.leaveAdjustment || 0)) return;
+                              setEmployees &&
+                                setEmployees((prev) => prev.map((emp) => (emp.id === e.id ? { ...emp, leaveAdjustment: val } : emp)));
+                              logActivity && logActivity("تسوية رصيد إجازة", "attendance", `${e.name}: ${val}`);
+                            }}
+                          />
+                        </td>
+                        <td data-label={t("المتبقي", "Remaining")} style={{ padding: "8px 12px", fontWeight: 700, color: bal && bal.balance < 0 ? COLORS.brick : COLORS.green }}>
+                          {bal ? `${fmt(bal.balance)} ${t("يوم", "days")}` : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ));
+      })()}
       <div style={{ marginBottom: 24, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
         {t(
           "احتساب رصيد الإجازة: الاستحقاق السنوي 21 يوم (يزيد لـ 30 يوم بعد 5 سنوات خدمة). يتراكم الرصيد شهريًا حسب عدد الأشهر المكتملة منذ آخر ذكرى تعيين، ويُخصم منه أيام الإجازة \"السنوية\" المسجَّلة خلال سنة الخدمة الحالية فقط، ثم تُضاف/تُخصم أي تسوية يدوية أدخلتها. هذا احتساب تقريبي وفق نظام العمل السعودي — يُنصح بمراجعته دوريًا.",
