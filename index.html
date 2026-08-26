@@ -1648,10 +1648,21 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       };
     };
 
+    /* تحديد المرحلة الحالية للحضور/الانصراف اليوم: حضور1/انصراف1/حضور2(دوامين)/انصراف2/تم */
+    const attendanceStage = (rec, emp) => {
+      if (!rec) return "in1";
+      if (!rec.checkOutTime) return "out1";
+      if (!emp?.twoShifts) return "done";
+      if (!rec.checkInTime2) return "in2";
+      if (!rec.checkOutTime2) return "out2";
+      return "done";
+    };
+
     const clockIn = async () => {
       if (!myEmployee) return;
       const already = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
-      if (already) return;
+      const stage = attendanceStage(already, myEmployee);
+      if (stage !== "in1" && stage !== "in2") return;
       setGeoError("");
       setGeoBusy(true);
       const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
@@ -1662,30 +1673,48 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         return;
       }
       const timeStr = nowTimeStr();
-      const shiftStart = myEmployee.workShift?.start || "08:00";
-      const diff = minutesOf(timeStr) - minutesOf(shiftStart);
-      const lateMinutes = diff > 0 ? diff : 0;
-      const rec = {
-        id: uid(),
-        employeeId: myEmployee.id,
-        date: todayISO,
-        status: lateMinutes > 0 ? "متأخر" : "حاضر",
-        lateMinutes,
-        overtimeHours: 0,
-        checkInTime: timeStr,
-        checkOutTime: "",
-        branchId: check.branchId,
-        checkInLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
-      };
-      setAttendance((prev) => [...prev, rec]);
       const checkInBranchName = branches.find((b) => b.id === check.branchId)?.name || "";
-      logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
+      if (stage === "in1") {
+        const shiftStart = myEmployee.workShift?.start || "08:00";
+        const diff = minutesOf(timeStr) - minutesOf(shiftStart);
+        const lateMinutes = diff > 0 ? diff : 0;
+        const rec = {
+          id: uid(),
+          employeeId: myEmployee.id,
+          date: todayISO,
+          status: lateMinutes > 0 ? "متأخر" : "حاضر",
+          lateMinutes,
+          overtimeHours: 0,
+          checkInTime: timeStr,
+          checkOutTime: "",
+          checkInTime2: "",
+          checkOutTime2: "",
+          branchId: check.branchId,
+          checkInLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
+        };
+        setAttendance((prev) => [...prev, rec]);
+        logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
+      } else {
+        const shiftStart2 = myEmployee.workShift2?.start || "17:00";
+        const diff = minutesOf(timeStr) - minutesOf(shiftStart2);
+        const lateMinutes2 = diff > 0 ? diff : 0;
+        setAttendance((prev) =>
+          prev.map((a) =>
+            a.id === already.id
+              ? { ...a, checkInTime2: timeStr, lateMinutes2, checkInLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy } }
+              : a
+          )
+        );
+        logActivity && logActivity("تسجيل حضور - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
+      }
     };
 
     const clockOut = async () => {
       if (!myEmployee) return;
       const rec = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
-      if (!rec || rec.checkOutTime) return;
+      if (!rec) return;
+      const stage = attendanceStage(rec, myEmployee);
+      if (stage !== "out1" && stage !== "out2") return;
       setGeoError("");
       setGeoBusy(true);
       const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
@@ -1696,17 +1725,31 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         return;
       }
       const timeStr = nowTimeStr();
-      const shiftEnd = myEmployee.workShift?.end || "17:00";
-      const diff = minutesOf(timeStr) - minutesOf(shiftEnd);
-      const overtimeHours = diff > 0 ? Math.round((diff / 60) * 2) / 2 : 0;
-      setAttendance((prev) =>
-        prev.map((a) =>
-          a.id === rec.id
-            ? { ...a, checkOutTime: timeStr, overtimeHours, checkOutLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy } }
-            : a
-        )
-      );
-      logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+      if (stage === "out1") {
+        const shiftEnd = myEmployee.workShift?.end || "17:00";
+        const diff = minutesOf(timeStr) - minutesOf(shiftEnd);
+        const overtimeHours = diff > 0 ? Math.round((diff / 60) * 2) / 2 : 0;
+        setAttendance((prev) =>
+          prev.map((a) =>
+            a.id === rec.id
+              ? { ...a, checkOutTime: timeStr, overtimeHours, checkOutLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy } }
+              : a
+          )
+        );
+        logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+      } else {
+        const shiftEnd2 = myEmployee.workShift2?.end || "22:00";
+        const diff = minutesOf(timeStr) - minutesOf(shiftEnd2);
+        const overtimeHours2 = diff > 0 ? Math.round((diff / 60) * 2) / 2 : 0;
+        setAttendance((prev) =>
+          prev.map((a) =>
+            a.id === rec.id
+              ? { ...a, checkOutTime2: timeStr, overtimeHours2, checkOutLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy } }
+              : a
+          )
+        );
+        logActivity && logActivity("تسجيل انصراف - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+      }
     };
 
     return (
@@ -2184,7 +2227,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             entityOfBranch={entityOfBranch}
             leaves={scopedLeaves}
             logActivity={logActivity}
-            canEditWeeklyOff={isAdmin || isEntityManager}
+            canEditWeeklyOff={isAdmin || isManager || isEntityManager}
             jumpToEmployeeId={jumpToEmployeeId}
             onJumpHandled={() => setJumpToEmployeeId(null)}
           />
@@ -2586,6 +2629,8 @@ const EMPTY_EMP = {
   careerHistory: [],
   weeklyOffDays: ["الجمعة"],
   workShift: { start: "08:00", end: "17:00" },
+  twoShifts: false,
+  workShift2: { start: "17:00", end: "22:00" },
 };
 
 const WEEK_DAYS = ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"];
@@ -2750,6 +2795,18 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, workShift: shift } : e)));
     setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, workShift: shift } : prev));
     logActivity && logActivity("تحديد وقت الدوام", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${shift.start}-${shift.end}`);
+  };
+
+  /* دوامين في اليوم لبعض الموظفين (مثلاً فترة صباحية وفترة مسائية) */
+  const updateWorkShift2 = (empId, shift) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, workShift2: shift } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, workShift2: shift } : prev));
+    logActivity && logActivity("تحديد وقت الفترة المسائية", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${shift.start}-${shift.end}`);
+  };
+  const toggleTwoShifts = (empId, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, twoShifts: value } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, twoShifts: value } : prev));
+    logActivity && logActivity("تفعيل دوامين", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
   };
 
   const removeCareerEntry = (empId, entryId) => {
@@ -3060,6 +3117,8 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           onUpdateGovFees={updateGovFees}
           onToggleWeeklyOffDay={toggleWeeklyOffDay}
           onUpdateWorkShift={updateWorkShift}
+          onUpdateWorkShift2={updateWorkShift2}
+          onToggleTwoShifts={toggleTwoShifts}
           canEditWeeklyOff={canEditWeeklyOff}
           onClose={() => setProfileEmp(null)}
         />
@@ -3069,7 +3128,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, canEditWeeklyOff = true, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, canEditWeeklyOff = true, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const feesRefs = {
@@ -3244,7 +3303,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
               )}
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
-              <span style={{ color: "#a3927a" }}>{t("وقت الدوام", "Work Shift")}</span>
+              <span style={{ color: "#a3927a" }}>{t("وقت الفترة الصباحية", "Morning Shift")}</span>
               {canEditWeeklyOff ? (
                 <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                   <TimeField
@@ -3265,6 +3324,45 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
                 </span>
               )}
             </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
+              <span style={{ color: "#a3927a" }}>{t("فترة صباحية وفترة مسائية؟", "Morning & Evening Shift?")}</span>
+              {canEditWeeklyOff ? (
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!emp.twoShifts}
+                    onChange={(e) => onToggleTwoShifts && onToggleTwoShifts(emp.id, e.target.checked)}
+                  />
+                  <span style={{ fontSize: 11.5, color: "#a3927a" }}>{t("مثلاً فترة صباحية وفترة مسائية", "e.g. a morning shift and an evening shift")}</span>
+                </label>
+              ) : (
+                <span style={{ fontWeight: 700, color: COLORS.espresso }}>{emp.twoShifts ? t("نعم", "Yes") : t("لا", "No")}</span>
+              )}
+            </div>
+            {emp.twoShifts && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
+                <span style={{ color: "#a3927a" }}>{t("الفترة المسائية", "Evening Shift")}</span>
+                {canEditWeeklyOff ? (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <TimeField
+                      style={{ padding: "4px 8px", fontSize: 12.5, width: 100 }}
+                      value={emp.workShift2?.start || "17:00"}
+                      onChange={(v) => onUpdateWorkShift2 && onUpdateWorkShift2(emp.id, { ...(emp.workShift2 || {}), start: v })}
+                    />
+                    <span style={{ color: "#a3927a" }}>—</span>
+                    <TimeField
+                      style={{ padding: "4px 8px", fontSize: 12.5, width: 100 }}
+                      value={emp.workShift2?.end || "22:00"}
+                      onChange={(v) => onUpdateWorkShift2 && onUpdateWorkShift2(emp.id, { ...(emp.workShift2 || {}), end: v })}
+                    />
+                  </div>
+                ) : (
+                  <span style={{ fontWeight: 700, color: COLORS.espresso, fontFamily: "Consolas, monospace" }}>
+                    {emp.workShift2?.start || "17:00"} — {emp.workShift2?.end || "22:00"}
+                  </span>
+                )}
+              </div>
+            )}
           </Section>
 
           <Section title={t("الراتب", "Salary")}>
@@ -4876,14 +4974,29 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
         {attendance.length === 0 && <Empty text={t("لا توجد سجلات حضور", "No attendance records")} />}
         {attendance.slice().reverse().map((a, i) => (
-          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5 }}>
-            <div><b>{empName(a.employeeId)}</b> — {a.date}</div>
+          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5, flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <b>{empName(a.employeeId)}</b> — {a.date}
+              {(a.checkInTime || a.checkOutTime || a.checkInTime2 || a.checkOutTime2) && (
+                <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 3, fontFamily: "Consolas, monospace" }}>
+                  {(a.checkInTime || a.checkOutTime) && (
+                    <span>{t("صباحي", "AM")}: {a.checkInTime || "—"} → {a.checkOutTime || "—"}</span>
+                  )}
+                  {(a.checkInTime2 || a.checkOutTime2) && (
+                    <span style={{ marginInlineStart: 10 }}>{t("مسائي", "PM")}: {a.checkInTime2 || "—"} → {a.checkOutTime2 || "—"}</span>
+                  )}
+                </div>
+              )}
+            </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>
                 {trLabel(t, ATTENDANCE_STATUS_LABELS_EN, a.status)}{a.status === "متأخر" && a.lateMinutes ? ` (${a.lateMinutes} ${t("د", "min")})` : ""}
               </Stamp>
               {Number(a.overtimeHours || 0) > 0 && (
                 <Stamp tone="green">{t(`إضافي ${a.overtimeHours} س`, `OT ${a.overtimeHours}h`)}</Stamp>
+              )}
+              {Number(a.overtimeHours2 || 0) > 0 && (
+                <Stamp tone="green">{t(`إضافي ف2 ${a.overtimeHours2} س`, `OT S2 ${a.overtimeHours2}h`)}</Stamp>
               )}
               <Btn small tone="danger" onClick={() => removeAtt(a.id)}>{t("حذف", "Delete")}</Btn>
             </div>
@@ -6824,6 +6937,20 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
   const myAttendance = attendance.filter((a) => a.employeeId === employee.id).slice().reverse();
   const todayISO = new Date().toISOString().slice(0, 10);
   const todayAtt = attendance.find((a) => a.employeeId === employee.id && a.date === todayISO);
+  /* مرحلة الحضور/الانصراف الحالية — تدعم دوامين لبعض الموظفين */
+  const attStage = !todayAtt
+    ? "in1"
+    : !todayAtt.checkOutTime
+    ? "out1"
+    : !employee.twoShifts
+    ? "done"
+    : !todayAtt.checkInTime2
+    ? "in2"
+    : !todayAtt.checkOutTime2
+    ? "out2"
+    : "done";
+  const canClockIn = attStage === "in1" || attStage === "in2";
+  const canClockOut = attStage === "out1" || attStage === "out2";
   const myLeaveBal = leaveBalanceInfo(employee, leaves);
 
   return (
@@ -6943,26 +7070,52 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", justifyContent: "space-between" }}>
             <div style={{ display: "flex", gap: 22, flexWrap: "wrap" }}>
               <div>
-                <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("وقت الدوام", "Work Shift")}</div>
+                <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("وقت الفترة الصباحية", "Morning Shift")}</div>
                 <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>
                   {employee.workShift?.start || "08:00"} — {employee.workShift?.end || "17:00"}
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("حضور اليوم", "Today's Check-in")}</div>
+                <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("حضور الفترة الصباحية", "Morning Shift Check-in")}</div>
                 <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkInTime || "—"}</div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("انصراف اليوم", "Today's Check-out")}</div>
+                <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("انصراف الفترة الصباحية", "Morning Shift Check-out")}</div>
                 <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkOutTime || "—"}</div>
               </div>
+              {employee.twoShifts && (
+                <>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("وقت الفترة المسائية", "Evening Shift")}</div>
+                    <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>
+                      {employee.workShift2?.start || "17:00"} — {employee.workShift2?.end || "22:00"}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("حضور الفترة المسائية", "Evening Shift Check-in")}</div>
+                    <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkInTime2 || "—"}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "#8a7a63", marginBottom: 4 }}>{t("انصراف الفترة المسائية", "Evening Shift Check-out")}</div>
+                    <div style={{ fontWeight: 700, fontFamily: "Consolas, monospace" }}>{todayAtt?.checkOutTime2 || "—"}</div>
+                  </div>
+                </>
+              )}
             </div>
             <div style={{ display: "flex", gap: 10 }}>
-              <Btn onClick={onClockIn} disabled={!!todayAtt || geoBusy}>
-                {geoBusy ? t("📍 جارِ التحقق من الموقع...", "📍 Checking location...") : t("🟢 تسجيل حضور", "🟢 Clock In")}
+              <Btn onClick={onClockIn} disabled={!canClockIn || geoBusy}>
+                {geoBusy
+                  ? t("📍 جارِ التحقق من الموقع...", "📍 Checking location...")
+                  : attStage === "in2"
+                  ? t("🟢 تسجيل حضور (الفترة المسائية)", "🟢 Clock In (Evening Shift)")
+                  : t("🟢 تسجيل حضور", "🟢 Clock In")}
               </Btn>
-              <Btn tone="secondary" onClick={onClockOut} disabled={!todayAtt || !!todayAtt?.checkOutTime || geoBusy}>
-                {geoBusy ? t("📍 جارِ التحقق من الموقع...", "📍 Checking location...") : t("🔴 تسجيل انصراف", "🔴 Clock Out")}
+              <Btn tone="secondary" onClick={onClockOut} disabled={!canClockOut || geoBusy}>
+                {geoBusy
+                  ? t("📍 جارِ التحقق من الموقع...", "📍 Checking location...")
+                  : attStage === "out2"
+                  ? t("🔴 تسجيل انصراف (الفترة المسائية)", "🔴 Clock Out (Evening Shift)")
+                  : t("🔴 تسجيل انصراف", "🔴 Clock Out")}
               </Btn>
             </div>
           </div>
