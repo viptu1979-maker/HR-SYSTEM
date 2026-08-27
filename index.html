@@ -3743,6 +3743,9 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
 function IqamasContractsTab({ employees, setEmployees, branches }) {
   const { t } = useLang();
   const [filterUrgency, setFilterUrgency] = useState("");
+  /* بحث بالاسم + تصفية بالفرع */
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterBranch, setFilterBranch] = useState("");
 
   const update = (id, field, value) => {
     setEmployees((prev) => prev.map((e) => (e.id === id ? { ...e, [field]: value } : e)));
@@ -3758,6 +3761,9 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
   }));
 
   const filtered = rows.filter((r) => {
+    if (filterBranch && r.branchId !== filterBranch) return false;
+    const q = searchQuery.trim().toLowerCase();
+    if (q && !(r.name || "").toLowerCase().includes(q) && !(r.nationalId || "").toLowerCase().includes(q)) return false;
     if (!filterUrgency) return true;
     if (filterUrgency === "iqama") return r.iqamaStatus.days !== null && r.iqamaStatus.days <= 90;
     if (filterUrgency === "contract") return r.contractStatus.days !== null && r.contractStatus.days <= 90;
@@ -3782,7 +3788,19 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("جدول المتابعة", "Tracking Table")}</SectionTitle>
-        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <input
+            style={{ ...inputStyle, maxWidth: 200 }}
+            placeholder={t("ابحث بالاسم أو رقم الهوية...", "Search by name or ID...")}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+          <select style={{ ...inputStyle, maxWidth: 200 }} value={filterBranch} onChange={(e) => setFilterBranch(e.target.value)}>
+            <option value="">{t("كل الفروع", "All Branches")}</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
           <select style={{ ...inputStyle, maxWidth: 260 }} value={filterUrgency} onChange={(e) => setFilterUrgency(e.target.value)}>
             <option value="">{t("عرض الكل", "Show All")}</option>
             <option value="iqama">{t("إقامات مقتربة من الانتهاء (90 يوم)", "Iqamas nearing expiry (90 days)")}</option>
