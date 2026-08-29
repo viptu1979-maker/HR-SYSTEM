@@ -1781,11 +1781,17 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
     /* الضغط على "تسجيل حضور/انصراف" يفتح شاشة التحقق من الوجه أولًا؛ الفعل الفعلي (clockIn/clockOut)
        ما بيتنفذ إلا بعد نجاح التحقق (أو التسجيل الأول للوجه) */
+    /* الضغط على "تسجيل حضور/انصراف" يفتح شاشة التحقق من الوجه أولًا (إلا لو كان التحقق بالوجه معطّلًا لهذا
+       الموظف تحديدًا من ملفه الشخصي، فوقتها يسجّل مباشرة بالموقع الجغرافي فقط زي ما كان قبل إضافة الميزة) */
     const requestClockIn = () => {
       if (!myEmployee) return;
       const already = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
       const stage = attendanceStage(already, myEmployee);
       if (stage !== "in1" && stage !== "in2") return;
+      if (myEmployee.faceAttendanceEnabled === false) {
+        clockIn();
+        return;
+      }
       setFaceModal("in");
     };
     const requestClockOut = () => {
@@ -1794,6 +1800,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       if (!rec) return;
       const stage = attendanceStage(rec, myEmployee);
       if (stage !== "out1" && stage !== "out2") return;
+      if (myEmployee.faceAttendanceEnabled === false) {
+        clockOut();
+        return;
+      }
       setFaceModal("out");
     };
     const handleFaceVerified = ({ photo, descriptor }) => {
@@ -2884,6 +2894,14 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     logActivity && logActivity("إعادة ضبط بصمة الوجه", "employees", employees.find((e) => e.id === empId)?.name || "");
   };
 
+  /* تفعيل/تعطيل اشتراط التحقق بالوجه لموظف معيّن — لو معطّل، الموظف يسجّل حضور/انصراف بالموقع فقط بدون كاميرا.
+     غير محدد (undefined) = مفعّل افتراضيًا (نفس السلوك الحالي لكل الموظفين) */
+  const toggleFaceRequired = (empId, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, faceAttendanceEnabled: value } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, faceAttendanceEnabled: value } : prev));
+    logActivity && logActivity("تفعيل/تعطيل التحقق بالوجه", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "مفعّل" : "معطّل"}`);
+  };
+
   const removeCareerEntry = (empId, entryId) => {
     setEmployees((prev) =>
       prev.map((e) => (e.id === empId ? { ...e, careerHistory: (e.careerHistory || []).filter((h) => h.id !== entryId) } : e))
@@ -3197,6 +3215,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           onUpdateWorkShift2={updateWorkShift2}
           onToggleTwoShifts={toggleTwoShifts}
           onResetFace={resetFaceDescriptor}
+          onToggleFaceRequired={toggleFaceRequired}
           canEditWeeklyOff={canEditWeeklyOff}
           onPrintCertificate={(type) => { setCertEmp(profileEmp); setCertType(type); setCertRefNo(""); setCertAddressedTo(""); }}
           onClose={() => setProfileEmp(null)}
@@ -3371,7 +3390,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, onResetFace, canEditWeeklyOff = true, onPrintCertificate, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, onResetFace, onToggleFaceRequired, canEditWeeklyOff = true, onPrintCertificate, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const feesRefs = {
@@ -3619,6 +3638,21 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
           </Section>
 
           <Section title={t("بصمة الوجه للحضور والانصراف", "Face Attendance Fingerprint")}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
+              <span style={{ color: "#a3927a" }}>{t("مطلوب تسجيل الحضور/الانصراف بالوجه؟", "Require face check to clock in/out?")}</span>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={emp.faceAttendanceEnabled !== false}
+                  onChange={(e) => onToggleFaceRequired && onToggleFaceRequired(emp.id, e.target.checked)}
+                />
+                <span style={{ fontSize: 11.5, color: "#a3927a" }}>
+                  {emp.faceAttendanceEnabled !== false
+                    ? t("مفعّل — يجب أن يبصم بالوجه", "Enabled — must scan face")
+                    : t("معطّل — الموقع الجغرافي فقط", "Disabled — location only")}
+                </span>
+              </label>
+            </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
               <span style={{ color: "#a3927a" }}>{t("الحالة", "Status")}</span>
               {emp.faceDescriptor ? (
@@ -6134,8 +6168,8 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
       setError(t("كلمة المرور الحالية غير صحيحة", "Current password is incorrect"));
       return;
     }
-    if (!/^[A-Za-z]{2}\d+$/.test(newPassword)) {
-      setError(t("كلمة المرور يجب أن تبدأ بحرفين إنجليزيين ثم أرقام فقط (مثال: ab1234)", "Password must start with 2 English letters followed by numbers only (e.g. ab1234)"));
+    if (newPassword.length < 4) {
+      setError(t("كلمة المرور يجب أن تكون 4 أحرف/أرقام على الأقل", "Password must be at least 4 characters"));
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -7605,7 +7639,10 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
             </div>
           </div>
           <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 12, display: "flex", alignItems: "center", gap: 6 }}>
-            📍 {t("يتطلب تسجيل الحضور/الانصراف تفعيل خدمة الموقع (GPS) والتواجد داخل نطاق الفرع، بالإضافة للتحقق من الوجه عبر الكاميرا.", "Clock in/out requires location (GPS) access, being physically within the branch's range, and face verification via the camera.")}
+            📍{" "}
+            {employee.faceAttendanceEnabled === false
+              ? t("يتطلب تسجيل الحضور/الانصراف تفعيل خدمة الموقع (GPS) والتواجد داخل نطاق الفرع.", "Clock in/out requires location (GPS) access and being physically within the branch's range.")
+              : t("يتطلب تسجيل الحضور/الانصراف تفعيل خدمة الموقع (GPS) والتواجد داخل نطاق الفرع، بالإضافة للتحقق من الوجه عبر الكاميرا.", "Clock in/out requires location (GPS) access, being physically within the branch's range, and face verification via the camera.")}
           </div>
           {geoError && (
             <div style={{ marginTop: 10, fontSize: 12.5, color: COLORS.brick, background: "#FBEAEA", borderRadius: 8, padding: "9px 12px", fontWeight: 600 }}>
