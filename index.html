@@ -2876,6 +2876,14 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     logActivity && logActivity("تفعيل دوامين", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
   };
 
+  /* إعادة ضبط بصمة الوجه — تحذفها من ملف الموظف، فيُطلب منه تسجيلها من جديد عند أول حضور/انصراف قادم
+     (يُستخدم لو تغيّر شكل الموظف بشكل كبير، أو لو تم تسجيلها بالخطأ لموظف آخر، أو بطلب الموظف) */
+  const resetFaceDescriptor = (empId) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, faceDescriptor: null, faceRegisteredAt: null } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, faceDescriptor: null, faceRegisteredAt: null } : prev));
+    logActivity && logActivity("إعادة ضبط بصمة الوجه", "employees", employees.find((e) => e.id === empId)?.name || "");
+  };
+
   const removeCareerEntry = (empId, entryId) => {
     setEmployees((prev) =>
       prev.map((e) => (e.id === empId ? { ...e, careerHistory: (e.careerHistory || []).filter((h) => h.id !== entryId) } : e))
@@ -3188,6 +3196,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           onUpdateWorkShift={updateWorkShift}
           onUpdateWorkShift2={updateWorkShift2}
           onToggleTwoShifts={toggleTwoShifts}
+          onResetFace={resetFaceDescriptor}
           canEditWeeklyOff={canEditWeeklyOff}
           onPrintCertificate={(type) => { setCertEmp(profileEmp); setCertType(type); setCertRefNo(""); setCertAddressedTo(""); }}
           onClose={() => setProfileEmp(null)}
@@ -3362,7 +3371,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, canEditWeeklyOff = true, onPrintCertificate, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, onResetFace, canEditWeeklyOff = true, onPrintCertificate, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const feesRefs = {
@@ -3607,6 +3616,41 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
               <span>{t("إجمالي ساعات الدوام اليومية", "Total Daily Work Hours")}</span>
               <span style={{ fontWeight: 700 }}>{fmt(dailyWorkHours(emp))} {t("ساعة", "hrs")}</span>
             </div>
+          </Section>
+
+          <Section title={t("بصمة الوجه للحضور والانصراف", "Face Attendance Fingerprint")}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
+              <span style={{ color: "#a3927a" }}>{t("الحالة", "Status")}</span>
+              {emp.faceDescriptor ? (
+                <Stamp tone="green">
+                  {t("مسجّلة", "Registered")}
+                  {emp.faceRegisteredAt ? ` — ${new Date(emp.faceRegisteredAt).toLocaleDateString(t("ar-SA-u-nu-latn", "en-US"))}` : ""}
+                </Stamp>
+              ) : (
+                <Stamp tone="gold">{t("لم تُسجَّل بعد", "Not registered yet")}</Stamp>
+              )}
+            </div>
+            {emp.faceDescriptor && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
+                <span style={{ color: "#a3927a", maxWidth: 320 }}>
+                  {t(
+                    "إعادة الضبط تحذف البصمة الحالية — سيُطلب من الموظف تسجيل وجهه من جديد عند أول تسجيل حضور/انصراف قادم.",
+                    "Resetting deletes the current fingerprint — the employee will be asked to register their face again on the next clock-in/out."
+                  )}
+                </span>
+                <Btn
+                  small
+                  tone="danger"
+                  onClick={() => {
+                    if (window.confirm(t("متأكد من إعادة ضبط بصمة الوجه لهذا الموظف؟", "Reset this employee's face fingerprint?"))) {
+                      onResetFace && onResetFace(emp.id);
+                    }
+                  }}
+                >
+                  {t("إعادة ضبط", "Reset")}
+                </Btn>
+              </div>
+            )}
           </Section>
 
           <Section title={t("الراتب", "Salary")}>
