@@ -2716,13 +2716,15 @@ const WEEK_DAYS_EN = {
   "الجمعة": "Friday",
 };
 
-/* أيام الإجازة الأسبوعية لموظف — متوافقة مع البيانات القديمة (weeklyOffDay نص واحد) والجديدة (weeklyOffDays مصفوفة) */
+/* أيام الإجازة الأسبوعية لموظف — متوافقة مع البيانات القديمة (weeklyOffDay نص واحد) والجديدة (weeklyOffDays مصفوفة).
+   مصفوفة فاضية [] معناها "بدون إجازة أسبوعية" (اختيار مقصود من الإدارة) — يختلف عن عدم الضبط أصلاً (يرجع الجمعة كافتراضي) */
 function getOffDays(emp) {
-  if (Array.isArray(emp?.weeklyOffDays) && emp.weeklyOffDays.length) return emp.weeklyOffDays;
+  if (Array.isArray(emp?.weeklyOffDays)) return emp.weeklyOffDays;
   if (emp?.weeklyOffDay) return [emp.weeklyOffDay];
   return ["الجمعة"];
 }
 function formatOffDays(days, t) {
+  if (!days || !days.length) return t("بدون إجازة أسبوعية", "No weekly day off");
   return days.map((d) => t(d, WEEK_DAYS_EN[d] || d)).join(t("، ", ", "));
 }
 
@@ -2854,16 +2856,14 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         if (e.id !== empId) return e;
         const current = getOffDays(e);
         const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day];
-        const finalDays = next.length ? next : [day];
-        return { ...e, weeklyOffDays: finalDays, weeklyOffDay: finalDays[0] };
+        return { ...e, weeklyOffDays: next, weeklyOffDay: next[0] || "" };
       })
     );
     setProfileEmp((prev) => {
       if (!prev || prev.id !== empId) return prev;
       const current = getOffDays(prev);
       const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day];
-      const finalDays = next.length ? next : [day];
-      return { ...prev, weeklyOffDays: finalDays, weeklyOffDay: finalDays[0] };
+      return { ...prev, weeklyOffDays: next, weeklyOffDay: next[0] || "" };
     });
     logActivity && logActivity("تحديد الإجازة الأسبوعية", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${day}`);
   };
