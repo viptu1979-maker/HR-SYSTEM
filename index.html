@@ -5740,28 +5740,28 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   {t("الاسم", "Name")}
                 </th>
                 {[
-                  t("الفرع", "Branch"),
-                  t("الجنسية", "Nationality"),
-                  t("الراتب الأساسي", "Basic Salary"),
-                  t("حصة الموظف GOSI", "Employee GOSI Share"),
-                  t("أيام غياب", "Absent Days"),
-                  t("خصم الغياب", "Absence Deduction"),
-                  t("دقائق تأخير", "Late Minutes"),
-                  t("خصم التأخير", "Lateness Deduction"),
-                  t("أيام إجازة بدون راتب", "Unpaid Leave Days"),
-                  t("خصم الإجازة", "Leave Deduction"),
-                  t("إجمالي خصومات الحضور", "Total Attendance Deductions"),
-                  t("ساعات إضافي", "Overtime Hours"),
-                  t("قيمة الإضافي", "Overtime Pay"),
-                  t("السلف", "Advances"),
-                  t("خصومات أخرى", "Other Deductions"),
-                  t("الحوافز", "Incentives"),
-                  t("حصة صاحب العمل", "Employer Share"),
-                  t("الصافي للموظف", "Net for Employee"),
-                  t("تكلفة الشركة", "Company Cost"),
-                  "",
+                  { label: t("الفرع", "Branch") },
+                  { label: t("الجنسية", "Nationality") },
+                  { label: t("الراتب الأساسي", "Basic Salary") },
+                  { label: t("حصة الموظف GOSI", "Employee GOSI Share"), hidePrint: true },
+                  { label: t("أيام غياب", "Absent Days") },
+                  { label: t("خصم الغياب", "Absence Deduction") },
+                  { label: t("دقائق تأخير", "Late Minutes") },
+                  { label: t("خصم التأخير", "Lateness Deduction") },
+                  { label: t("أيام إجازة بدون راتب", "Unpaid Leave Days") },
+                  { label: t("خصم الإجازة", "Leave Deduction") },
+                  { label: t("إجمالي خصومات الحضور", "Total Attendance Deductions") },
+                  { label: t("ساعات إضافي", "Overtime Hours") },
+                  { label: t("قيمة الإضافي", "Overtime Pay") },
+                  { label: t("السلف", "Advances") },
+                  { label: t("خصومات أخرى", "Other Deductions") },
+                  { label: t("الحوافز", "Incentives") },
+                  { label: t("حصة صاحب العمل", "Employer Share"), hidePrint: true },
+                  { label: t("الصافي للموظف", "Net for Employee") },
+                  { label: t("تكلفة الشركة", "Company Cost") },
+                  { label: "" },
                 ].map((h, i) => (
-                  <th key={i} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h}</th>
+                  <th key={i} className={h.hidePrint ? "no-print" : undefined} style={{ padding: "9px 12px", fontWeight: 700, color: COLORS.coffee }}>{h.label}</th>
                 ))}
               </tr>
             </thead>
@@ -5786,7 +5786,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td data-label={t("الراتب الأساسي", "Basic Salary")} style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
-                  <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
+                  <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} className="no-print" style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
                   <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.absentDays)}</td>
                   <td data-label={t("خصم الغياب", "Absence Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
                   <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.lateMinutesTotal)}</td>
@@ -5799,7 +5799,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("السلف", "Advances")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
                   <td data-label={t("خصومات أخرى", "Other Deductions")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
                   <td data-label={t("الحوافز", "Incentives")} style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.incentives)}</td>
-                  <td data-label={t("حصة صاحب العمل", "Employer Share")} style={{ padding: "9px 12px" }}>{fmt(r.employerShare)}</td>
+                  <td data-label={t("حصة صاحب العمل", "Employer Share")} className="no-print" style={{ padding: "9px 12px" }}>{fmt(r.employerShare)}</td>
                   <td data-label={t("الصافي للموظف", "Net for Employee")} style={{ padding: "9px 12px", color: COLORS.green, fontWeight: 700 }}>{fmt(r.net)}</td>
                   <td data-label={t("تكلفة الشركة", "Company Cost")} style={{ padding: "9px 12px", fontWeight: 700 }}>{fmt(r.totalCost)}</td>
                   <td style={{ padding: "9px 12px", fontFamily: "inherit" }} className="no-print">
