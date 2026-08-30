@@ -1427,6 +1427,25 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     // eslint-disable-next-line
   }, [loaded]);
 
+  /* تحديث حسابات الدخول (بما فيها كلمات المرور) داخل نسخة اليوم الاحتياطية فورًا كل ما تتغيّر —
+     مستقل عن النسخة الكاملة اليومية أعلاه، عشان لو موظف غيّر كلمة مروره بنفسه بعد ما أُخذت نسخة اليوم،
+     التغيير يترحّل لنسخة اليوم مباشرة وما يضيعش لو احتجنا نسترجع بعدين */
+  const lastBackedUpUsersRef = useRef("");
+  useEffect(() => {
+    if (!loaded) return;
+    const json = JSON.stringify(users);
+    if (json === lastBackedUpUsersRef.current) return;
+    const today = new Date().toISOString().slice(0, 10);
+    BACKUPS_COLLECTION.doc(today)
+      .set({ date: today, savedAt: firebase.firestore.FieldValue.serverTimestamp(), users }, { merge: true })
+      .then(() => {
+        lastBackedUpUsersRef.current = json;
+      })
+      .catch(() => {
+        /* فشل صامت — لا نزعج المستخدم، النسخة الكاملة اليومية ستلتقط آخر حالة على أي حال لاحقًا */
+      });
+  }, [users, loaded]);
+
   /* استرجاع نسخة احتياطية محدّدة (بتاريخها) — يكتب فوق بيانات النظام وحسابات الدخول الحالية في Firestore،
      ويحدّث الحالة المحلية فورًا. يُستخدم من تبويب الإعدادات (أدمن فقط) */
   const restoreBackup = (backupData) => {
