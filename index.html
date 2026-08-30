@@ -116,9 +116,10 @@
     50% { opacity: 0.6; }
   }
 
-  /* على الشاشات الضيقة: تحويل الجداول العريضة (class="responsive-table") إلى كروت رأسية
-     بدل التمرير الأفقي — كل صف يبقى كارت مستقل وكل عمود يظهر كسطر "تسمية: قيمة" */
-  @media (max-width: 860px) {
+  /* على الشاشات الضيقة فقط (مش عند الطباعة): تحويل الجداول العريضة (class="responsive-table") إلى كروت
+     رأسية بدل التمرير الأفقي — كل صف يبقى كارت مستقل وكل عمود يظهر كسطر "تسمية: قيمة".
+     محصور بـ "screen" عشان الطباعة/حفظ PDF يفضل يطبع جدول حقيقي مهما كان عرض الصفحة صغير */
+  @media screen and (max-width: 860px) {
     .responsive-table-wrap { overflow: visible !important; }
     .responsive-table { min-width: 0 !important; }
     .responsive-table thead { display: none; }
