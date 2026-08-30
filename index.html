@@ -176,6 +176,10 @@ const db = window.__hrDb;
 const DATA_DOC = db.collection("hrSystem").doc("data");
 const USERS_DOC = db.collection("hrSystem").doc("users");
 const LOG_DOC = db.collection("hrSystem").doc("activityLog");
+/* نسخ احتياطية يومية تلقائية لكل بيانات النظام (تشمل الموظفين وحسابات الدخول معًا) — حماية من أي حذف
+   أو تعديل بالغلط سواء من داخل النظام أو من Firestore Console مباشرة */
+const BACKUPS_COLLECTION = db.collection("hrSystemBackups");
+const BACKUP_RETENTION_DAYS = 14;
 
 /* ============ إعدادات EmailJS — لإرسال كود تأكيد الدخول بالإيميل (تحقق ثنائي) ============
    لازم تسجّل حساب مجاني على https://www.emailjs.com وتحط بياناتك هنا:
@@ -1387,6 +1391,79 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     setDirty(true);
   }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, loaded, role]);
 
+  /* نسخة احتياطية يومية تلقائية (بيانات النظام + حسابات الدخول معًا) — لو انحذف أو اتغيّر شيء بالغلط
+     (من داخل النظام أو حتى من Firestore Console مباشرة) يقدر الأدمن يسترجعها من تبويب "الإعدادات" */
+  useEffect(() => {
+    if (!loaded) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const backupDoc = BACKUPS_COLLECTION.doc(today);
+    backupDoc
+      .get()
+      .then((snap) => {
+        if (snap.exists) return; /* نسخة اليوم موجودة بالفعل — ما نكرّرها */
+        return backupDoc.set({
+          date: today,
+          savedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance,
+          gosiRates, vehicles, payrollItems, tasks, messages, users,
+        });
+      })
+      .then(() => {
+        /* تنظيف النسخ الأقدم من مدة الاحتفاظ لتفادي تراكمها */
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - BACKUP_RETENTION_DAYS);
+        const cutoffStr = cutoff.toISOString().slice(0, 10);
+        return BACKUPS_COLLECTION.where("date", "<", cutoffStr).get();
+      })
+      .then((snap) => {
+        if (!snap || snap.empty) return;
+        const batch = db.batch();
+        snap.forEach((d) => batch.delete(d.ref));
+        return batch.commit();
+      })
+      .catch(() => {
+        /* فشل النسخ الاحتياطي التلقائي بصمت — لا نزعج المستخدم بخطأ غير حرج، النظام نفسه يشتغل عادي */
+      });
+    // eslint-disable-next-line
+  }, [loaded]);
+
+  /* استرجاع نسخة احتياطية محدّدة (بتاريخها) — يكتب فوق بيانات النظام وحسابات الدخول الحالية في Firestore،
+     ويحدّث الحالة المحلية فورًا. يُستخدم من تبويب الإعدادات (أدمن فقط) */
+  const restoreBackup = (backupData) => {
+    const {
+      entities: bEntities, branches: bBranches, employees: bEmployees, leaves: bLeaves,
+      leaveRequests: bLeaveRequests, advanceRequests: bAdvanceRequests, attendance: bAttendance,
+      gosiRates: bGosiRates, vehicles: bVehicles, payrollItems: bPayrollItems, tasks: bTasks,
+      messages: bMessages, users: bUsers,
+    } = backupData;
+    setEntities(bEntities || []);
+    setBranches(bBranches || []);
+    setEmployees(bEmployees || []);
+    setLeaves(bLeaves || []);
+    setLeaveRequests(bLeaveRequests || []);
+    setAdvanceRequests(bAdvanceRequests || []);
+    setAttendance(bAttendance || []);
+    setGosiRates(bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 });
+    setVehicles(bVehicles || []);
+    setPayrollItems(bPayrollItems || []);
+    setTasks(bTasks || []);
+    setMessages(bMessages || []);
+    const payload = {
+      entities: bEntities || [], branches: bBranches || [], employees: bEmployees || [], leaves: bLeaves || [],
+      leaveRequests: bLeaveRequests || [], advanceRequests: bAdvanceRequests || [], attendance: bAttendance || [],
+      gosiRates: bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
+      vehicles: bVehicles || [], payrollItems: bPayrollItems || [], tasks: bTasks || [], messages: bMessages || [],
+    };
+    DATA_DOC.set(payload).then(() => {
+      lastSyncedRef.current = JSON.stringify(payload);
+    });
+    if (Array.isArray(bUsers) && bUsers.length) {
+      setUsers(bUsers);
+      USERS_DOC.set({ users: bUsers });
+    }
+    logActivity && logActivity("استرجاع نسخة احتياطية", "settings", `تاريخ النسخة: ${backupData.date || "—"}`);
+  };
+
   /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
   const saveNow = () => {
     const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages };
@@ -2416,7 +2493,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         {isAdmin && hasTab("reports") && tab === "reports" && (
           <ReportsTab activityLog={activityLog} users={users} />
         )}
-        {hasTab("settings") && tab === "settings" && <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} />}
+        {hasTab("settings") && tab === "settings" && (
+          <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} isAdmin={isAdmin} onRestoreBackup={restoreBackup} logActivity={logActivity} />
+        )}
         {isAdmin && tab === "users" && (
           <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} logActivity={logActivity} />
         )}
@@ -6010,8 +6089,35 @@ function EOSTab({ employees }) {
 }
 
 /* ============ الإعدادات ============ */
-function SettingsTab({ gosiRates, setGosiRates }) {
+function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, logActivity }) {
   const { t } = useLang();
+  const [backups, setBackups] = useState([]);
+  const [backupsLoaded, setBackupsLoaded] = useState(false);
+  const [restoring, setRestoring] = useState("");
+  const [confirmDate, setConfirmDate] = useState("");
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    BACKUPS_COLLECTION.orderBy("date", "desc")
+      .limit(30)
+      .get()
+      .then((snap) => {
+        setBackups(snap.docs.map((d) => d.data()));
+        setBackupsLoaded(true);
+      })
+      .catch(() => setBackupsLoaded(true));
+  }, [isAdmin]);
+
+  const doRestore = (backup) => {
+    setRestoring(backup.date);
+    try {
+      onRestoreBackup && onRestoreBackup(backup);
+    } finally {
+      setRestoring("");
+      setConfirmDate("");
+    }
+  };
+
   return (
     <div>
       <Header title={t("الإعدادات", "Settings")} subtitle={t("تعديل نسب التأمينات الاجتماعية (GOSI) المستخدمة في احتساب الرواتب", "Edit the Social Insurance (GOSI) rates used in payroll calculations")} />
@@ -6058,6 +6164,54 @@ function SettingsTab({ gosiRates, setGosiRates }) {
           "All data is stored and synced via the shared Firestore database and is not shared with any third party."
         )}
       </div>
+
+      {isAdmin && (
+        <div style={{ marginTop: 26, background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, maxWidth: 560 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>
+            {t("النسخ الاحتياطي واسترجاع البيانات", "Backups & Data Recovery")}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#a3927a", marginBottom: 14 }}>
+            {t(
+              "يأخذ النظام نسخة احتياطية تلقائية يوميًا من كل بياناته (الموظفين، الحضور، الرواتب، حسابات الدخول...) ويحتفظ بآخر 14 يوم. لو حصل حذف أو تعديل بالغلط — من داخل النظام أو من Firestore مباشرة — تقدر ترجع لأي يوم من هنا.",
+              "The system automatically backs up all its data daily (employees, attendance, payroll, login accounts...) and keeps the last 14 days. If something gets accidentally deleted or changed — from inside the app or directly in Firestore — you can roll back to any day from here."
+            )}
+          </div>
+
+          {!backupsLoaded && <div style={{ fontSize: 12.5, color: "#a3927a" }}>{t("جاري تحميل النسخ الاحتياطية...", "Loading backups...")}</div>}
+          {backupsLoaded && !backups.length && <Empty text={t("لا توجد نسخ احتياطية بعد — أول نسخة تُنشأ تلقائيًا أول ما يُفتح النظام اليوم.", "No backups yet — the first one is created automatically the next time the system is opened today.")} />}
+
+          {backupsLoaded && backups.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {backups.map((b) => (
+                <div
+                  key={b.date}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", border: `1px solid ${COLORS.line}`, borderRadius: 8, padding: "8px 12px" }}
+                >
+                  <div style={{ fontSize: 12.5, color: COLORS.espresso, fontWeight: 700 }}>
+                    {b.date}
+                    <span style={{ fontWeight: 400, color: "#a3927a", marginInlineStart: 8 }}>
+                      {t(`${(b.employees || []).length} موظف — ${(b.users || []).length} حساب دخول`, `${(b.employees || []).length} employees — ${(b.users || []).length} login accounts`)}
+                    </span>
+                  </div>
+                  {confirmDate === b.date ? (
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <span style={{ fontSize: 11.5, color: COLORS.brick, fontWeight: 700 }}>
+                        {t("متأكد؟ هذا هيكتب فوق البيانات الحالية", "Sure? This overwrites current data")}
+                      </span>
+                      <Btn small tone="danger" disabled={restoring === b.date} onClick={() => doRestore(b)}>
+                        {restoring === b.date ? t("جارِ الاسترجاع...", "Restoring...") : t("تأكيد الاسترجاع", "Confirm Restore")}
+                      </Btn>
+                      <Btn small tone="secondary" onClick={() => setConfirmDate("")}>{t("إلغاء", "Cancel")}</Btn>
+                    </div>
+                  ) : (
+                    <Btn small tone="secondary" onClick={() => setConfirmDate(b.date)}>{t("استرجاع هذه النسخة", "Restore this backup")}</Btn>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
