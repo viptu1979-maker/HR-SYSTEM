@@ -2826,6 +2826,38 @@ function formatOffDays(days, t) {
   return days.map((d) => t(d, WEEK_DAYS_EN[d] || d)).join(t("، ", ", "));
 }
 
+/* ترتيب أيام الأسبوع كما يرجعه Date.getDay() في JS (0=الأحد...6=السبت) — لمطابقتها بأسماء الأيام العربية */
+const JS_DAY_INDEX_TO_AR = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+
+/* حساب أيام الغياب "الضمنية" لموظف خلال شهر معيّن: أي يوم عمل (مو إجازته الأسبوعية، ومو ضمن إجازة معتمدة،
+   ومو قبل تاريخ تعيينه، ومو يوم مستقبلي) ومالوش أي سجل حضور مسجَّل إطلاقًا (لا حضور ولا غياب يدوي) يُحتسب غيابًا
+   تلقائيًا. لا يكرّر أيام الغياب المسجَّلة يدويًا أصلاً (بيتجاهلها لأنها بالفعل "لها سجل") */
+function countMissingAttendanceDays(emp, monthAttendanceRecords, employeeApprovedLeaves, month) {
+  if (!emp?.joinDate) return 0;
+  const [y, m] = month.split("-").map(Number);
+  if (!y || !m) return 0;
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const join = new Date(emp.joinDate + "T00:00:00");
+  if (isNaN(join)) return 0;
+  const offDays = getOffDays(emp);
+  const recordedDates = new Set((monthAttendanceRecords || []).map((a) => a.date));
+  let missing = 0;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateObj = new Date(y, m - 1, d);
+    if (dateObj > today) break; /* يوم مستقبلي — ما نحكم عليه */
+    if (dateObj < join) continue; /* قبل تاريخ التعيين */
+    const dateStr = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    if (recordedDates.has(dateStr)) continue; /* له سجل حضور بالفعل (حاضر/متأخر/غائب يدوي...) */
+    if (offDays.includes(JS_DAY_INDEX_TO_AR[dateObj.getDay()])) continue; /* يوم إجازته الأسبوعية */
+    const onApprovedLeave = (employeeApprovedLeaves || []).some((l) => l.from && l.to && dateStr >= l.from && dateStr <= l.to);
+    if (onApprovedLeave) continue; /* ضمن إجازة معتمدة */
+    missing++;
+  }
+  return missing;
+}
+
 /* تحويل تاريخ ميلادي إلى هجري للعرض جنب حقل التاريخ (بدون اتصال إنترنت، عبر Intl المدمجة في المتصفح) */
 function toHijri(dateStr) {
   if (!dateStr) return "";
@@ -5532,7 +5564,12 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const perMinuteRate = dailyRate / (dailyHours * 60); /* على أساس ساعات عمله الفعلية اليومية */
 
       const monthAttendance = attendance.filter((a) => a.employeeId === e.id && (a.date || "").startsWith(month));
-      const absentDays = monthAttendance.filter((a) => a.status === "غائب").length;
+      const manualAbsentDays = monthAttendance.filter((a) => a.status === "غائب").length;
+      const employeeApprovedLeaves = leaves.filter((l) => l.employeeId === e.id);
+      /* أيام مالها سجل حضور إطلاقًا (مو إجازته الأسبوعية ومو ضمن إجازة معتمدة) تُحتسب غيابًا تلقائيًا،
+         بالإضافة لأيام الغياب المسجَّلة يدويًا */
+      const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, month);
+      const absentDays = manualAbsentDays + autoAbsentDays;
       const lateMinutesTotal = monthAttendance
         .filter((a) => a.status === "متأخر")
         .reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
@@ -5982,8 +6019,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }} className="no-print">
         {t(
-          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ 30. خصم الغياب = أيام الغياب × راتب اليوم. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ 480 دقيقة، على أساس 8 ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. احتساب الوقت الإضافي: سعر الساعة = راتب اليوم ÷ 8، وقيمة الإضافي = ساعات الإضافي المسجّلة × سعر الساعة × 1٫5 (وفق نظام العمل السعودي). البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه. الصافي للموظف = الراتب − حصة GOSI − خصومات الحضور − السلف − الخصومات الأخرى + الحوافز + قيمة الوقت الإضافي.',
-          'Deduction calculation: Daily rate = Basic salary ÷ 30. Absence deduction = absent days × daily rate. Lateness deduction = late minutes × (daily rate ÷ 480 minutes, based on an 8-hour workday). Unpaid leave deduction = leave days × daily rate. Overtime calculation: Hourly rate = daily rate ÷ 8, and overtime pay = registered overtime hours × hourly rate × 1.5 (per Saudi labor law). Figures are based on records from the "Attendance & Leave" tab for the month selected above. Net for employee = Salary − GOSI share − attendance deductions − advances − other deductions + incentives + overtime pay.'
+          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ 30. خصم الغياب = أيام الغياب × راتب اليوم — وتشمل أيام الغياب المسجَّلة يدويًا بالإضافة لأي يوم عمل ما فيه أي سجل حضور إطلاقًا (بدون بصمة حضور/انصراف)، باستثناء يوم إجازة الموظف الأسبوعية والأيام ضمن إجازة معتمدة والأيام قبل تاريخ التعيين. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ 480 دقيقة، على أساس 8 ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. احتساب الوقت الإضافي: سعر الساعة = راتب اليوم ÷ 8، وقيمة الإضافي = ساعات الإضافي المسجّلة × سعر الساعة × 1٫5 (وفق نظام العمل السعودي). البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه. الصافي للموظف = الراتب − حصة GOSI − خصومات الحضور − السلف − الخصومات الأخرى + الحوافز + قيمة الوقت الإضافي.',
+          'Deduction calculation: Daily rate = Basic salary ÷ 30. Absence deduction = absent days × daily rate — this includes manually recorded absences plus any working day with no attendance record at all (no clock-in/out), excluding the employee\'s weekly day off, days within an approved leave, and days before their hire date. Lateness deduction = late minutes × (daily rate ÷ 480 minutes, based on an 8-hour workday). Unpaid leave deduction = leave days × daily rate. Overtime calculation: Hourly rate = daily rate ÷ 8, and overtime pay = registered overtime hours × hourly rate × 1.5 (per Saudi labor law). Figures are based on records from the "Attendance & Leave" tab for the month selected above. Net for employee = Salary − GOSI share − attendance deductions − advances − other deductions + incentives + overtime pay.'
         )}
       </div>
     </div>
