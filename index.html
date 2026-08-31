@@ -6573,6 +6573,149 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
   );
 }
 
+/* ============ شاشة "تعيين كلمة مرور جديدة" — تفتح تلقائيًا لما يضغط الأدمن على رابط الاسترجاع في
+   الإيميل، لأن الرابط بيرجّعه لنفس الموقع (مش صفحة Firebase الافتراضية) مع رمز التحقق في الرابط ============ */
+function ResetPasswordScreen({ oobCode, onDone }) {
+  const { t } = useLang();
+  const [checking, setChecking] = useState(true);
+  const [validEmail, setValidEmail] = useState("");
+  const [invalidReason, setInvalidReason] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  useEffect(() => {
+    auth
+      .verifyPasswordResetCode(oobCode)
+      .then((email) => {
+        setValidEmail(email);
+        setChecking(false);
+      })
+      .catch(() => {
+        setInvalidReason(t("رابط الاسترجاع غير صالح أو منتهي الصلاحية — اطلب رابطًا جديدًا من شاشة الدخول.", "This recovery link is invalid or has expired — request a new one from the sign-in screen."));
+        setChecking(false);
+      });
+  }, [oobCode]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (newPassword.length < 6) {
+      setError(t("كلمة المرور يجب أن تكون 6 أحرف/أرقام على الأقل", "Password must be at least 6 characters"));
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError(t("كلمة المرور الجديدة وتأكيدها غير متطابقين", "New password and confirmation do not match"));
+      return;
+    }
+    setSaving(true);
+    try {
+      await auth.confirmPasswordReset(oobCode, newPassword);
+      setSuccess(true);
+    } catch (err) {
+      setError(t("تعذّر تعيين كلمة المرور — الرابط قد يكون منتهي الصلاحية، اطلب رابطًا جديدًا.", "Couldn't set the password — the link may have expired, request a new one."));
+    }
+    setSaving(false);
+  };
+
+  return (
+    <div
+      dir="rtl"
+      style={{
+        fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif",
+        background: `linear-gradient(180deg, ${COLORS.paper} 0%, #EFE6D2 60%, #E7DAC0 100%)`,
+        minHeight: "100vh",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: 16,
+        position: "relative",
+        overflow: "hidden",
+      }}
+    >
+      <NYSkyline />
+      <div
+        style={{
+          background: "#fff",
+          border: `1px solid ${COLORS.line}`,
+          borderRadius: 14,
+          padding: "34px 30px",
+          width: 320,
+          maxWidth: "100%",
+          boxShadow: "0 10px 34px rgba(59,42,29,0.16)",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
+        <div style={{ textAlign: "center", marginBottom: 22 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: COLORS.espresso }}>{t("تعيين كلمة مرور جديدة", "Set a New Password")}</div>
+          {validEmail && <div style={{ fontSize: 11.5, color: COLORS.coffee, marginTop: 4 }}>{validEmail}</div>}
+        </div>
+
+        {checking && <div style={{ fontSize: 12.5, color: "#8a7a63", textAlign: "center" }}>{t("جارِ التحقق من الرابط...", "Verifying link...")}</div>}
+
+        {!checking && invalidReason && (
+          <>
+            <div style={{ fontSize: 12.5, color: COLORS.brick, background: "#FBEAEA", borderRadius: 8, padding: "10px 12px", textAlign: "center" }}>
+              {invalidReason}
+            </div>
+            <div style={{ marginTop: 18 }}>
+              <Btn onClick={onDone}>{t("رجوع لتسجيل الدخول", "Back to Sign In")}</Btn>
+            </div>
+          </>
+        )}
+
+        {!checking && !invalidReason && !success && (
+          <form onSubmit={submit}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <Field label={t("كلمة المرور الجديدة", "New Password")}>
+                <input type="password" style={inputStyle} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoFocus />
+              </Field>
+              <Field label={t("تأكيد كلمة المرور", "Confirm Password")}>
+                <input type="password" style={inputStyle} value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+              </Field>
+            </div>
+            {error && <div style={{ color: COLORS.brick, fontSize: 12, marginTop: 10, textAlign: "center" }}>{error}</div>}
+            <div style={{ marginTop: 18 }}>
+              <button
+                type="submit"
+                disabled={saving}
+                style={{
+                  width: "100%",
+                  background: COLORS.espresso,
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 8,
+                  padding: "10px 16px",
+                  fontSize: 13.5,
+                  fontWeight: 700,
+                  cursor: saving ? "default" : "pointer",
+                  opacity: saving ? 0.7 : 1,
+                }}
+              >
+                {saving ? t("جارِ الحفظ...", "Saving...") : t("حفظ كلمة المرور الجديدة", "Save New Password")}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {success && (
+          <>
+            <div style={{ fontSize: 12.5, color: COLORS.espresso, background: COLORS.greenBg, borderRadius: 8, padding: "12px 14px", textAlign: "center" }}>
+              {t("تم تغيير كلمة المرور بنجاح ✔ — تقدر تسجّل دخول بيها الآن.", "Password changed successfully ✔ — you can now sign in with it.")}
+            </div>
+            <div style={{ marginTop: 18 }}>
+              <Btn onClick={onDone}>{t("الذهاب لتسجيل الدخول", "Go to Sign In")}</Btn>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({ form, setForm, onSubmit, error, busy }) {
   const { t } = useLang();
   const [showForgot, setShowForgot] = useState(false);
@@ -6586,7 +6729,10 @@ function LoginScreen({ form, setForm, onSubmit, error, busy }) {
     setResetSending(true);
     setResetMsg("");
     try {
-      await auth.sendPasswordResetEmail(resetEmail.trim());
+      /* نخلّي رابط الاسترجاع يرجّع المستخدم لموقعنا نفسه (بدل صفحة Firebase الافتراضية) — فيفتح شاشة
+         "تعيين كلمة مرور جديدة" داخل نفس الموقع مباشرة */
+      const returnUrl = window.location.origin + window.location.pathname;
+      await auth.sendPasswordResetEmail(resetEmail.trim(), { url: returnUrl, handleCodeInApp: true });
     } catch (err) {
       /* لا نكشف هل البريد موجود أو لا — رسالة عامة موحّدة سواء نجح الإرسال فعليًا أو لا، لحماية الحسابات */
     }
@@ -8867,6 +9013,13 @@ function ReportsTab({ activityLog, users }) {
 
 /* ============ بوابة الدخول (تدير المستخدمين والجلسة) ============ */
 function Root() {
+  /* لو الرابط راجع من إيميل استرجاع كلمة المرور (فيه mode=resetPassword&oobCode=...)، نعرض شاشة
+     "تعيين كلمة مرور جديدة" مباشرة قبل أي شيء تاني، بغض النظر عن حالة تسجيل الدخول الحالية */
+  const resetParams = new URLSearchParams(window.location.search);
+  const [resetOobCode, setResetOobCode] = useState(
+    resetParams.get("mode") === "resetPassword" ? resetParams.get("oobCode") : null
+  );
+
   const [users, setUsers] = useState(USERS_SEED);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [currentUsername, setCurrentUsername] = useState(null);
@@ -9104,6 +9257,18 @@ function Root() {
         loggingOutRef.current = false;
       });
   };
+
+  if (resetOobCode) {
+    return (
+      <ResetPasswordScreen
+        oobCode={resetOobCode}
+        onDone={() => {
+          setResetOobCode(null);
+          window.history.replaceState({}, "", window.location.pathname);
+        }}
+      />
+    );
+  }
 
   if (!authLoaded) return null;
   if (fbUser && !usersLoaded) return null; /* فيه جلسة Firebase محفوظة، بننتظر جلب بيانات صلاحياته فقط */
