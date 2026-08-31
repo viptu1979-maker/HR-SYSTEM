@@ -811,6 +811,9 @@ function daysOverlapInMonth(from, to, monthStr) {
   if (end < start) return 0;
   return Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
 }
+function fmtISODate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 /* إضافة عدد شهور لصيغة "YYYY-MM" وإرجاع نفس الصيغة */
 function addMonthsToStr(monthStr, n) {
@@ -2857,26 +2860,25 @@ function formatOffDays(days, t) {
 /* ترتيب أيام الأسبوع كما يرجعه Date.getDay() في JS (0=الأحد...6=السبت) — لمطابقتها بأسماء الأيام العربية */
 const JS_DAY_INDEX_TO_AR = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
-/* حساب أيام الغياب "الضمنية" لموظف خلال شهر معيّن: أي يوم عمل (مو إجازته الأسبوعية، ومو ضمن إجازة معتمدة،
-   ومو قبل تاريخ تعيينه، ومو يوم مستقبلي) ومالوش أي سجل حضور مسجَّل إطلاقًا (لا حضور ولا غياب يدوي) يُحتسب غيابًا
-   تلقائيًا. لا يكرّر أيام الغياب المسجَّلة يدويًا أصلاً (بيتجاهلها لأنها بالفعل "لها سجل") */
-function countMissingAttendanceDays(emp, monthAttendanceRecords, employeeApprovedLeaves, month) {
+/* حساب أيام الغياب "الضمنية" لموظف خلال فترة محدَّدة (rangeStart→rangeEnd): أي يوم عمل (مو إجازته الأسبوعية،
+   ومو ضمن إجازة معتمدة، ومو قبل تاريخ تعيينه، ومو يوم مستقبلي) ومالوش أي سجل حضور مسجَّل إطلاقًا (لا حضور
+   ولا غياب يدوي) يُحتسب غيابًا تلقائيًا. لا يكرّر أيام الغياب المسجَّلة يدويًا أصلاً (بيتجاهلها لأنها بالفعل "لها سجل") */
+function countMissingAttendanceDays(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd) {
   if (!emp?.joinDate) return 0;
-  const [y, m] = month.split("-").map(Number);
-  if (!y || !m) return 0;
-  const daysInMonth = new Date(y, m, 0).getDate();
+  const start = new Date(rangeStart + "T00:00:00");
+  const end = new Date(rangeEnd + "T00:00:00");
+  if (isNaN(start) || isNaN(end)) return 0;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const join = new Date(emp.joinDate + "T00:00:00");
   if (isNaN(join)) return 0;
   const offDays = getOffDays(emp);
-  const recordedDates = new Set((monthAttendanceRecords || []).map((a) => a.date));
+  const recordedDates = new Set((periodAttendanceRecords || []).map((a) => a.date));
   let missing = 0;
-  for (let d = 1; d <= daysInMonth; d++) {
-    const dateObj = new Date(y, m - 1, d);
+  for (let dateObj = new Date(start); dateObj <= end; dateObj.setDate(dateObj.getDate() + 1)) {
     if (dateObj > today) break; /* يوم مستقبلي — ما نحكم عليه */
     if (dateObj < join) continue; /* قبل تاريخ التعيين */
-    const dateStr = `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const dateStr = fmtISODate(dateObj);
     if (recordedDates.has(dateStr)) continue; /* له سجل حضور بالفعل (حاضر/متأخر/غائب يدوي...) */
     if (offDays.includes(JS_DAY_INDEX_TO_AR[dateObj.getDay()])) continue; /* يوم إجازته الأسبوعية */
     const onApprovedLeave = (employeeApprovedLeaves || []).some((l) => l.from && l.to && dateStr >= l.from && dateStr <= l.to);
@@ -2884,6 +2886,7 @@ function countMissingAttendanceDays(emp, monthAttendanceRecords, employeeApprove
     missing++;
   }
   return missing;
+
 }
 
 /* تحويل تاريخ ميلادي إلى هجري للعرض جنب حقل التاريخ (بدون اتصال إنترنت، عبر Intl المدمجة في المتصفح) */
@@ -5603,7 +5606,10 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const employeeApprovedLeaves = leaves.filter((l) => l.employeeId === e.id);
       /* أيام مالها سجل حضور إطلاقًا (مو إجازته الأسبوعية ومو ضمن إجازة معتمدة) تُحتسب غيابًا تلقائيًا،
          بالإضافة لأيام الغياب المسجَّلة يدويًا */
-      const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, month);
+      const [__pmY, __pmM] = month.split("-").map(Number);
+      const monthStart = `${month}-01`;
+      const monthEnd = fmtISODate(new Date(__pmY, __pmM, 0));
+      const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
       const absentDays = manualAbsentDays + autoAbsentDays;
       const lateMinutesTotal = monthAttendance
         .filter((a) => a.status === "متأخر")
@@ -8493,7 +8499,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
     }
     setRecoverySaving(true);
     try {
-      const cred = firebase.auth.EmailAuthProvider.credential(auth.currentUser.email, recoveryPassword);
+      const cred = firebase.auth.EmailAuthProvider.credential(auth.currentUser.email, padPasswordForAuth(recoveryPassword));
       await auth.currentUser.reauthenticateWithCredential(cred);
       await auth.currentUser.updateEmail(recoveryEmail.trim());
       setUsers((prev) => prev.map((u) => (u.authUid === auth.currentUser.uid ? { ...u, email: recoveryEmail.trim() } : u)));
