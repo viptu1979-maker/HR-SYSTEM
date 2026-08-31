@@ -6728,13 +6728,25 @@ function LoginScreen({ form, setForm, onSubmit, error, busy }) {
     if (!resetEmail.trim()) return;
     setResetSending(true);
     setResetMsg("");
+    /* أخطاء "الحساب مش موجود" نتجاهلها عمدًا (رسالة عامة موحّدة لحماية الخصوصية)، لكن أخطاء الإعداد
+       الحقيقية (نطاق غير موثّق، رابط غير صالح، إلخ) لازم تظهر بوضوح عشان تتصلّح بدل ما تختفي بصمت */
+    const SILENT_ERROR_CODES = ["auth/user-not-found", "auth/invalid-email"];
     try {
       /* نخلّي رابط الاسترجاع يرجّع المستخدم لموقعنا نفسه (بدل صفحة Firebase الافتراضية) — فيفتح شاشة
          "تعيين كلمة مرور جديدة" داخل نفس الموقع مباشرة */
       const returnUrl = window.location.origin + window.location.pathname;
       await auth.sendPasswordResetEmail(resetEmail.trim(), { url: returnUrl, handleCodeInApp: true });
     } catch (err) {
-      /* لا نكشف هل البريد موجود أو لا — رسالة عامة موحّدة سواء نجح الإرسال فعليًا أو لا، لحماية الحسابات */
+      if (err && err.code && !SILENT_ERROR_CODES.includes(err.code)) {
+        setResetSending(false);
+        setResetMsg(
+          t(
+            `تعذّر إرسال رابط الاسترجاع — خطأ من Firebase: ${err.code}. لو الخطأ يخص "unauthorized-continue-uri" أو "domain"، لازم تضيف نطاق موقعك في Firebase Console ضمن Authentication → Settings → Authorized domains.`,
+            `Couldn't send the recovery link — Firebase error: ${err.code}. If it mentions "unauthorized-continue-uri" or "domain", add your site's domain in Firebase Console under Authentication → Settings → Authorized domains.`
+          )
+        );
+        return;
+      }
     }
     setResetSending(false);
     setResetMsg(t("لو البريد صحيح ومسجّل لحساب الأدمن، هيوصلك رابط استرجاع كلمة المرور خلال دقائق. تأكد من مجلد الرسائل غير المرغوبة (Spam) لو ما وصلتك.", "If the email is correct and registered to the admin account, a password reset link will arrive within a few minutes. Check your spam folder if it doesn't show up."));
