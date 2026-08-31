@@ -8806,9 +8806,12 @@ function Root() {
     return () => unsub();
   }, [fbUser]);
 
-  /* بعد إعادة فتح الصفحة، لو فيه جلسة Firebase محفوظة وقائمة المستخدمين وصلت، نربط الحساب المطابق تلقائيًا */
+  /* بعد إعادة فتح الصفحة، لو فيه جلسة Firebase محفوظة وقائمة المستخدمين وصلت، نربط الحساب المطابق تلقائيًا.
+     نتجاهل هذا الربط التلقائي أثناء عملية تسجيل خروج جارية (loggingOutRef) حتى لا يعيد تسجيل الدخول
+     فورًا قبل ما Firebase يخلّص فعليًا عملية الخروج (كان سبب الحاجة لضغط "خروج" مرتين) */
+  const loggingOutRef = useRef(false);
   useEffect(() => {
-    if (!fbUser || !usersLoaded || currentUsername) return;
+    if (!fbUser || !usersLoaded || currentUsername || loggingOutRef.current) return;
     const match = users.find((u) => u.authUid === fbUser.uid);
     if (match) setCurrentUsername(match.username);
   }, [fbUser, usersLoaded, users, currentUsername]);
@@ -8979,8 +8982,14 @@ function Root() {
 
   const logout = () => {
     if (currentUser) logActivity(currentUser, "خروج", "", "");
+    loggingOutRef.current = true;
     setCurrentUsername(null);
-    auth.signOut().catch(() => {});
+    auth
+      .signOut()
+      .catch(() => {})
+      .finally(() => {
+        loggingOutRef.current = false;
+      });
   };
 
   if (!authLoaded) return null;
