@@ -6575,6 +6575,25 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
 
 function LoginScreen({ form, setForm, onSubmit, error, busy }) {
   const { t } = useLang();
+  const [showForgot, setShowForgot] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetSending, setResetSending] = useState(false);
+  const [resetMsg, setResetMsg] = useState("");
+
+  const sendReset = async (e) => {
+    e.preventDefault();
+    if (!resetEmail.trim()) return;
+    setResetSending(true);
+    setResetMsg("");
+    try {
+      await auth.sendPasswordResetEmail(resetEmail.trim());
+    } catch (err) {
+      /* لا نكشف هل البريد موجود أو لا — رسالة عامة موحّدة سواء نجح الإرسال فعليًا أو لا، لحماية الحسابات */
+    }
+    setResetSending(false);
+    setResetMsg(t("لو البريد صحيح ومسجّل لحساب الأدمن، هيوصلك رابط استرجاع كلمة المرور خلال دقائق. تأكد من مجلد الرسائل غير المرغوبة (Spam) لو ما وصلتك.", "If the email is correct and registered to the admin account, a password reset link will arrive within a few minutes. Check your spam folder if it doesn't show up."));
+  };
+
   return (
     <div
       dir="rtl"
@@ -6591,6 +6610,79 @@ function LoginScreen({ form, setForm, onSubmit, error, busy }) {
       }}
     >
       <NYSkyline />
+      {showForgot ? (
+        <form
+          onSubmit={sendReset}
+          style={{
+            background: "#fff",
+            border: `1px solid ${COLORS.line}`,
+            borderRadius: 14,
+            padding: "34px 30px",
+            width: 320,
+            maxWidth: "100%",
+            boxShadow: "0 10px 34px rgba(59,42,29,0.16)",
+            position: "relative",
+            zIndex: 1,
+          }}
+        >
+          <div style={{ textAlign: "center", marginBottom: 22 }}>
+            <div style={{ fontSize: 17, fontWeight: 800, color: COLORS.espresso }}>{t("استرجاع كلمة مرور الأدمن", "Recover Admin Password")}</div>
+            <div style={{ fontSize: 11.5, color: COLORS.coffee, marginTop: 4 }}>
+              {t("متاح لحساب الأدمن العام فقط، وبعد ربط بريد استرجاع من داخل النظام مسبقًا.", "Available for the general admin account only, and only after a recovery email has been linked from inside the system beforehand.")}
+            </div>
+          </div>
+          {!resetMsg ? (
+            <>
+              <Field label={t("البريد الإلكتروني المسجَّل للأدمن", "Admin's registered email")}>
+                <input
+                  type="email"
+                  style={inputStyle}
+                  value={resetEmail}
+                  onChange={(e) => setResetEmail(e.target.value)}
+                  autoFocus
+                />
+              </Field>
+              <div style={{ marginTop: 18 }}>
+                <button
+                  type="submit"
+                  disabled={resetSending}
+                  style={{
+                    width: "100%",
+                    background: COLORS.espresso,
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 8,
+                    padding: "10px 16px",
+                    fontSize: 13.5,
+                    fontWeight: 700,
+                    cursor: resetSending ? "default" : "pointer",
+                    opacity: resetSending ? 0.7 : 1,
+                  }}
+                >
+                  {resetSending ? t("جارِ الإرسال...", "Sending...") : t("إرسال رابط الاسترجاع", "Send Recovery Link")}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 12.5, color: COLORS.espresso, background: COLORS.greenBg, borderRadius: 8, padding: "12px 14px", lineHeight: 1.7 }}>
+              {resetMsg}
+            </div>
+          )}
+          <div style={{ marginTop: 16, textAlign: "center" }}>
+            <button
+              type="button"
+              onClick={() => {
+                setShowForgot(false);
+                setResetMsg("");
+                setResetEmail("");
+              }}
+              style={{ background: "none", border: "none", color: COLORS.coffee, fontSize: 12, textDecoration: "underline", cursor: "pointer" }}
+            >
+              {t("رجوع لتسجيل الدخول", "Back to Sign In")}
+            </button>
+          </div>
+        </form>
+      ) : (
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -6653,10 +6745,20 @@ function LoginScreen({ form, setForm, onSubmit, error, busy }) {
             {busy ? t("جارِ التحقق...", "Signing in...") : t("دخول", "Sign In")}
           </button>
         </div>
+        <div style={{ marginTop: 14, textAlign: "center" }}>
+          <button
+            type="button"
+            onClick={() => setShowForgot(true)}
+            style={{ background: "none", border: "none", color: COLORS.coffee, fontSize: 11.5, textDecoration: "underline", cursor: "pointer" }}
+          >
+            {t("نسيت كلمة مرور الأدمن؟", "Forgot admin password?")}
+          </button>
+        </div>
         <div style={{ marginTop: 16, textAlign: "center" }}>
           <LangToggle />
         </div>
       </form>
+      )}
     </div>
   );
 }
@@ -8279,7 +8381,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
     setBulkResult({ created: created.length, skippedNoId, skippedDup });
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!form.username.trim() || !form.password.trim() || !form.name.trim()) {
       setErr(t("الرجاء تعبئة الاسم واسم المستخدم وكلمة المرور", "Please fill in the name, username, and password"));
       return;
@@ -8299,6 +8401,17 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
       payload.customTabs = null;
     } else if (!Array.isArray(payload.customTabs)) {
       payload.customTabs = defaultTabsForRole(form.role);
+    }
+    /* لو الأدمن (أو أي مستخدم) بيعدّل بريده الإلكتروني الخاص وهو مسجّل دخول فعليًا بنفس الحساب، نزامن
+       البريد مع Firebase Authentication كمان — عشان خاصية "نسيت كلمة المرور" تقدر ترسل رابط استرجاع
+       حقيقي لهذا البريد لاحقًا */
+    if (payload.email && auth.currentUser && auth.currentUser.uid === payload.authUid) {
+      try {
+        await auth.currentUser.updateEmail(payload.email);
+      } catch (e) {
+        /* فشل صامت (مثلًا يحتاج تسجيل دخول حديث) — البريد يتحدّث في Firestore على أي حال، ويقدر يعيد
+           المحاولة لاحقًا لو احتاج ميزة الاسترجاع بالضبط */
+      }
     }
     if (editingId) {
       setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...payload, id: editingId } : u)));
