@@ -5389,12 +5389,16 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
     : employees;
 
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
+  const branchNameOf = (id) => branches.find((b) => b.id === id)?.name || "";
 
   const addAtt = () => {
     if (!attForm.employeeId || !attForm.date) return;
     const { entityId, branchId, ...rest } = attForm;
+    /* لو الأدمن مختار فرع في الفلتر وقت التسجيل نحفظه، وإلا نرجع لفرع الموظف الأساسي في ملفه */
+    const resolvedBranchId = branchId || employees.find((e) => e.id === attForm.employeeId)?.branchId || "";
     const record = {
       ...rest,
+      branchId: resolvedBranchId,
       lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0,
       overtimeHours: Number(attForm.overtimeHours || 0),
     };
@@ -5476,6 +5480,9 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
           <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5, flexWrap: "wrap", gap: 8 }}>
             <div>
               <b>{empName(a.employeeId)}</b> — {a.date}
+              {branchNameOf(a.branchId) && (
+                <span style={{ color: "#8a7a63", fontWeight: 400 }}> · {branchNameOf(a.branchId)}</span>
+              )}
               {(a.checkInTime || a.checkOutTime || a.checkInTime2 || a.checkOutTime2) && (
                 <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 3, fontFamily: "Consolas, monospace" }}>
                   {(a.checkInTime || a.checkOutTime) && (
@@ -8461,8 +8468,47 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
   const [bulkResult, setBulkResult] = useState(null);
   const [migrating, setMigrating] = useState(false);
   const [migrationResult, setMigrationResult] = useState(null);
+  const [recoveryPassword, setRecoveryPassword] = useState("");
+  const [recoveryEmail, setRecoveryEmail] = useState("");
+  const [recoverySaving, setRecoverySaving] = useState(false);
+  const [recoveryMsg, setRecoveryMsg] = useState("");
+  const [recoveryErr, setRecoveryErr] = useState("");
 
   const unmigratedUsers = users.filter((u) => !u.authUid);
+  const myRecord = auth.currentUser ? users.find((u) => u.authUid === auth.currentUser.uid) : null;
+
+  /* ربط بريد استرجاع كلمة المرور بحساب المستخدم الحالي المسجّل دخوله فعليًا. عملية تغيير البريد في
+     Firebase حسّاسة وتتطلب "تسجيل دخول حديث" — فنعيد التحقق من الهوية بكلمة المرور الحالية أولًا بدل
+     ما نحاول التغيير مباشرة ونفشل بصمت زي ما حصل قبل كذا */
+  const linkRecoveryEmail = async () => {
+    setRecoveryErr("");
+    setRecoveryMsg("");
+    if (!recoveryEmail.trim() || !recoveryPassword.trim()) {
+      setRecoveryErr(t("أدخل كلمة مرورك الحالية والبريد الجديد", "Enter your current password and the new email"));
+      return;
+    }
+    if (!auth.currentUser) {
+      setRecoveryErr(t("يجب تسجيل الدخول أولاً", "You must be signed in first"));
+      return;
+    }
+    setRecoverySaving(true);
+    try {
+      const cred = firebase.auth.EmailAuthProvider.credential(auth.currentUser.email, recoveryPassword);
+      await auth.currentUser.reauthenticateWithCredential(cred);
+      await auth.currentUser.updateEmail(recoveryEmail.trim());
+      setUsers((prev) => prev.map((u) => (u.authUid === auth.currentUser.uid ? { ...u, email: recoveryEmail.trim() } : u)));
+      logActivity && logActivity("ربط بريد استرجاع كلمة المرور", "users", recoveryEmail.trim());
+      setRecoveryMsg(t("تم ربط البريد بنجاح ✔ — تقدر تستخدمه الآن لاسترجاع كلمة المرور من شاشة الدخول.", "Email linked successfully ✔ — you can now use it to recover your password from the sign-in screen."));
+      setRecoveryPassword("");
+    } catch (e) {
+      setRecoveryErr(
+        e.code === "auth/wrong-password"
+          ? t("كلمة المرور الحالية غير صحيحة", "Current password is incorrect")
+          : t(`تعذّر ربط البريد — خطأ: ${e.code || e.message}`, `Couldn't link the email — error: ${e.code || e.message}`)
+      );
+    }
+    setRecoverySaving(false);
+  };
 
   /* ترحيل حسابات الدخول الحالية إلى Firebase Authentication الحقيقي — الأساس اللازم لتشديد قواعد
      Firestore ومنع أي شخص من الوصول المباشر لقاعدة البيانات بدون تسجيل دخول فعلي.
@@ -8560,17 +8606,6 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
     } else if (!Array.isArray(payload.customTabs)) {
       payload.customTabs = defaultTabsForRole(form.role);
     }
-    /* لو الأدمن (أو أي مستخدم) بيعدّل بريده الإلكتروني الخاص وهو مسجّل دخول فعليًا بنفس الحساب، نزامن
-       البريد مع Firebase Authentication كمان — عشان خاصية "نسيت كلمة المرور" تقدر ترسل رابط استرجاع
-       حقيقي لهذا البريد لاحقًا */
-    if (payload.email && auth.currentUser && auth.currentUser.uid === payload.authUid) {
-      try {
-        await auth.currentUser.updateEmail(payload.email);
-      } catch (e) {
-        /* فشل صامت (مثلًا يحتاج تسجيل دخول حديث) — البريد يتحدّث في Firestore على أي حال، ويقدر يعيد
-           المحاولة لاحقًا لو احتاج ميزة الاسترجاع بالضبط */
-      }
-    }
     if (editingId) {
       setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...payload, id: editingId } : u)));
       logActivity && logActivity("تعديل مستخدم", "users", payload.username);
@@ -8636,6 +8671,34 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
           </div>
         )}
       </div>
+
+      {myRecord && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22, maxWidth: 560 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.espresso, marginBottom: 4 }}>
+            📧 {t("بريد استرجاع كلمة المرور لحسابك الحالي", "Password recovery email for your account")}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#8a7a63", marginBottom: 12 }}>
+            {myRecord.email
+              ? t(`البريد المرتبط حاليًا للاسترجاع: ${myRecord.email}. لو "نسيت كلمة المرور" ما وصلتك الرسالة، جرّب تربطه من جديد هنا — العملية آمنة وتتأكد من هويتك بكلمة مرورك الحالية أولًا.`, `Currently linked recovery email: ${myRecord.email}. If "forgot password" emails aren't arriving, try re-linking it here — this verifies your identity with your current password first.`)
+              : t("لسه ما ربطتش بريد استرجاع لحسابك. اربطه هنا عشان تقدر تستخدم \"نسيت كلمة المرور\" من شاشة الدخول لو احتجتها.", "You haven't linked a recovery email yet. Link one here so you can use \"forgot password\" from the sign-in screen if needed.")}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <Field label={t("كلمة مرورك الحالية (للتأكيد)", "Your current password (to confirm)")}>
+              <input type="password" style={inputStyle} value={recoveryPassword} onChange={(e) => setRecoveryPassword(e.target.value)} />
+            </Field>
+            <Field label={t("بريد الاسترجاع الجديد", "New recovery email")}>
+              <input type="email" style={inputStyle} value={recoveryEmail} onChange={(e) => setRecoveryEmail(e.target.value)} placeholder={myRecord.email || ""} />
+            </Field>
+          </div>
+          {recoveryErr && <div style={{ color: COLORS.brick, fontSize: 12, marginTop: 8 }}>{recoveryErr}</div>}
+          {recoveryMsg && <div style={{ color: COLORS.green, fontSize: 12, marginTop: 8 }}>{recoveryMsg}</div>}
+          <div style={{ marginTop: 12 }}>
+            <Btn onClick={linkRecoveryEmail} disabled={recoverySaving}>
+              {recoverySaving ? t("جارِ الربط...", "Linking...") : t("ربط البريد", "Link Email")}
+            </Btn>
+          </div>
+        </div>
+      )}
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
