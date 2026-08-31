@@ -8758,6 +8758,7 @@ function Root() {
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [currentUsername, setCurrentUsername] = useState(null);
   const [authLoaded, setAuthLoaded] = useState(false);
+  const [fbUser, setFbUser] = useState(null);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
@@ -8767,19 +8768,23 @@ function Root() {
   const [logLoaded, setLogLoaded] = useState(false);
   const lastSyncedLogRef = useRef("");
 
-  /* الجلسة (من هو المسجّل دخوله) تبقى محلية على كل جهاز، ما تتزامنش */
+  /* حالة تسجيل الدخول الحقيقية تُبنى بالكامل على Firebase Authentication — تُحل تلقائيًا من الجلسة
+     المحفوظة عند Firebase نفسها (لا تحتاج تخزين يدوي في localStorage) */
   useEffect(() => {
-    try {
-      const sess = localStorage.getItem("hr-system-session");
-      if (sess) setCurrentUsername(sess);
-    } catch (e) {
-      /* لا توجد جلسة محفوظة */
-    }
-    setAuthLoaded(true);
+    const unsub = auth.onAuthStateChanged((u) => {
+      setFbUser(u || null);
+      setAuthLoaded(true);
+    });
+    return unsub;
   }, []);
 
-  /* قائمة المستخدمين والصلاحيات تُزامَن لحظيًا عبر Firestore بين كل الأجهزة */
+  /* قائمة المستخدمين والصلاحيات تُزامَن لحظيًا عبر Firestore بين كل الأجهزة — لا تبدأ المزامنة إلا بعد
+     تسجيل دخول حقيقي عبر Firebase (request.auth != null)، توافقًا مع قواعد الحماية المشدَّدة */
   useEffect(() => {
+    if (!fbUser) {
+      setUsersLoaded(false);
+      return;
+    }
     const unsub = USERS_DOC.onSnapshot(
       (snap) => {
         if (snap.metadata.hasPendingWrites) return;
@@ -8799,7 +8804,14 @@ function Root() {
       }
     );
     return () => unsub();
-  }, []);
+  }, [fbUser]);
+
+  /* بعد إعادة فتح الصفحة، لو فيه جلسة Firebase محفوظة وقائمة المستخدمين وصلت، نربط الحساب المطابق تلقائيًا */
+  useEffect(() => {
+    if (!fbUser || !usersLoaded || currentUsername) return;
+    const match = users.find((u) => u.authUid === fbUser.uid);
+    if (match) setCurrentUsername(match.username);
+  }, [fbUser, usersLoaded, users, currentUsername]);
 
   useEffect(() => {
     if (!usersLoaded) return;
@@ -8812,8 +8824,13 @@ function Root() {
       .catch(() => setAuthSyncError("تعذر حفظ بيانات المستخدمين — تحقّق من الإنترنت"));
   }, [users, usersLoaded]);
 
-  /* سجلّ الدخول والعمليات (من دخل البرنامج وماذا فعل) — يتزامن لحظيًا بين كل الأجهزة */
+  /* سجلّ الدخول والعمليات (من دخل البرنامج وماذا فعل) — يتزامن لحظيًا بين كل الأجهزة، وبنفس منطق
+     الانتظار لحد تسجيل دخول حقيقي عبر Firebase قبل محاولة القراءة */
   useEffect(() => {
+    if (!fbUser) {
+      setLogLoaded(false);
+      return;
+    }
     const unsub = LOG_DOC.onSnapshot(
       (snap) => {
         if (snap.metadata.hasPendingWrites) return;
@@ -8828,9 +8845,11 @@ function Root() {
       }
     );
     return () => unsub();
-  }, []);
+  }, [fbUser]);
 
-  /* تسجيل حدث جديد في سجلّ العمليات (نكتب مباشرة على Firestore عشان يشتغل حتى لو الحدث حصل قبل تحميل HRApp، زي الدخول) */
+  /* تسجيل حدث جديد في سجلّ العمليات — يستخدم arrayUnion الذرّي بدل قراءة/كتابة المصفوفة كاملة، عشان
+     ما يحصلش استبدال للسجل كامل بالغلط لو حصل أي تعارض توقيت (كالكتابة لحظة تسجيل الدخول قبل ما تكتمل
+     مزامنة السجل القديم) — نفس نوع المشكلة اللي سبّبت فقدان بيانات قبل كذا، بس لسجل العمليات هذه المرة */
   const logActivity = (user, action, targetType, targetLabel) => {
     const entry = {
       id: uid(),
@@ -8843,11 +8862,12 @@ function Root() {
       targetLabel: targetLabel || "",
       timestamp: new Date().toISOString(),
     };
-    const next = [...activityLog, entry].slice(-500); /* الاحتفاظ بآخر 500 عملية فقط لتفادي تضخّم القاعدة */
-    setActivityLog(next);
-    lastSyncedLogRef.current = JSON.stringify(next);
-    LOG_DOC.set({ entries: next }).catch(() => {});
+    setActivityLog((prev) => [...prev, entry]);
+    LOG_DOC.update({ entries: firebase.firestore.FieldValue.arrayUnion(entry) }).catch(() => {
+      LOG_DOC.set({ entries: [entry] }, { merge: true }).catch(() => {});
+    });
   };
+
 
   const currentUser = users.find((u) => u.username === currentUsername) || null;
 
@@ -8868,9 +8888,6 @@ function Root() {
 
   const completeLogin = (user) => {
     setCurrentUsername(user.username);
-    try {
-      localStorage.setItem("hr-system-session", user.username);
-    } catch (e) {}
     setLoginForm({ username: "", password: "" });
     setLoginError("");
     setPendingUser(null);
@@ -8911,30 +8928,29 @@ function Root() {
 
   const login = async () => {
     const uname = loginForm.username.trim();
-    const rawPassword = loginForm.password;
-    const localMatch = users.find((u) => u.username === uname);
     setLoginError("");
     setLoggingIn(true);
     try {
-      /* المسار الرئيسي: تحقّق حقيقي عبر Firebase Authentication */
       const email = usernameToAuthEmail(uname);
-      const cred = await auth.signInWithEmailAndPassword(email, padPasswordForAuth(rawPassword));
-      const authedUser = users.find((u) => u.authUid === cred.user.uid) || localMatch;
+      const cred = await auth.signInWithEmailAndPassword(email, padPasswordForAuth(loginForm.password));
+      /* جلب فوري (مو مرتبط بحالة usersLoaded/الاشتراك، عشان ما نستنى دورة رندر إضافية) لإيجاد ملف
+         المستخدم المرتبط بنفس حساب Firebase اللي دخل بيه للتو */
+      const snap = await USERS_DOC.get();
+      const list = snap.exists && Array.isArray(snap.data().users) ? snap.data().users : [];
+      const authedUser = list.find((u) => u.authUid === cred.user.uid);
       if (!authedUser) {
         await auth.signOut().catch(() => {});
         setLoginError("تعذّر إيجاد صلاحيات هذا الحساب — تواصل مع الأدمن");
         setLoggingIn(false);
         return;
       }
+      if (list.length) {
+        setUsers(list);
+        lastSyncedUsersRef.current = JSON.stringify(list);
+        setUsersLoaded(true);
+      }
       proceedAfterCredentialsVerified(authedUser);
     } catch (err) {
-      /* فشل الدخول عبر Firebase Auth — لو الحساب لسه ما اترحّلش (بدون authUid)، نسمح بالطريقة القديمة
-         كحل انتقالي مؤقت لحد ما تكتمل عملية الترحيل لكل الحسابات. حسابات مرحّلة بالفعل ما تستخدم هذا
-         المسار إطلاقًا حتى لو الباسورد القديم كان مطابق، حماية من أي تعارض بعد الترحيل */
-      if (localMatch && !localMatch.authUid && localMatch.password === rawPassword) {
-        proceedAfterCredentialsVerified(localMatch);
-        return;
-      }
       setLoginError("اسم المستخدم أو كلمة المرور غير صحيحة");
       setLoggingIn(false);
     }
@@ -8964,12 +8980,11 @@ function Root() {
   const logout = () => {
     if (currentUser) logActivity(currentUser, "خروج", "", "");
     setCurrentUsername(null);
-    try {
-      localStorage.removeItem("hr-system-session");
-    } catch (e) {}
+    auth.signOut().catch(() => {});
   };
 
-  if (!authLoaded || !usersLoaded) return null;
+  if (!authLoaded) return null;
+  if (fbUser && !usersLoaded) return null; /* فيه جلسة Firebase محفوظة، بننتظر جلب بيانات صلاحياته فقط */
 
   if (pendingUser) {
     return (
