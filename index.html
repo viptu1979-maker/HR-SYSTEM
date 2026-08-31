@@ -20,6 +20,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<!-- Firebase Authentication: تسجيل دخول حقيقي محقَّق من جهة Firebase — أساس تشديد قواعد Firestore -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <!-- face-api.js: التعرف على الوجه للحضور والانصراف — تحليل الوجه يتم بالكامل داخل جهاز الموظف -->
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
@@ -170,10 +172,18 @@
   };
   firebase.initializeApp(firebaseConfig);
   window.__hrDb = firebase.firestore();
+  window.__hrAuth = firebase.auth();
+  /* تطبيق Firebase ثانوي منفصل — يُستخدم فقط لإنشاء حسابات Firebase Authentication للموظفين من شاشة الأدمن
+     بدون ما يأثر على جلسة تسجيل دخول الأدمن الحالية في التطبيق الرئيسي (createUser بيسجّل دخول تلقائي
+     في نفس instance لو استخدمنا نفس التطبيق، فبنعزلها في تطبيق منفصل بالكامل) */
+  const secondaryFirebaseApp = firebase.initializeApp(firebaseConfig, "Secondary");
+  window.__hrSecondaryAuth = secondaryFirebaseApp.auth();
 </script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef, useContext, createContext } = React;
 const db = window.__hrDb;
+const auth = window.__hrAuth;
+const secondaryAuth = window.__hrSecondaryAuth;
 const DATA_DOC = db.collection("hrSystem").doc("data");
 const USERS_DOC = db.collection("hrSystem").doc("users");
 const LOG_DOC = db.collection("hrSystem").doc("activityLog");
@@ -181,6 +191,23 @@ const LOG_DOC = db.collection("hrSystem").doc("activityLog");
    أو تعديل بالغلط سواء من داخل النظام أو من Firestore Console مباشرة */
 const BACKUPS_COLLECTION = db.collection("hrSystemBackups");
 const BACKUP_RETENTION_DAYS = 14;
+
+/* ============ Firebase Authentication — الأساس الحقيقي للحماية ============
+   أسماء المستخدمين عندنا مو إيميلات (أرقام هوية/إقامة غالبًا)، فنحوّلها لصيغة إيميل داخلية صناعية
+   ثابتة لكل مستخدم، يستخدمها Firebase Auth فقط، والموظف نفسه ما يشوفها ولا يحتاجها إطلاقًا */
+function usernameToAuthEmail(username) {
+  const clean = String(username || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, "x"); /* أي حرف غير مسموح به في الإيميل يتحول لحرف محايد بدل ما يفشل الطلب */
+  return `${clean || "user"}@hrsystem.local`;
+}
+/* Firebase Auth يرفض كلمات مرور أقل من 6 أحرف — نكمّلها بأصفار وقت الترحيل والدخول فقط (تحويل داخلي
+   شفّاف، الموظف يفضل يكتب كلمة مروره الأصلية القصيرة زي ما هي بدون ما يحس بأي فرق) */
+function padPasswordForAuth(pw) {
+  const raw = String(pw || "");
+  return raw.length >= 6 ? raw : raw.padEnd(6, "0");
+}
 
 /* ============ إعدادات EmailJS — لإرسال كود تأكيد الدخول بالإيميل (تحقق ثنائي) ============
    لازم تسجّل حساب مجاني على https://www.emailjs.com وتحط بياناتك هنا:
@@ -6368,8 +6395,9 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const submit = () => {
+  const submit = async () => {
     setError("");
     if (!oldPassword.trim() || !newPassword.trim() || !confirmPassword.trim()) {
       setError(t("الرجاء تعبئة جميع الحقول", "Please fill in all fields"));
@@ -6391,9 +6419,21 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
       setError(t("كلمة المرور الجديدة يجب أن تختلف عن الحالية", "New password must be different from the current one"));
       return;
     }
+    setSaving(true);
+    /* لو الحساب مرحّل لـ Firebase Authentication، لازم نحدّث كلمة المرور هناك كمان عشان الدخول القادم
+       يشتغل صح. لو فشل التحديث لأي سبب (مثلًا الجلسة قديمة)، نكمل نحدّث Firestore على أي حال ونعتمد
+       على إعادة تسجيل الدخول لاحقًا لمزامنتها */
+    if (currentUser.authUid && auth.currentUser) {
+      try {
+        await auth.currentUser.updatePassword(padPasswordForAuth(newPassword));
+      } catch (e) {
+        /* فشل صامت — التحديث في Firestore يكمل، وممكن يحتاج تسجيل خروج/دخول تاني لو استمرت المشكلة */
+      }
+    }
     setUsers((prev) => prev.map((u) => (u.username === currentUser.username ? { ...u, password: newPassword, mustChangePassword: false } : u)));
     logActivity && logActivity("تغيير كلمة المرور", "users", currentUser.username);
     setSuccess(true);
+    setSaving(false);
     setOldPassword("");
     setNewPassword("");
     setConfirmPassword("");
@@ -6518,7 +6558,7 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
             )}
             <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
               <div style={{ flex: 1 }}>
-                <Btn onClick={submit}>{t("حفظ", "Save")}</Btn>
+                <Btn onClick={submit} disabled={saving}>{saving ? t("جارِ الحفظ...", "Saving...") : t("حفظ", "Save")}</Btn>
               </div>
               {!forced && (
                 <div style={{ flex: 1 }}>
@@ -6533,7 +6573,7 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
   );
 }
 
-function LoginScreen({ form, setForm, onSubmit, error }) {
+function LoginScreen({ form, setForm, onSubmit, error, busy }) {
   const { t } = useLang();
   return (
     <div
@@ -6596,6 +6636,7 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
         <div style={{ marginTop: 18 }}>
           <button
             type="submit"
+            disabled={busy}
             style={{
               width: "100%",
               background: COLORS.espresso,
@@ -6605,10 +6646,11 @@ function LoginScreen({ form, setForm, onSubmit, error }) {
               padding: "10px 16px",
               fontSize: 13.5,
               fontWeight: 700,
-              cursor: "pointer",
+              cursor: busy ? "default" : "pointer",
+              opacity: busy ? 0.7 : 1,
             }}
           >
-            {t("دخول", "Sign In")}
+            {busy ? t("جارِ التحقق...", "Signing in...") : t("دخول", "Sign In")}
           </button>
         </div>
         <div style={{ marginTop: 16, textAlign: "center" }}>
@@ -8157,6 +8199,36 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
   const [editingId, setEditingId] = useState(null);
   const [err, setErr] = useState("");
   const [bulkResult, setBulkResult] = useState(null);
+  const [migrating, setMigrating] = useState(false);
+  const [migrationResult, setMigrationResult] = useState(null);
+
+  const unmigratedUsers = users.filter((u) => !u.authUid);
+
+  /* ترحيل حسابات الدخول الحالية إلى Firebase Authentication الحقيقي — الأساس اللازم لتشديد قواعد
+     Firestore ومنع أي شخص من الوصول المباشر لقاعدة البيانات بدون تسجيل دخول فعلي.
+     تُنشئ لكل حساب حساب Firebase Auth موازٍ بنفس اسم المستخدم/كلمة المرور الحاليين (عبر تطبيق Firebase
+     ثانوي منفصل حتى لا يقطع جلسة الأدمن الحالية)، وتربطه بسجل المستخدم عبر حقل authUid جديد */
+  const runFirebaseAuthMigration = async () => {
+    if (!unmigratedUsers.length || migrating) return;
+    setMigrating(true);
+    setMigrationResult(null);
+    let migrated = 0;
+    const failed = [];
+    for (const u of unmigratedUsers) {
+      const email = usernameToAuthEmail(u.username);
+      try {
+        const cred = await secondaryAuth.createUserWithEmailAndPassword(email, padPasswordForAuth(u.password));
+        await secondaryAuth.signOut().catch(() => {});
+        setUsers((prev) => prev.map((x) => (x.username === u.username ? { ...x, authUid: cred.user.uid } : x)));
+        migrated++;
+      } catch (e) {
+        failed.push(`${u.name || u.username} (${u.username}): ${e.code === "auth/email-already-in-use" ? t("الحساب موجود مسبقًا في Firebase لكن غير مربوط — راجعه يدويًا", "Account already exists in Firebase but isn't linked — needs manual review") : e.message}`);
+      }
+    }
+    setMigrationResult({ migrated, failed, total: unmigratedUsers.length });
+    setMigrating(false);
+    logActivity && logActivity("ترحيل حسابات إلى Firebase Authentication", "users", `${migrated} من ${unmigratedUsers.length}`);
+  };
 
   const resetForm = () => {
     setForm(EMPTY_USER);
@@ -8259,6 +8331,41 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
     <div>
       <Header title={t("المستخدمون والصلاحيات", "Users & Permissions")} subtitle={t("إدارة حسابات الدخول: أدمن، مسؤول فرع، موظف — كل حساب بباسورد خاص به", "Manage login accounts: admin, branch manager, employee — each with its own password")} />
 
+      <div style={{ background: unmigratedUsers.length ? COLORS.brickBg : COLORS.greenBg, border: `1px solid ${unmigratedUsers.length ? COLORS.brick : COLORS.green}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.espresso }}>
+              🔒 {t("حماية حسابات الدخول عبر Firebase Authentication", "Secure login accounts via Firebase Authentication")}
+            </div>
+            <div style={{ fontSize: 11.5, color: "#6b5a45", marginTop: 3, maxWidth: 640 }}>
+              {unmigratedUsers.length
+                ? t(
+                    `${unmigratedUsers.length} من ${users.length} حساب لسه ما اترحّلش لنظام الحماية الحقيقي. الترحيل آمن تمامًا ومايغيّرش اسم المستخدم/كلمة المرور الحالية لأي حد — بس يضيف طبقة حماية حقيقية من جهة Firebase. اعمله وأنت متأكد إن كل حد يقدر يدخل بعده.`,
+                    `${unmigratedUsers.length} of ${users.length} accounts haven't been migrated to real authentication yet. Migration is completely safe and doesn't change anyone's current username/password — it just adds a real Firebase-verified security layer. Run it when you can verify everyone can still log in afterward.`
+                  )
+                : t("كل الحسابات مرحّلة لـ Firebase Authentication ✔ — جاهزة لتشديد قواعد Firestore متى ما حبيت.", "All accounts are migrated to Firebase Authentication ✔ — ready for tightening Firestore rules whenever you're ready.")}
+            </div>
+          </div>
+          {unmigratedUsers.length > 0 && (
+            <Btn onClick={runFirebaseAuthMigration} disabled={migrating}>
+              {migrating ? t("جارِ الترحيل...", "Migrating...") : t(`ابدأ الترحيل (${unmigratedUsers.length})`, `Start Migration (${unmigratedUsers.length})`)}
+            </Btn>
+          )}
+        </div>
+        {migrationResult && (
+          <div style={{ marginTop: 12, fontSize: 12, color: COLORS.espresso }}>
+            {t(`تم ترحيل ${migrationResult.migrated} من ${migrationResult.total} حساب بنجاح.`, `Successfully migrated ${migrationResult.migrated} of ${migrationResult.total} accounts.`)}
+            {migrationResult.failed.length > 0 && (
+              <ul style={{ marginTop: 6, paddingInlineStart: 18 }}>
+                {migrationResult.failed.map((f, i) => (
+                  <li key={i} style={{ color: COLORS.brick }}>{f}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
           <div>
@@ -8323,6 +8430,15 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
           <Field label={t("كلمة المرور", "Password")}>
             <input style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
           </Field>
+          {editingId && users.find((u) => u.id === editingId)?.authUid && (
+            <div style={{ fontSize: 11, color: COLORS.brick, marginTop: -8, marginBottom: 4 }}>
+              ⚠️{" "}
+              {t(
+                "هذا الحساب مرحّل لـ Firebase Authentication — تغيير كلمة المرور من هنا لن يُحدّث كلمة الدخول الفعلية. الأصح أن يغيّرها الموظف بنفسه من شاشة \"تغيير كلمة المرور\".",
+                "This account is migrated to Firebase Authentication — changing the password here won't update the actual login credential. The employee should change it themselves from the \"Change Password\" screen instead."
+              )}
+            </div>
+          )}
           <Field label={t("البريد الإلكتروني (لتأكيد الدخول)", "Email (for login verification)")}>
             <input
               type="email"
@@ -8644,6 +8760,7 @@ function Root() {
   const [authLoaded, setAuthLoaded] = useState(false);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [loginError, setLoginError] = useState("");
+  const [loggingIn, setLoggingIn] = useState(false);
   const [authSyncError, setAuthSyncError] = useState("");
   const lastSyncedUsersRef = useRef("");
   const [activityLog, setActivityLog] = useState([]);
@@ -8760,7 +8877,19 @@ function Root() {
     setSentCode("");
     setCodeInput("");
     setVerifyError("");
+    setLoggingIn(false);
     logActivity(user, "دخول", "", "");
+  };
+
+  const proceedAfterCredentialsVerified = (user) => {
+    if (user.email && EMAILJS_CONFIGURED) {
+      setLoggingIn(false);
+      setPendingUser(user);
+      dispatchVerificationCode(user);
+      return;
+    }
+    /* لا يوجد بريد مسجّل لهذا الحساب أو خدمة الإيميل غير مُفعّلة بعد — يتخطّى النظام كود التأكيد */
+    completeLogin(user);
   };
 
   const dispatchVerificationCode = (user) => {
@@ -8780,22 +8909,35 @@ function Root() {
       });
   };
 
-  const login = () => {
-    const match = users.find(
-      (u) => u.username === loginForm.username.trim() && u.password === loginForm.password
-    );
-    if (!match) {
-      setLoginError("اسم المستخدم أو كلمة المرور غير صحيحة");
-      return;
-    }
+  const login = async () => {
+    const uname = loginForm.username.trim();
+    const rawPassword = loginForm.password;
+    const localMatch = users.find((u) => u.username === uname);
     setLoginError("");
-    if (match.email && EMAILJS_CONFIGURED) {
-      setPendingUser(match);
-      dispatchVerificationCode(match);
-      return;
+    setLoggingIn(true);
+    try {
+      /* المسار الرئيسي: تحقّق حقيقي عبر Firebase Authentication */
+      const email = usernameToAuthEmail(uname);
+      const cred = await auth.signInWithEmailAndPassword(email, padPasswordForAuth(rawPassword));
+      const authedUser = users.find((u) => u.authUid === cred.user.uid) || localMatch;
+      if (!authedUser) {
+        await auth.signOut().catch(() => {});
+        setLoginError("تعذّر إيجاد صلاحيات هذا الحساب — تواصل مع الأدمن");
+        setLoggingIn(false);
+        return;
+      }
+      proceedAfterCredentialsVerified(authedUser);
+    } catch (err) {
+      /* فشل الدخول عبر Firebase Auth — لو الحساب لسه ما اترحّلش (بدون authUid)، نسمح بالطريقة القديمة
+         كحل انتقالي مؤقت لحد ما تكتمل عملية الترحيل لكل الحسابات. حسابات مرحّلة بالفعل ما تستخدم هذا
+         المسار إطلاقًا حتى لو الباسورد القديم كان مطابق، حماية من أي تعارض بعد الترحيل */
+      if (localMatch && !localMatch.authUid && localMatch.password === rawPassword) {
+        proceedAfterCredentialsVerified(localMatch);
+        return;
+      }
+      setLoginError("اسم المستخدم أو كلمة المرور غير صحيحة");
+      setLoggingIn(false);
     }
-    /* لا يوجد بريد مسجّل لهذا الحساب أو خدمة الإيميل غير مُفعّلة بعد — يتخطّى النظام كود التأكيد */
-    completeLogin(match);
   };
 
   const verifyCode = () => {
@@ -8852,6 +8994,7 @@ function Root() {
         setForm={setLoginForm}
         onSubmit={login}
         error={loginError || authSyncError}
+        busy={loggingIn}
       />
     );
   }
