@@ -7827,7 +7827,7 @@ function AdvanceRequestForm({ onSubmit, t }) {
    أول مرة يستخدم فيها الموظف تسجيل الحضور: تُلتقط صورته وتُحفظ "بصمة وجه" رقمية (مصفوفة أرقام فقط،
    وليست الصورة نفسها) داخل ملفه الشخصي، ومنها فصاعدًا تُستخدم هذه البصمة للتحقق تلقائيًا في كل مرة.
    في كل الحالات — أول مرة والمرات التالية — تُحفظ صورة مصغّرة مع كل حركة حضور/انصراف ليطّلع عليها الأدمن. */
-const FACE_MODELS_URL = "https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model/";
+const FACE_MODELS_URL = "https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights/";
 const FACE_MATCH_THRESHOLD = 0.5;
 let __faceModelsPromise = null;
 function loadFaceModels() {
@@ -7890,10 +7890,10 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
       /* حماية من التعليق: لو الكشف أخد وقت طويل جدًا (كاميرا لسه ما جهزتش، أو مشكلة في تحميل النماذج)،
          نوقف الانتظار تلقائيًا بدل ما تفضل الشاشة عالقة للأبد على "جارِ التحقق..." */
       const detectionPromise = faceapi
-        .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
+        .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
         .withFaceLandmarks()
         .withFaceDescriptor();
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000));
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 20000));
       const detection = await Promise.race([detectionPromise, timeoutPromise]);
       if (!detection) {
         setError(t("لم يتم التعرّف على وجه واضح — تأكد من الإضاءة الجيدة والنظر مباشرة للكاميرا وحاول مرة أخرى.", "No clear face detected — make sure lighting is good, look straight at the camera, and try again."));
@@ -7934,7 +7934,7 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
     } catch (e) {
       setError(
         e && e.message === "timeout"
-          ? t("استغرق التحقق وقتًا طويلاً جدًا (أكثر من 10 ثواني) — تأكد إن الكاميرا شغّالة والإضاءة كويسة، وحاول مرة أخرى.", "Verification took too long (over 10 seconds) — make sure the camera is working and lighting is good, then try again.")
+          ? t("استغرق التحقق وقتًا طويلاً جدًا (أكثر من 20 ثانية) — تأكد إن الكاميرا شغّالة والإضاءة كويسة، وحاول مرة أخرى.", "Verification took too long (over 20 seconds) — make sure the camera is working and lighting is good, then try again.")
           : t("حدث خطأ أثناء التحقق من الوجه — حاول مرة أخرى.", "Something went wrong while checking the face — try again.")
       );
       setBusy(false);
