@@ -7887,10 +7887,14 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
     setBusy(true);
     setError("");
     try {
-      const detection = await faceapi
+      /* حماية من التعليق: لو الكشف أخد وقت طويل جدًا (كاميرا لسه ما جهزتش، أو مشكلة في تحميل النماذج)،
+         نوقف الانتظار تلقائيًا بدل ما تفضل الشاشة عالقة للأبد على "جارِ التحقق..." */
+      const detectionPromise = faceapi
         .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions())
         .withFaceLandmarks()
         .withFaceDescriptor();
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 10000));
+      const detection = await Promise.race([detectionPromise, timeoutPromise]);
       if (!detection) {
         setError(t("لم يتم التعرّف على وجه واضح — تأكد من الإضاءة الجيدة والنظر مباشرة للكاميرا وحاول مرة أخرى.", "No clear face detected — make sure lighting is good, look straight at the camera, and try again."));
         setBusy(false);
@@ -7928,7 +7932,11 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
           : t("الوجه غير مطابق للبصمة المسجّلة — حاول مرة أخرى.", "Face doesn't match the registered profile — try again.")
       );
     } catch (e) {
-      setError(t("حدث خطأ أثناء التحقق من الوجه — حاول مرة أخرى.", "Something went wrong while checking the face — try again."));
+      setError(
+        e && e.message === "timeout"
+          ? t("استغرق التحقق وقتًا طويلاً جدًا (أكثر من 10 ثواني) — تأكد إن الكاميرا شغّالة والإضاءة كويسة، وحاول مرة أخرى.", "Verification took too long (over 10 seconds) — make sure the camera is working and lighting is good, then try again.")
+          : t("حدث خطأ أثناء التحقق من الوجه — حاول مرة أخرى.", "Something went wrong while checking the face — try again.")
+      );
       setBusy(false);
     }
   };
@@ -7972,6 +7980,13 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
   const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
   const [taskPhotoBusy, setTaskPhotoBusy] = useState({});
   const [taskLightbox, setTaskLightbox] = useState(null);
+
+  /* تحميل نماذج التعرف على الوجه مبكرًا في الخلفية من أول ما تفتح شاشة الموظف — بدل ما ننتظر لحظة
+     الضغط على "تسجيل حضور/انصراف". كده لما يفتح شاشة التحقق تكون النماذج جاهزة فعليًا (أو شارفت)
+     بدل ما يحس بتأخير واضح في تلك اللحظة بالذات */
+  useEffect(() => {
+    loadFaceModels().catch(() => {});
+  }, []);
 
   const handleTaskPhotoUpload = async (taskId, files) => {
     if (!files || files.length === 0) return;
