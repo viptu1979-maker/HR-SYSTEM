@@ -9126,7 +9126,10 @@ function Root() {
   }, []);
 
   /* قائمة المستخدمين والصلاحيات تُزامَن لحظيًا عبر Firestore بين كل الأجهزة — لا تبدأ المزامنة إلا بعد
-     تسجيل دخول حقيقي عبر Firebase (request.auth != null)، توافقًا مع قواعد الحماية المشدَّدة */
+     تسجيل دخول حقيقي عبر Firebase (request.auth != null)، توافقًا مع قواعد الحماية المشدَّدة.
+     مهم جدًا: لو حصل خطأ في القراءة، لازم *ما نسمحش* بأي كتابة احتياطية بديلة — كان فيه علة هنا قبل كذا
+     بتخلي usersLoaded=true حتى عند الفشل، فيتفعّل تأثير المزامنة العكسية (اللي بيكتب "users" الحالية —
+     يعني القيمة الافتراضية USERS_SEED لسه — فوق بيانات Firestore الحقيقية ويمسحها بالكامل! */
   useEffect(() => {
     if (!fbUser) {
       setUsersLoaded(false);
@@ -9139,15 +9142,21 @@ function Root() {
         if (d && Array.isArray(d.users) && d.users.length) {
           setUsers(d.users);
           lastSyncedUsersRef.current = JSON.stringify(d.users);
+          setAuthSyncError("");
+          setUsersLoaded(true);
+        } else if (d && Array.isArray(d.users)) {
+          /* المستند موجود فعلاً لكن المصفوفة فاضية — حالة غريبة وخطيرة (فقدان بيانات محتمل)، لا نكتب
+             فوقها بأي افتراضي ولا نفتح الشاشة، ونعرض تحذير صريح بدل الصمت */
+          setAuthSyncError("⚠ قائمة المستخدمين في قاعدة البيانات فاضية بشكل غير متوقع — لم يتم إجراء أي تغيير تلقائي. تواصل فورًا لمراجعة النسخ الاحتياطية.");
         } else {
+          /* المستند غير موجود إطلاقًا (أول تشغيل حقيقي للنظام) — وقتها فقط نزرع بيانات افتراضية */
           USERS_DOC.set({ users: USERS_SEED }).catch(() => {});
         }
-        setAuthSyncError("");
-        setUsersLoaded(true);
       },
       (err) => {
-        setAuthSyncError("تعذر الاتصال بقاعدة البيانات المشتركة — تحقّق من اتصال الإنترنت");
-        setUsersLoaded(true);
+        /* فشل الاتصال/القراءة — نعرض خطأ واضح ونبقي usersLoaded=false عمدًا، عشان تأثير المزامنة العكسية
+           ما يشتغلش أبدًا ببيانات افتراضية ناقصة ويكتب فوق البيانات الحقيقية */
+        setAuthSyncError("تعذر الاتصال بقاعدة البيانات المشتركة — تحقّق من اتصال الإنترنت وحاول تحديث الصفحة");
       }
     );
     return () => unsub();
@@ -9352,7 +9361,22 @@ function Root() {
   }
 
   if (!authLoaded) return null;
-  if (fbUser && !usersLoaded) return null; /* فيه جلسة Firebase محفوظة، بننتظر جلب بيانات صلاحياته فقط */
+  if (fbUser && !usersLoaded) {
+    /* فيه جلسة Firebase محفوظة، بننتظر جلب بيانات صلاحياته. لو فيه خطأ، نعرضه بدل شاشة فاضية */
+    return authSyncError ? (
+      <div dir="rtl" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", background: COLORS.paper }}>
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 14, padding: 28, maxWidth: 380, textAlign: "center" }}>
+          <div style={{ fontSize: 14, color: COLORS.brick, fontWeight: 700, marginBottom: 10 }}>{authSyncError}</div>
+          <button
+            onClick={() => window.location.reload()}
+            style={{ background: COLORS.espresso, color: "#fff", border: "none", borderRadius: 8, padding: "9px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer" }}
+          >
+            تحديث الصفحة
+          </button>
+        </div>
+      </div>
+    ) : null;
+  }
 
   if (pendingUser) {
     return (
