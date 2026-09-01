@@ -1828,8 +1828,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       const timeStr = nowTimeStr();
       const checkInBranchName = branches.find((b) => b.id === check.branchId)?.name || "";
       if (stage === "in1") {
+        /* الدوام الحر: بدون وقت دخول محدد — دايمًا "حاضر"، النقص أو الزيادة في الساعات يُحتسب وقت الانصراف
+           بناءً على إجمالي الساعات الفعلية بدل وقت دخول ثابت */
         const shiftStart = myEmployee.workShift?.start || "08:00";
-        const diff = minutesOf(timeStr) - minutesOf(shiftStart);
+        const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart);
         const lateMinutes = diff > 0 ? diff : 0;
         const rec = {
           id: uid(),
@@ -1850,7 +1852,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
       } else {
         const shiftStart2 = myEmployee.workShift2?.start || "17:00";
-        const diff = minutesOf(timeStr) - minutesOf(shiftStart2);
+        const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart2);
         const lateMinutes2 = diff > 0 ? diff : 0;
         setAttendance((prev) =>
           prev.map((a) =>
@@ -1880,13 +1882,30 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       }
       const timeStr = nowTimeStr();
       if (stage === "out1") {
-        const shiftEnd = myEmployee.workShift?.end || "17:00";
-        const diff = minutesOf(timeStr) - minutesOf(shiftEnd);
-        const overtimeHours = diff > 0 ? Math.round((diff / 60) * 2) / 2 : 0;
+        let overtimeHours = 0;
+        let shortfallMinutes = 0;
+        if (myEmployee.flexibleSchedule) {
+          /* دوام حر: نحسب إجمالي الساعات الفعلية بين الحضور والانصراف — أي نقص عن 8 ساعات يُخصم
+             (عبر lateMinutes، بنفس منطق خصم التأخير الموجود أصلاً)، وأي زيادة تُحتسب وقت إضافي */
+          const workedMinutes = minutesOf(timeStr) - minutesOf(rec.checkInTime || timeStr);
+          shortfallMinutes = workedMinutes < 480 ? 480 - workedMinutes : 0;
+          overtimeHours = workedMinutes > 480 ? Math.round(((workedMinutes - 480) / 60) * 2) / 2 : 0;
+        } else {
+          const shiftEnd = myEmployee.workShift?.end || "17:00";
+          const diff = minutesOf(timeStr) - minutesOf(shiftEnd);
+          overtimeHours = diff > 0 ? Math.round((diff / 60) * 2) / 2 : 0;
+        }
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === rec.id
-              ? { ...a, checkOutTime: timeStr, overtimeHours, checkOutLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy }, checkOutPhoto: facePhoto || "" }
+              ? {
+                  ...a,
+                  checkOutTime: timeStr,
+                  overtimeHours,
+                  ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
+                  checkOutLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
+                  checkOutPhoto: facePhoto || "",
+                }
               : a
           )
         );
@@ -2832,6 +2851,7 @@ const EMPTY_EMP = {
   workShift: { start: "08:00", end: "17:00" },
   twoShifts: false,
   workShift2: { start: "17:00", end: "22:00" },
+  flexibleSchedule: false,
 };
 
 const WEEK_DAYS = ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"];
@@ -3045,6 +3065,14 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, twoShifts: value } : e)));
     setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, twoShifts: value } : prev));
     logActivity && logActivity("تفعيل دوامين", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
+  };
+
+  /* الدوام الحر: بدون وقت دخول محدد (ما فيش "تأخير")، لكن لازم يكمّل 8 ساعات عمل فعلية كل يوم —
+     أي نقص في الساعات وقت الانصراف يُخصم بنفس منطق خصم التأخير الموجود، وأي زيادة تُحتسب وقت إضافي */
+  const toggleFlexibleSchedule = (empId, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, flexibleSchedule: value } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, flexibleSchedule: value } : prev));
+    logActivity && logActivity("تفعيل الدوام الحر", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
   };
 
   /* إعادة ضبط بصمة الوجه — تحذفها من ملف الموظف، فيُطلب منه تسجيلها من جديد عند أول حضور/انصراف قادم
@@ -3375,6 +3403,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           onUpdateWorkShift={updateWorkShift}
           onUpdateWorkShift2={updateWorkShift2}
           onToggleTwoShifts={toggleTwoShifts}
+          onToggleFlexibleSchedule={toggleFlexibleSchedule}
           onResetFace={resetFaceDescriptor}
           onToggleFaceRequired={toggleFaceRequired}
           canEditWeeklyOff={canEditWeeklyOff}
@@ -3551,7 +3580,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, onResetFace, onToggleFaceRequired, canEditWeeklyOff = true, onPrintCertificate, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, onToggleFlexibleSchedule, onResetFace, onToggleFaceRequired, canEditWeeklyOff = true, onPrintCertificate, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const feesRefs = {
@@ -3729,6 +3758,23 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
                 <span style={{ fontWeight: 700, color: COLORS.espresso }}>
                   {formatOffDays(getOffDays(emp), t)}
                 </span>
+              )}
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
+              <span style={{ color: "#a3927a" }}>{t("دوام حر (بدون وقت دخول محدد)؟", "Flexible schedule (no fixed start time)?")}</span>
+              {canEditWeeklyOff ? (
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!emp.flexibleSchedule}
+                    onChange={(e) => onToggleFlexibleSchedule && onToggleFlexibleSchedule(emp.id, e.target.checked)}
+                  />
+                  <span style={{ fontSize: 11.5, color: "#a3927a" }}>
+                    {t("لا يُحتسب تأخير، لكن لازم يكمّل 8 ساعات عمل فعلية يوميًا", "No lateness is counted, but he must complete 8 actual work hours daily")}
+                  </span>
+                </label>
+              ) : (
+                <span style={{ fontWeight: 700, color: COLORS.espresso }}>{emp.flexibleSchedule ? t("نعم", "Yes") : t("لا", "No")}</span>
               )}
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
@@ -5614,13 +5660,16 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const lateMinutesTotal = monthAttendance
         .filter((a) => a.status === "متأخر")
         .reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
+      /* دوام حر: نقص الساعات عن 8 ساعات فعلية يوميًا (لا "تأخير" بالمعنى العادي، لكن نفس أساس الخصم بالدقيقة) */
+      const flexibleShortfallMinutes = monthAttendance.reduce((s, a) => s + Number(a.shortfallMinutes || 0), 0);
+      const totalDeductibleMinutes = lateMinutesTotal + flexibleShortfallMinutes;
 
       const unpaidLeaveDays = leaves
         .filter((l) => l.employeeId === e.id && l.type === "بدون راتب")
         .reduce((s, l) => s + daysOverlapInMonth(l.from, l.to, month), 0);
 
       const absentDeduction = absentDays * dailyRate;
-      const lateDeduction = lateMinutesTotal * perMinuteRate;
+      const lateDeduction = totalDeductibleMinutes * perMinuteRate;
       const unpaidLeaveDeduction = unpaidLeaveDays * dailyRate;
       const attendanceDeduction = absentDeduction + lateDeduction + unpaidLeaveDeduction;
 
@@ -5644,7 +5693,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         dailyRate,
         absentDays,
         absentDeduction,
-        lateMinutesTotal,
+        lateMinutesTotal: totalDeductibleMinutes,
         lateDeduction,
         unpaidLeaveDays,
         unpaidLeaveDeduction,
