@@ -9343,9 +9343,12 @@ function Root() {
         setSendingCode(false);
         setResendCooldown(30);
       })
-      .catch(() => {
+      .catch((err) => {
         setSendingCode(false);
-        setVerifyError("تعذّر إرسال كود التأكيد إلى بريدك الإلكتروني — تأكد من إعداد خدمة الإيميل أو تواصل مع الأدمن.");
+        const detail = (err && (err.text || err.message)) || "";
+        setVerifyError(
+          `تعذّر إرسال كود التأكيد إلى بريدك الإلكتروني — تأكد من إعداد خدمة الإيميل أو تواصل مع الأدمن.${detail ? ` [التفاصيل: ${detail}]` : ""}`
+        );
       });
   };
 
