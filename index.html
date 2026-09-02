@@ -42,6 +42,9 @@
 
     body * { visibility: hidden; }
     .print-section, .print-section * { visibility: visible; }
+    /* لو فيه نافذة طباعة منبثقة مفتوحة (قسيمة راتب، إقرار خصم/سلفة، شهادة موظف...)، نطبع هي بس —
+       نخفي أي "قسم طباعة" تاني في نفس الصفحة (زي جدول الرواتب الكامل) كان ظاهر جواها بالخلفية */
+    body:has(.print-section-modal) .print-section:not(.print-section-modal) { visibility: hidden !important; }
     .print-section {
       position: absolute;
       left: 0;
@@ -3510,7 +3513,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
               const todayStr = new Date().toLocaleDateString(t("ar-SA-u-nu-latn", "en-US"));
               const todayHijri = toHijri(new Date().toISOString().slice(0, 10));
               return (
-                <div className="print-section" style={{ padding: 28 }}>
+                <div className="print-section print-section-modal" style={{ padding: 28 }}>
                   <div style={{ textAlign: "center", marginBottom: 18, borderBottom: `2px solid ${COLORS.gold}`, paddingBottom: 14 }}>
                     <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.espresso }}>{companyName}</div>
                     {crNumber && <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 4 }}>{t(`سجل تجاري رقم: ${crNumber}`, `CR No.: ${crNumber}`)}</div>}
@@ -6019,7 +6022,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
               </div>
             </div>
 
-            <div className="print-section" style={{ padding: 28 }}>
+            <div className="print-section print-section-modal" style={{ padding: 28 }}>
               {(() => {
                 const emp = employees.find((e) => e.id === printItem.employeeId);
                 const entName = (entityOfBranch && emp) ? entities.find((en) => en.id === entityOfBranch(emp.branchId))?.name : null;
@@ -6125,7 +6128,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
               </div>
             </div>
 
-            <div className="print-section" style={{ padding: 28 }}>
+            <div className="print-section print-section-modal" style={{ padding: 28 }}>
               <div style={{ textAlign: "center", marginBottom: 18, borderBottom: `2px solid ${COLORS.gold}`, paddingBottom: 14 }}>
                 <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.espresso }}>
                   {(entityOfBranch && entities.find((en) => en.id === entityOfBranch(payslip.branchId))?.name) || t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}
