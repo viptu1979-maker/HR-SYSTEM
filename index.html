@@ -1663,6 +1663,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       prev.map((m) => (m.id === msgId && !(m.readBy || []).includes(employeeId) ? { ...m, readBy: [...(m.readBy || []), employeeId] } : m))
     );
   };
+  /* موافقة الموظف الصريحة على رسالة خصم/سلفة (زي التوقيع الورقي، بس رقمي) — منفصلة عن "قراءة" الرسالة */
+  const acknowledgeMessage = (msgId, employeeId) => {
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId && !(m.ackBy || []).includes(employeeId) ? { ...m, ackBy: [...(m.ackBy || []), employeeId] } : m))
+    );
+    const emp = employees.find((e) => e.id === employeeId);
+    logActivity && logActivity("موافقة الموظف على إشعار", "messages", emp?.name || "");
+  };
   /* تسجيل إرسال الرسالة فعليًا عبر واتساب لموظف معيّن (عند الضغط على زر واتساب الخاص به) — يحتفظ بمن أُرسلت له الرسالة فعلًا ومتى */
   const markMessageWhatsappSent = (msgId, employeeId) => {
     setMessages((prev) =>
@@ -1997,6 +2005,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           (m) => m.scope === "all" || (m.scope === "employee" && m.employeeId === myEmployee?.id) || (m.scope === "branch" && m.branchId === myEmployee?.branchId)
         )}
         onMarkMessageRead={(msgId) => markMessageRead(msgId, myEmployee?.id)}
+        onAcknowledgeMessage={(msgId) => acknowledgeMessage(msgId, myEmployee?.id)}
         dirty={dirty}
         saving={saving}
         syncError={syncError}
@@ -2556,6 +2565,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             payrollItems={scopedPayrollItems}
             setPayrollItems={setPayrollItems}
             logActivity={logActivity}
+            onSendMessage={sendMessage}
           />
         )}
         {tab === "eos" && <EOSTab employees={scopedEmployees} />}
@@ -5593,7 +5603,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
 }
 
 /* ============ الرواتب و GOSI ============ */
-function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, leaves, payrollItems, setPayrollItems, logActivity }) {
+function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -5605,6 +5615,20 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const addItem = () => {
     if (!itemForm.employeeId || !itemForm.amount || Number(itemForm.amount) <= 0) return;
     const totalAmount = Number(itemForm.amount);
+
+    /* بعد تسجيل أي سلفة/خصم/حافز، تُرسَل إشعار تلقائي للموظف على صفحته الذاتية — وفي حالة الخصم والسلفة
+       يُطلب منه "موافقة" صريحة (يقدر يشوفها الأدمن من تبويب الرسائل)، والحافز إشعار بس بدون حاجة لموافقة */
+    const notifyDeductionItem = (type, amount, note, requiresAck) => {
+      if (!onSendMessage) return;
+      const label = trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, type);
+      const text =
+        type === "خصم"
+          ? t(`تم تسجيل خصم بمبلغ ${fmt(amount)} ﷼ على راتبك${note ? ` — السبب: ${note}` : ""}. برجاء مراجعته والموافقة عليه.`, `A deduction of ${fmt(amount)} SAR has been recorded on your salary${note ? ` — reason: ${note}` : ""}. Please review and approve it.`)
+          : type === "سلفة"
+          ? t(`تم تسجيل سلفة بمبلغ ${fmt(amount)} ﷼ لك، وستُخصم من راتبك حسب الجدول المتفق عليه${note ? ` — ${note}` : ""}. برجاء الموافقة عليها.`, `An advance of ${fmt(amount)} SAR has been recorded for you, to be deducted from your salary per the agreed schedule${note ? ` — ${note}` : ""}. Please approve it.`)
+          : t(`تم تسجيل حافز بمبلغ ${fmt(amount)} ﷼ لك${note ? ` — ${note}` : ""}.`, `An incentive of ${fmt(amount)} SAR has been recorded for you${note ? ` — ${note}` : ""}.`);
+      onSendMessage({ scope: "employee", employeeId: itemForm.employeeId, text, requiresAck });
+    };
 
     /* السلفة على دفعات: تُقسَّم على عدة أشهر متتالية بدءًا من شهر الاستحقاق المحدد */
     if (itemForm.type === "سلفة" && itemForm.repayment === "أقساط" && Number(itemForm.installments) > 1) {
@@ -5624,9 +5648,11 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       }));
       setPayrollItems((prev) => [...prev, ...installmentItems]);
       logActivity && logActivity(`تسجيل سلفة على ${n} دفعات`, "payroll", `${empName(itemForm.employeeId)} — إجمالي ${fmt(totalAmount)} ﷼`);
+      notifyDeductionItem("سلفة", totalAmount, `${itemForm.note ? itemForm.note + " — " : ""}${t(`على ${n} دفعات`, `over ${n} installments`)}`, true);
     } else {
       setPayrollItems((prev) => [...prev, { ...itemForm, amount: totalAmount, id: uid() }]);
       logActivity && logActivity(`تسجيل ${itemForm.type}`, "payroll", `${empName(itemForm.employeeId)} — ${fmt(totalAmount)} ﷼`);
+      notifyDeductionItem(itemForm.type, totalAmount, itemForm.note, itemForm.type !== "حافز");
     }
     setItemForm({ employeeId: "", type: itemForm.type, amount: "", date: new Date().toISOString().slice(0, 10), month: itemForm.month, note: "", repayment: "دفعة واحدة", installments: 2 });
   };
@@ -7761,6 +7787,18 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
                     {t(`قرأها ${readCount} من ${recipients.length}`, `Read by ${readCount} of ${recipients.length}`)}
                     {" · "}
                     {t(`أُرسلت واتساب لـ ${(m.whatsappSentTo || []).length} من ${recipients.length}`, `Sent via WhatsApp to ${(m.whatsappSentTo || []).length} of ${recipients.length}`)}
+                    {m.requiresAck && (
+                      <>
+                        {" · "}
+                        {(m.ackBy || []).length >= recipients.length && recipients.length > 0 ? (
+                          <span style={{ color: COLORS.green, fontWeight: 700 }}>{t("✔ تمت الموافقة", "✔ Approved")}</span>
+                        ) : (
+                          <span style={{ color: COLORS.brick, fontWeight: 700 }}>
+                            {t(`بانتظار الموافقة (${(m.ackBy || []).length}/${recipients.length})`, `Awaiting approval (${(m.ackBy || []).length}/${recipients.length})`)}
+                          </span>
+                        )}
+                      </>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap" }}>
@@ -8086,7 +8124,7 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, advanceRequests, onSubmitAdvanceRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, messages = [], onMarkMessageRead, dirty, saving, syncError, onSave, faceModal, onFaceCancel, onFaceVerified }) {
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, advanceRequests, onSubmitAdvanceRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, messages = [], onMarkMessageRead, onAcknowledgeMessage, dirty, saving, syncError, onSave, faceModal, onFaceCancel, onFaceVerified }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
@@ -8252,6 +8290,7 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
                 .sort((a, b) => new Date(b.sentAt) - new Date(a.sentAt))
                 .map((m) => {
                   const isRead = (m.readBy || []).includes(employee.id);
+                  const isAcked = (m.ackBy || []).includes(employee.id);
                   return (
                     <div
                       key={m.id}
@@ -8271,6 +8310,17 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
                         {!isRead && <Stamp tone="brick">{t("لم تُقرأ — اضغط للتعليم كمقروءة", "Unread — tap to mark as read")}</Stamp>}
                       </div>
                       <div style={{ marginTop: 8, fontSize: 13.5, color: COLORS.ink, whiteSpace: "pre-wrap" }}>{m.text}</div>
+                      {m.requiresAck && (
+                        <div style={{ marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
+                          {isAcked ? (
+                            <Stamp tone="green">{t("✔ تمت الموافقة", "✔ Approved")}</Stamp>
+                          ) : (
+                            <Btn small onClick={() => onAcknowledgeMessage && onAcknowledgeMessage(m.id)}>
+                              {t("موافقة", "Approve")}
+                            </Btn>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
