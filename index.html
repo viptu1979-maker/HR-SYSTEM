@@ -3301,7 +3301,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         </div>
       </div>
 
-      <div className="print-section">
+      <div className={certEmp ? "" : "print-section"}>
         <div style={{ display: "none" }} className="print-only-title">
           <div className="print-brand">{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
           {t("قائمة الموظفين", "Employee List")}
@@ -5871,7 +5871,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         </div>
       </div>
 
-      {!payslip && (
+      {!payslip && !printItem && (
       <div className="print-section">
         <div style={{ display: "none" }} className="print-only-title">
           <div className="print-brand">{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
