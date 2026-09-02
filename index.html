@@ -3497,7 +3497,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
               const entity = entities.find((en) => en.id === (entityOfBranch ? entityOfBranch(certEmp.branchId) : branch?.entityId));
               const companyName = entity?.name || t("—", "—");
               const crNumber = branch?.crNumber || "";
-              const todayStr = new Date().toLocaleDateString("ar-SA-u-nu-latn");
+              const todayStr = new Date().toLocaleDateString(t("ar-SA-u-nu-latn", "en-US"));
               const todayHijri = toHijri(new Date().toISOString().slice(0, 10));
               return (
                 <div className="print-section" style={{ padding: 28 }}>
