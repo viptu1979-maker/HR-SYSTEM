@@ -5598,8 +5598,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [searchQuery, setSearchQuery] = useState("");
-  const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", month: new Date().toISOString().slice(0, 7), note: "", repayment: "دفعة واحدة", installments: 2 });
+  const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", date: new Date().toISOString().slice(0, 10), month: new Date().toISOString().slice(0, 7), note: "", repayment: "دفعة واحدة", installments: 2 });
   const [payslip, setPayslip] = useState(null);
+  const [printItem, setPrintItem] = useState(null);
 
   const addItem = () => {
     if (!itemForm.employeeId || !itemForm.amount || Number(itemForm.amount) <= 0) return;
@@ -5615,6 +5616,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         employeeId: itemForm.employeeId,
         type: "سلفة",
         amount: i === n - 1 ? lastShare : baseShare,
+        date: itemForm.date,
         month: addMonthsToStr(itemForm.month, i),
         note: `${itemForm.note ? itemForm.note + " — " : ""}قسط ${i + 1} من ${n}`,
         loanGroupId,
@@ -5626,7 +5628,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       setPayrollItems((prev) => [...prev, { ...itemForm, amount: totalAmount, id: uid() }]);
       logActivity && logActivity(`تسجيل ${itemForm.type}`, "payroll", `${empName(itemForm.employeeId)} — ${fmt(totalAmount)} ﷼`);
     }
-    setItemForm({ employeeId: "", type: itemForm.type, amount: "", month: itemForm.month, note: "", repayment: "دفعة واحدة", installments: 2 });
+    setItemForm({ employeeId: "", type: itemForm.type, amount: "", date: new Date().toISOString().slice(0, 10), month: itemForm.month, note: "", repayment: "دفعة واحدة", installments: 2 });
   };
   const removeItem = (id) => setPayrollItems((prev) => prev.filter((p) => p.id !== id));
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
@@ -5762,6 +5764,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
           <Field label={t("المبلغ", "Amount")}>
             <input type="number" style={inputStyle} value={itemForm.amount} onChange={(e) => setItemForm({ ...itemForm, amount: e.target.value })} />
           </Field>
+          <Field label={t("تاريخ القيد", "Entry Date")}>
+            <input type="date" style={inputStyle} value={itemForm.date} onChange={(e) => setItemForm({ ...itemForm, date: e.target.value })} />
+          </Field>
           <Field label={t(itemForm.type === "سلفة" && itemForm.repayment === "أقساط" ? "شهر أول قسط" : "شهر الاستحقاق", itemForm.type === "سلفة" && itemForm.repayment === "أقساط" ? "First Installment Month" : "Applicable Month")}>
             <input type="month" style={inputStyle} value={itemForm.month} onChange={(e) => setItemForm({ ...itemForm, month: e.target.value })} />
           </Field>
@@ -5804,13 +5809,14 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
           <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5 }}>
             <div>
               <b>{empName(p.employeeId)}</b> — {p.note || t("بدون ملاحظة", "No note")}
-              <span style={{ color: "#a3927a", fontFamily: "Consolas, monospace" }}> · {p.month}</span>
+              <span style={{ color: "#a3927a", fontFamily: "Consolas, monospace" }}> · {p.date || p.month}</span>
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <Stamp tone={p.type === "حافز" ? "green" : "brick"}>
                 {trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, p.type)}
               </Stamp>
               <span style={{ fontFamily: "Consolas, monospace", fontWeight: 700 }}>{fmt(p.amount)} ﷼</span>
+              <Btn small onClick={() => setPrintItem(p)}>{t("🖶 طباعة", "🖶 Print")}</Btn>
               <Btn small tone="danger" onClick={() => removeItem(p.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
@@ -5939,6 +5945,112 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         )}
       </div>
       </div>
+      )}
+
+      {printItem && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(36,24,17,0.55)",
+            zIndex: 60,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 12,
+              maxWidth: 640,
+              width: "100%",
+              maxHeight: "92vh",
+              overflow: "auto",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div
+              className="no-print"
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "14px 20px",
+                borderBottom: `1px solid ${COLORS.line}`,
+                position: "sticky",
+                top: 0,
+                background: "#fff",
+                zIndex: 2,
+                borderRadius: "12px 12px 0 0",
+              }}
+            >
+              <div style={{ fontWeight: 700, color: COLORS.espresso }}>{t("إقرار — معاينة", "Acknowledgment — Preview")}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn small onClick={() => window.print()}>{t("🖶 طباعة", "🖶 Print")}</Btn>
+                <Btn small tone="secondary" onClick={() => setPrintItem(null)}>{t("إغلاق ✕", "Close ✕")}</Btn>
+              </div>
+            </div>
+
+            <div className="print-section" style={{ padding: 28 }}>
+              {(() => {
+                const emp = employees.find((e) => e.id === printItem.employeeId);
+                const entName = (entityOfBranch && emp) ? entities.find((en) => en.id === entityOfBranch(emp.branchId))?.name : null;
+                const brName = emp ? branches.find((b) => b.id === emp.branchId)?.name : null;
+                return (
+                  <>
+                    <div style={{ textAlign: "center", marginBottom: 18, borderBottom: `2px solid ${COLORS.gold}`, paddingBottom: 14 }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.espresso }}>
+                        {entName || t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}
+                      </div>
+                      <div style={{ fontSize: 13, color: "#8a7a63", marginTop: 4 }}>{brName || "—"}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.gold, marginTop: 10 }}>
+                        {t(`إقرار ${trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, printItem.type)}`, `${trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, printItem.type)} Acknowledgment`)}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 20px", fontSize: 13, marginBottom: 24 }}>
+                      <div><b>{t("اسم الموظف", "Employee Name")}:</b> {emp?.name || empName(printItem.employeeId)}</div>
+                      <div><b>{t("رقم الهوية/الإقامة", "National ID/Iqama No.")}:</b> {emp?.nationalId || "—"}</div>
+                      <div><b>{t("النوع", "Type")}:</b> {trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, printItem.type)}</div>
+                      <div><b>{t("المبلغ", "Amount")}:</b> {fmt(printItem.amount)} ﷼</div>
+                      <div><b>{t("التاريخ", "Date")}:</b> {printItem.date || "—"}</div>
+                      <div><b>{t("الشهر المستحق", "Applicable Month")}:</b> {printItem.month || "—"}</div>
+                      <div style={{ gridColumn: "1 / -1" }}><b>{t("السبب / الملاحظة", "Reason / Note")}:</b> {printItem.note || "—"}</div>
+                    </div>
+
+                    <div style={{ fontSize: 12.5, color: COLORS.espresso, lineHeight: 1.8, marginBottom: 40, background: COLORS.paper, borderRadius: 8, padding: 14 }}>
+                      {printItem.type === "خصم"
+                        ? t(
+                            `أقرّ أنا الموقّع أدناه بعلمي بخصم مبلغ ${fmt(printItem.amount)} ﷼ من راتبي، للسبب الموضّح أعلاه، وموافقتي على ذلك.`,
+                            `I, the undersigned, acknowledge that I am aware of a deduction of ${fmt(printItem.amount)} SAR from my salary, for the reason stated above, and I agree to it.`
+                          )
+                        : printItem.type === "سلفة"
+                        ? t(
+                            `أقرّ أنا الموقّع أدناه باستلامي سلفة بمبلغ ${fmt(printItem.amount)} ﷼، وموافقتي على خصمها من راتبي حسب ما هو موضّح أعلاه.`,
+                            `I, the undersigned, acknowledge receipt of an advance of ${fmt(printItem.amount)} SAR, and I agree to its deduction from my salary as stated above.`
+                          )
+                        : t(
+                            `أقرّ أنا الموقّع أدناه بعلمي بصرف حافز بمبلغ ${fmt(printItem.amount)} ﷼ لي، للسبب الموضّح أعلاه.`,
+                            `I, the undersigned, acknowledge being granted an incentive of ${fmt(printItem.amount)} SAR, for the reason stated above.`
+                          )}
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 30, fontSize: 12.5, marginTop: 50 }}>
+                      <div>
+                        <div style={{ borderTop: `1px solid ${COLORS.ink}`, paddingTop: 6 }}>{t("توقيع الموظف", "Employee Signature")}</div>
+                      </div>
+                      <div>
+                        <div style={{ borderTop: `1px solid ${COLORS.ink}`, paddingTop: 6 }}>{t("توقيع المدير", "Manager Signature")}</div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
+        </div>
       )}
 
       {payslip && (
