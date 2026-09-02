@@ -6043,7 +6043,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                       <div><b>{t("اسم الموظف", "Employee Name")}:</b> {emp?.name || empName(printItem.employeeId)}</div>
                       <div><b>{t("رقم الهوية/الإقامة", "National ID/Iqama No.")}:</b> {emp?.nationalId || "—"}</div>
                       <div><b>{t("النوع", "Type")}:</b> {trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, printItem.type)}</div>
-                      <div><b>{t("المبلغ", "Amount")}:</b> {fmt(printItem.amount)} ﷼</div>
+                      <div><b>{t("المبلغ", "Amount")}:</b> {fmt(printItem.amount)} {t("﷼", "SAR")}</div>
                       <div><b>{t("التاريخ", "Date")}:</b> {printItem.date || "—"}</div>
                       <div><b>{t("الشهر المستحق", "Applicable Month")}:</b> {printItem.month || "—"}</div>
                       <div style={{ gridColumn: "1 / -1" }}><b>{t("السبب / الملاحظة", "Reason / Note")}:</b> {printItem.note || "—"}</div>
