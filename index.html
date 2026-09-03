@@ -1895,16 +1895,22 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       if (stage === "out1") {
         let overtimeHours = 0;
         let shortfallMinutes = 0;
+        let earlyLeaveMinutes = 0;
         if (myEmployee.flexibleSchedule) {
           /* دوام حر: نحسب إجمالي الساعات الفعلية بين الحضور والانصراف — أي نقص عن 8 ساعات يُخصم
              (عبر lateMinutes، بنفس منطق خصم التأخير الموجود أصلاً)، وأي زيادة تُحتسب وقت إضافي */
           const workedMinutes = minutesOf(timeStr) - minutesOf(rec.checkInTime || timeStr);
           shortfallMinutes = workedMinutes < 480 ? 480 - workedMinutes : 0;
-          overtimeHours = workedMinutes > 480 ? Math.round(((workedMinutes - 480) / 60) * 2) / 2 : 0;
+          overtimeHours = workedMinutes > 480 ? Math.min(12, Math.round(((workedMinutes - 480) / 60) * 2) / 2) : 0;
         } else {
-          const shiftEnd = myEmployee.workShift?.end || "17:00";
+          /* لو وقت نهاية الدوام "00:00" (فاضي فعليًا أو خطأ إدخال)، نرجع للافتراضي 17:00 بدل ما نحسب
+             الفرق من منتصف الليل ويطلع رقم وقت إضافي غير منطقي (زي 24 ساعة) */
+          const shiftEnd = (myEmployee.workShift?.end && myEmployee.workShift.end !== "00:00") ? myEmployee.workShift.end : "17:00";
           const diff = minutesOf(timeStr) - minutesOf(shiftEnd);
-          overtimeHours = diff > 0 ? Math.round((diff / 60) * 2) / 2 : 0;
+          /* سقف أمان: أي وقت إضافي محسوب أكتر من 12 ساعة في اليوم غالبًا خطأ إعداد، مش وقت إضافي حقيقي */
+          overtimeHours = diff > 0 ? Math.min(12, Math.round((diff / 60) * 2) / 2) : 0;
+          /* لو انصرف قبل نهاية دوامه، نسجّل عدد دقائق الخروج المبكر (يُستخدم في خصم الراتب لاحقًا) */
+          earlyLeaveMinutes = diff < 0 ? Math.min(480, -diff) : 0;
         }
         setAttendance((prev) =>
           prev.map((a) =>
@@ -1913,6 +1919,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
                   ...a,
                   checkOutTime: timeStr,
                   overtimeHours,
+                  earlyLeaveMinutes,
                   ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
                   checkOutLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
                   checkOutPhoto: facePhoto || "",
@@ -1922,13 +1929,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         );
         logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
       } else {
-        const shiftEnd2 = myEmployee.workShift2?.end || "22:00";
-        const diff = minutesOf(timeStr) - minutesOf(shiftEnd2);
-        const overtimeHours2 = diff > 0 ? Math.round((diff / 60) * 2) / 2 : 0;
+        const shiftEnd2 = (myEmployee.workShift2?.end && myEmployee.workShift2.end !== "00:00") ? myEmployee.workShift2.end : "22:00";
+        const diff2 = minutesOf(timeStr) - minutesOf(shiftEnd2);
+        const overtimeHours2 = diff2 > 0 ? Math.min(12, Math.round((diff2 / 60) * 2) / 2) : 0;
+        const earlyLeaveMinutes2 = diff2 < 0 ? Math.min(480, -diff2) : 0;
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === rec.id
-              ? { ...a, checkOutTime2: timeStr, overtimeHours2, checkOutLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy }, checkOutPhoto2: facePhoto || "" }
+              ? { ...a, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy }, checkOutPhoto2: facePhoto || "" }
               : a
           )
         );
@@ -5586,6 +5594,12 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
               {Number(a.overtimeHours2 || 0) > 0 && (
                 <Stamp tone="green">{t(`إضافي ف2 ${a.overtimeHours2} س`, `OT S2 ${a.overtimeHours2}h`)}</Stamp>
               )}
+              {Number(a.earlyLeaveMinutes || 0) > 0 && (
+                <Stamp tone="brick">{t(`خروج مبكر ${a.earlyLeaveMinutes} د`, `Left early ${a.earlyLeaveMinutes}m`)}</Stamp>
+              )}
+              {Number(a.earlyLeaveMinutes2 || 0) > 0 && (
+                <Stamp tone="brick">{t(`خروج مبكر ف2 ${a.earlyLeaveMinutes2} د`, `Left early S2 ${a.earlyLeaveMinutes2}m`)}</Stamp>
+              )}
               <Btn small tone="danger" onClick={() => removeAtt(a.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
@@ -5693,7 +5707,12 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         .reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
       /* دوام حر: نقص الساعات عن 8 ساعات فعلية يوميًا (لا "تأخير" بالمعنى العادي، لكن نفس أساس الخصم بالدقيقة) */
       const flexibleShortfallMinutes = monthAttendance.reduce((s, a) => s + Number(a.shortfallMinutes || 0), 0);
-      const totalDeductibleMinutes = lateMinutesTotal + flexibleShortfallMinutes;
+      /* الخروج المبكر (قبل نهاية الدوام المحدد) — فترة صباحية ومسائية معًا */
+      const earlyLeaveMinutesTotal = monthAttendance.reduce(
+        (s, a) => s + Number(a.earlyLeaveMinutes || 0) + Number(a.earlyLeaveMinutes2 || 0),
+        0
+      );
+      const totalDeductibleMinutes = lateMinutesTotal + flexibleShortfallMinutes + earlyLeaveMinutesTotal;
 
       const unpaidLeaveDays = leaves
         .filter((l) => l.employeeId === e.id && l.type === "بدون راتب")
@@ -6250,7 +6269,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
 
       <div style={{ marginTop: 16, fontSize: 11.5, color: "#a3927a", background: "#fff", border: `1px dashed ${COLORS.line}`, borderRadius: 10, padding: 14 }} className="no-print">
         {t(
-          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ 30. خصم الغياب = أيام الغياب × راتب اليوم — وتشمل أيام الغياب المسجَّلة يدويًا بالإضافة لأي يوم عمل ما فيه أي سجل حضور إطلاقًا (بدون بصمة حضور/انصراف)، باستثناء يوم إجازة الموظف الأسبوعية والأيام ضمن إجازة معتمدة والأيام قبل تاريخ التعيين. خصم التأخير = دقائق التأخير × (راتب اليوم ÷ 480 دقيقة، على أساس 8 ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. احتساب الوقت الإضافي: سعر الساعة = راتب اليوم ÷ 8، وقيمة الإضافي = ساعات الإضافي المسجّلة × سعر الساعة × 1٫5 (وفق نظام العمل السعودي). البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه. الصافي للموظف = الراتب − حصة GOSI − خصومات الحضور − السلف − الخصومات الأخرى + الحوافز + قيمة الوقت الإضافي.',
+          'احتساب الخصومات: راتب اليوم = الراتب الأساسي ÷ 30. خصم الغياب = أيام الغياب × راتب اليوم — وتشمل أيام الغياب المسجَّلة يدويًا بالإضافة لأي يوم عمل ما فيه أي سجل حضور إطلاقًا (بدون بصمة حضور/انصراف)، باستثناء يوم إجازة الموظف الأسبوعية والأيام ضمن إجازة معتمدة والأيام قبل تاريخ التعيين. خصم التأخير = (دقائق التأخير عن وقت الحضور + دقائق الخروج المبكر قبل نهاية الدوام) × (راتب اليوم ÷ 480 دقيقة، على أساس 8 ساعات عمل يوميًا). خصم الإجازة بدون راتب = أيامها × راتب اليوم. احتساب الوقت الإضافي: سعر الساعة = راتب اليوم ÷ 8، وقيمة الإضافي = ساعات الإضافي المسجّلة × سعر الساعة × 1٫5 (وفق نظام العمل السعودي). البيانات مبنية على سجلات تبويب "الحضور والإجازات" للشهر المختار أعلاه. الصافي للموظف = الراتب − حصة GOSI − خصومات الحضور − السلف − الخصومات الأخرى + الحوافز + قيمة الوقت الإضافي.',
           'Deduction calculation: Daily rate = Basic salary ÷ 30. Absence deduction = absent days × daily rate — this includes manually recorded absences plus any working day with no attendance record at all (no clock-in/out), excluding the employee\'s weekly day off, days within an approved leave, and days before their hire date. Lateness deduction = late minutes × (daily rate ÷ 480 minutes, based on an 8-hour workday). Unpaid leave deduction = leave days × daily rate. Overtime calculation: Hourly rate = daily rate ÷ 8, and overtime pay = registered overtime hours × hourly rate × 1.5 (per Saudi labor law). Figures are based on records from the "Attendance & Leave" tab for the month selected above. Net for employee = Salary − GOSI share − attendance deductions − advances − other deductions + incentives + overtime pay.'
         )}
       </div>
