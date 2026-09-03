@@ -1841,7 +1841,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       if (stage === "in1") {
         /* الدوام الحر: بدون وقت دخول محدد — دايمًا "حاضر"، النقص أو الزيادة في الساعات يُحتسب وقت الانصراف
            بناءً على إجمالي الساعات الفعلية بدل وقت دخول ثابت */
-        const shiftStart = myEmployee.workShift?.start || "08:00";
+        const shiftStart = effectiveShift(myEmployee, JS_DAY_INDEX_TO_AR[new Date().getDay()]).start;
         const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart);
         const lateMinutes = diff > 0 ? diff : 0;
         const rec = {
@@ -1905,7 +1905,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         } else {
           /* لو وقت نهاية الدوام "00:00" (فاضي فعليًا أو خطأ إدخال)، نرجع للافتراضي 17:00 بدل ما نحسب
              الفرق من منتصف الليل ويطلع رقم وقت إضافي غير منطقي (زي 24 ساعة) */
-          const shiftEnd = (myEmployee.workShift?.end && myEmployee.workShift.end !== "00:00") ? myEmployee.workShift.end : "17:00";
+          const rawShiftEnd = effectiveShift(myEmployee, JS_DAY_INDEX_TO_AR[new Date().getDay()]).end;
+          const shiftEnd = rawShiftEnd && rawShiftEnd !== "00:00" ? rawShiftEnd : "17:00";
           const diff = minutesOf(timeStr) - minutesOf(shiftEnd);
           /* سقف أمان: أي وقت إضافي محسوب أكتر من 12 ساعة في اليوم غالبًا خطأ إعداد، مش وقت إضافي حقيقي */
           overtimeHours = diff > 0 ? Math.min(12, Math.round((diff / 60) * 2) / 2) : 0;
@@ -2873,6 +2874,8 @@ const EMPTY_EMP = {
   twoShifts: false,
   workShift2: { start: "17:00", end: "22:00" },
   flexibleSchedule: false,
+  useDaySchedules: false,
+  daySchedules: {},
 };
 
 const WEEK_DAYS = ["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"];
@@ -2900,6 +2903,17 @@ function formatOffDays(days, t) {
 
 /* ترتيب أيام الأسبوع كما يرجعه Date.getDay() في JS (0=الأحد...6=السبت) — لمطابقتها بأسماء الأيام العربية */
 const JS_DAY_INDEX_TO_AR = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
+
+/* يرجّع وقت بداية/نهاية دوام الموظف الفعلي ليوم معيّن (باسمه العربي، مثل "السبت") — لو مفعّل عنده
+   "أوقات مختلفة لكل يوم" ومضبوط ليوم بعينه، يرجع وقته الخاص، وإلا يرجع دوامه العام الموحّد */
+function effectiveShift(emp, dayName, shiftKey = "workShift", defaults = { start: "08:00", end: "17:00" }) {
+  if (emp?.useDaySchedules && emp.daySchedules && emp.daySchedules[dayName] && shiftKey === "workShift") {
+    const d = emp.daySchedules[dayName];
+    return { start: d.start || defaults.start, end: d.end || defaults.end };
+  }
+  const base = emp?.[shiftKey];
+  return { start: base?.start || defaults.start, end: base?.end || defaults.end };
+}
 
 /* حساب أيام الغياب "الضمنية" لموظف خلال فترة محدَّدة (rangeStart→rangeEnd): أي يوم عمل (مو إجازته الأسبوعية،
    ومو ضمن إجازة معتمدة، ومو قبل تاريخ تعيينه، ومو يوم مستقبلي) ومالوش أي سجل حضور مسجَّل إطلاقًا (لا حضور
@@ -3094,6 +3108,30 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, flexibleSchedule: value } : e)));
     setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, flexibleSchedule: value } : prev));
     logActivity && logActivity("تفعيل الدوام الحر", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
+  };
+
+  /* أوقات دوام مخصّصة لكل يوم من أيام الأسبوع (مثلاً السبت دوام أقصر من باقي الأيام) — بديل عن وقت الفترة
+     الصباحية الموحّد لكل الأيام */
+  const toggleUseDaySchedules = (empId, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, useDaySchedules: value } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, useDaySchedules: value } : prev));
+    logActivity && logActivity("تفعيل الدوام حسب اليوم", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
+  };
+  const updateDaySchedule = (empId, day, field, value) => {
+    setEmployees((prev) =>
+      prev.map((e) => {
+        if (e.id !== empId) return e;
+        const current = e.daySchedules || {};
+        const dayCurrent = current[day] || { start: e.workShift?.start || "08:00", end: e.workShift?.end || "17:00" };
+        return { ...e, daySchedules: { ...current, [day]: { ...dayCurrent, [field]: value } } };
+      })
+    );
+    setProfileEmp((prev) => {
+      if (!prev || prev.id !== empId) return prev;
+      const current = prev.daySchedules || {};
+      const dayCurrent = current[day] || { start: prev.workShift?.start || "08:00", end: prev.workShift?.end || "17:00" };
+      return { ...prev, daySchedules: { ...current, [day]: { ...dayCurrent, [field]: value } } };
+    });
   };
 
   /* إعادة ضبط بصمة الوجه — تحذفها من ملف الموظف، فيُطلب منه تسجيلها من جديد عند أول حضور/انصراف قادم
@@ -3425,6 +3463,8 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           onUpdateWorkShift2={updateWorkShift2}
           onToggleTwoShifts={toggleTwoShifts}
           onToggleFlexibleSchedule={toggleFlexibleSchedule}
+          onToggleUseDaySchedules={toggleUseDaySchedules}
+          onUpdateDaySchedule={updateDaySchedule}
           onResetFace={resetFaceDescriptor}
           onToggleFaceRequired={toggleFaceRequired}
           canEditWeeklyOff={canEditWeeklyOff}
@@ -3601,7 +3641,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, onToggleFlexibleSchedule, onResetFace, onToggleFaceRequired, canEditWeeklyOff = true, onPrintCertificate, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, onToggleFlexibleSchedule, onToggleUseDaySchedules, onUpdateDaySchedule, onResetFace, onToggleFaceRequired, canEditWeeklyOff = true, onPrintCertificate, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const feesRefs = {
@@ -3820,6 +3860,52 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
                 </span>
               )}
             </div>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
+              <span style={{ color: "#a3927a" }}>{t("أوقات مختلفة لكل يوم؟", "Different hours per day?")}</span>
+              {canEditWeeklyOff ? (
+                <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={!!emp.useDaySchedules}
+                    onChange={(e) => onToggleUseDaySchedules && onToggleUseDaySchedules(emp.id, e.target.checked)}
+                  />
+                  <span style={{ fontSize: 11.5, color: "#a3927a" }}>
+                    {t("مثلاً السبت دوام أقصر من باقي الأيام", "e.g. Saturday is a shorter shift than other days")}
+                  </span>
+                </label>
+              ) : (
+                <span style={{ fontWeight: 700, color: COLORS.espresso }}>{emp.useDaySchedules ? t("نعم", "Yes") : t("لا", "No")}</span>
+              )}
+            </div>
+            {emp.useDaySchedules && (
+              <div style={{ background: COLORS.paper, borderRadius: 8, padding: 10, marginBottom: 4 }}>
+                {WEEK_DAYS.map((day) => {
+                  const sched = effectiveShift(emp, day);
+                  return (
+                    <div key={day} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "4px 0" }}>
+                      <span style={{ color: "#a3927a", minWidth: 60 }}>{t(day, WEEK_DAYS_EN[day] || day)}</span>
+                      {canEditWeeklyOff ? (
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          <TimeField
+                            style={{ padding: "3px 6px", fontSize: 11.5, width: 88 }}
+                            value={sched.start}
+                            onChange={(v) => onUpdateDaySchedule && onUpdateDaySchedule(emp.id, day, "start", v)}
+                          />
+                          <span style={{ color: "#a3927a" }}>—</span>
+                          <TimeField
+                            style={{ padding: "3px 6px", fontSize: 11.5, width: 88 }}
+                            value={sched.end}
+                            onChange={(v) => onUpdateDaySchedule && onUpdateDaySchedule(emp.id, day, "end", v)}
+                          />
+                        </div>
+                      ) : (
+                        <span style={{ fontFamily: "Consolas, monospace" }}>{sched.start} — {sched.end}</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
               <span style={{ color: "#a3927a" }}>{t("فترة صباحية وفترة مسائية؟", "Morning & Evening Shift?")}</span>
               {canEditWeeklyOff ? (
