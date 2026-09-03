@@ -5325,6 +5325,7 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
 function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity, entities, branches }) {
   const { t } = useLang();
   const [leaveForm, setLeaveForm] = useState({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
+  const [editingLeaveId, setEditingLeaveId] = useState(null);
   /* تصفية جدول أرصدة الإجازة السنوية: بحث بالاسم + فرع */
   const [balSearch, setBalSearch] = useState("");
   const [balBranchFilter, setBalBranchFilter] = useState("");
@@ -5340,11 +5341,29 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
   const addLeave = () => {
     if (!leaveForm.employeeId || !leaveForm.from || !leaveForm.to) return;
     const { entityId, branchId, ...rest } = leaveForm;
-    setLeaves((prev) => [...prev, { ...rest, id: uid() }]);
-    logActivity && logActivity("تسجيل إجازة", "attendance", empName(leaveForm.employeeId));
+    if (editingLeaveId) {
+      setLeaves((prev) => prev.map((l) => (l.id === editingLeaveId ? { ...rest, id: editingLeaveId } : l)));
+      logActivity && logActivity("تعديل إجازة", "attendance", empName(leaveForm.employeeId));
+      setEditingLeaveId(null);
+    } else {
+      setLeaves((prev) => [...prev, { ...rest, id: uid() }]);
+      logActivity && logActivity("تسجيل إجازة", "attendance", empName(leaveForm.employeeId));
+    }
     setLeaveForm({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
   };
-  const removeLeave = (id) => setLeaves((prev) => prev.filter((l) => l.id !== id));
+  const startEditLeave = (l) => {
+    const emp = employees.find((e) => e.id === l.employeeId);
+    setLeaveForm({ entityId: "", branchId: emp?.branchId || "", employeeId: l.employeeId, type: l.type, from: l.from, to: l.to });
+    setEditingLeaveId(l.id);
+  };
+  const cancelEditLeave = () => {
+    setEditingLeaveId(null);
+    setLeaveForm({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
+  };
+  const removeLeave = (id) => {
+    setLeaves((prev) => prev.filter((l) => l.id !== id));
+    if (editingLeaveId === id) cancelEditLeave();
+  };
 
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
 
@@ -5397,8 +5416,11 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
           <Field label={t("إلى تاريخ", "To Date")}>
             <DateField style={inputStyle} value={leaveForm.to} onChange={(v) => setLeaveForm({ ...leaveForm, to: v })} />
           </Field>
-          <div style={{ display: "flex", alignItems: "flex-end" }}>
-            <Btn onClick={addLeave}>{t("تسجيل الإجازة", "Register Leave")}</Btn>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+            <Btn onClick={addLeave}>{editingLeaveId ? t("حفظ التعديل", "Save Changes") : t("تسجيل الإجازة", "Register Leave")}</Btn>
+            {editingLeaveId && (
+              <Btn tone="secondary" onClick={cancelEditLeave}>{t("إلغاء", "Cancel")}</Btn>
+            )}
           </div>
         </div>
         {leaveForm.type === "بدون راتب" && (
@@ -5413,10 +5435,11 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
         {leaves.length === 0 && <Empty text={t("لا توجد إجازات مسجّلة", "No registered leaves")} />}
         {leaves.map((l, i) => (
-          <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5 }}>
+          <div key={l.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5, background: editingLeaveId === l.id ? COLORS.paper : "transparent" }}>
             <div><b>{empName(l.employeeId)}</b> — {trLabel(t, LEAVE_TYPE_LABELS_EN, l.type)}</div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <span style={{ fontFamily: "Consolas, monospace" }}>{l.from} → {l.to}</span>
+              <Btn small onClick={() => startEditLeave(l)}>{t("تعديل", "Edit")}</Btn>
               <Btn small tone="danger" onClick={() => removeLeave(l.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
@@ -5536,6 +5559,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   const { t } = useLang();
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   const [viewingPhoto, setViewingPhoto] = useState(null);
+  const [logSearch, setLogSearch] = useState("");
 
   const attBranches = attForm.entityId ? branches.filter((b) => b.entityId === attForm.entityId) : branches;
   const attEmployees = attForm.branchId
@@ -5563,6 +5587,18 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
     setAttForm({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   };
   const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
+
+  /* بحث في سجل الحضور اليومي: بالاسم، رقم الهوية/الإقامة، أو التاريخ */
+  const filteredAttendance = attendance.filter((a) => {
+    if (!logSearch.trim()) return true;
+    const q = logSearch.trim().toLowerCase();
+    const emp = employees.find((e) => e.id === a.employeeId);
+    return (
+      (emp?.name || "").toLowerCase().includes(q) ||
+      (emp?.nationalId || "").toLowerCase().includes(q) ||
+      (a.date || "").includes(q)
+    );
+  });
 
   return (
     <div>
@@ -5630,9 +5666,18 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
           </div>
         </div>
       </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 }} className="no-print">
+        <input
+          style={{ ...inputStyle, maxWidth: 260 }}
+          placeholder={t("ابحث بالاسم، رقم الهوية، أو التاريخ (YYYY-MM-DD)...", "Search by name, ID number, or date (YYYY-MM-DD)...")}
+          value={logSearch}
+          onChange={(e) => setLogSearch(e.target.value)}
+        />
+      </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
         {attendance.length === 0 && <Empty text={t("لا توجد سجلات حضور", "No attendance records")} />}
-        {attendance.slice().reverse().map((a, i) => (
+        {attendance.length > 0 && filteredAttendance.length === 0 && <Empty text={t("لا توجد نتائج مطابقة للبحث", "No matching results")} />}
+        {filteredAttendance.slice().reverse().map((a, i) => (
           <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5, flexWrap: "wrap", gap: 8 }}>
             <div>
               <b>{empName(a.employeeId)}</b> — {a.date}
