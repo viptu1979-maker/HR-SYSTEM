@@ -1764,6 +1764,25 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       const [h, m] = (hhmm || "00:00").split(":").map(Number);
       return h * 60 + m;
     };
+    /* لو الموظف بصم حضور وفضل شغال لحد بعد منتصف الليل، وقت ما يجي يبصم انصراف بيكون التاريخ اتغيّر
+       (يوم جديد) — فنفتش كمان عن سجل أمس المفتوح (له حضور بدون انصراف) بدل ما نفترض إنه محتاج
+       يسجّل حضور جديد من الأول */
+    const findOpenAttendanceRecord = (empId) => {
+      const todayRec = attendance.find((a) => a.employeeId === empId && a.date === todayISO);
+      if (todayRec) return todayRec;
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      const yesterdayISO = y.toISOString().slice(0, 10);
+      const openYesterday = attendance.find((a) => a.employeeId === empId && a.date === yesterdayISO && !a.checkOutTime);
+      return openYesterday || null;
+    };
+    /* يحوّل وقت الانصراف لدقائق مع مراعاة عبوره منتصف الليل (لو أصغر رقميًا من وقت الحضور، معناه
+       اليوم اتغيّر فعليًا، فنضيفله 24 ساعة عشان الفرق يطلع صحيح مش رقم سالب غريب) */
+    const minutesOfCheckoutAdjusted = (checkoutStr, checkInStr) => {
+      let m = minutesOf(checkoutStr);
+      if (m < minutesOf(checkInStr || "00:00")) m += 24 * 60;
+      return m;
+    };
 
     const [geoBusy, setGeoBusy] = useState(false);
     const [geoError, setGeoError] = useState("");
@@ -1825,7 +1844,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
     const clockIn = async (facePhoto) => {
       if (!myEmployee) return;
-      const already = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
+      const already = findOpenAttendanceRecord(myEmployee.id);
       const stage = attendanceStage(already, myEmployee);
       if (stage !== "in1" && stage !== "in2") return;
       setGeoError("");
@@ -1879,7 +1898,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
     const clockOut = async (facePhoto) => {
       if (!myEmployee) return;
-      const rec = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
+      const rec = findOpenAttendanceRecord(myEmployee.id);
       if (!rec) return;
       const stage = attendanceStage(rec, myEmployee);
       if (stage !== "out1" && stage !== "out2") return;
@@ -1897,10 +1916,13 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         let overtimeHours = 0;
         let shortfallMinutes = 0;
         let earlyLeaveMinutes = 0;
+        /* وقت الانصراف بالدقائق، مع تصحيح عبور منتصف الليل (لو انصرف بعد الساعة 12 ليلاً في يوم تالٍ،
+           يطلع رقمه أصغر من وقت الحضور، فنضيفله 24 ساعة عشان الفرق يُحسب صح مش يطلع سالب/غريب) */
+        const checkoutMinutesAdj = minutesOfCheckoutAdjusted(timeStr, rec.checkInTime);
         if (myEmployee.flexibleSchedule) {
           /* دوام حر: نحسب إجمالي الساعات الفعلية بين الحضور والانصراف — أي نقص عن 8 ساعات يُخصم
              (عبر lateMinutes، بنفس منطق خصم التأخير الموجود أصلاً)، وأي زيادة تُحتسب وقت إضافي */
-          const workedMinutes = minutesOf(timeStr) - minutesOf(rec.checkInTime || timeStr);
+          const workedMinutes = checkoutMinutesAdj - minutesOf(rec.checkInTime || timeStr);
           shortfallMinutes = workedMinutes < 480 ? 480 - workedMinutes : 0;
           overtimeHours = workedMinutes > 480 ? Math.min(12, Math.round(((workedMinutes - 480) / 60) * 2) / 2) : 0;
         } else {
@@ -1908,7 +1930,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
              الفرق من منتصف الليل ويطلع رقم وقت إضافي غير منطقي (زي 24 ساعة) */
           const rawShiftEnd = effectiveShift(myEmployee, JS_DAY_INDEX_TO_AR[new Date().getDay()]).end;
           const shiftEnd = rawShiftEnd && rawShiftEnd !== "00:00" ? rawShiftEnd : "17:00";
-          const diff = minutesOf(timeStr) - minutesOf(shiftEnd);
+          const diff = checkoutMinutesAdj - minutesOf(shiftEnd);
           /* سقف أمان: أي وقت إضافي محسوب أكتر من 12 ساعة في اليوم غالبًا خطأ إعداد، مش وقت إضافي حقيقي */
           overtimeHours = diff > 0 ? Math.min(12, Math.round((diff / 60) * 2) / 2) : 0;
           /* لو انصرف قبل نهاية دوامه، نسجّل عدد دقائق الخروج المبكر (يُستخدم في خصم الراتب لاحقًا) */
@@ -1932,7 +1954,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
       } else {
         const shiftEnd2 = (myEmployee.workShift2?.end && myEmployee.workShift2.end !== "00:00") ? myEmployee.workShift2.end : "22:00";
-        const diff2 = minutesOf(timeStr) - minutesOf(shiftEnd2);
+        const diff2 = minutesOfCheckoutAdjusted(timeStr, rec.checkInTime2 || rec.checkInTime) - minutesOf(shiftEnd2);
         const overtimeHours2 = diff2 > 0 ? Math.min(12, Math.round((diff2 / 60) * 2) / 2) : 0;
         const earlyLeaveMinutes2 = diff2 < 0 ? Math.min(480, -diff2) : 0;
         setAttendance((prev) =>
@@ -1952,7 +1974,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
        الموظف تحديدًا من ملفه الشخصي، فوقتها يسجّل مباشرة بالموقع الجغرافي فقط زي ما كان قبل إضافة الميزة) */
     const requestClockIn = () => {
       if (!myEmployee) return;
-      const already = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
+      const already = findOpenAttendanceRecord(myEmployee.id);
       const stage = attendanceStage(already, myEmployee);
       if (stage !== "in1" && stage !== "in2") return;
       if (myEmployee.faceAttendanceEnabled === false) {
@@ -1963,7 +1985,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     };
     const requestClockOut = () => {
       if (!myEmployee) return;
-      const rec = attendance.find((a) => a.employeeId === myEmployee.id && a.date === todayISO);
+      const rec = findOpenAttendanceRecord(myEmployee.id);
       if (!rec) return;
       const stage = attendanceStage(rec, myEmployee);
       if (stage !== "out1" && stage !== "out2") return;
@@ -8490,7 +8512,16 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
   const myLeaves = leaves.filter((l) => l.employeeId === employee.id);
   const myAttendance = attendance.filter((a) => a.employeeId === employee.id).slice().reverse();
   const todayISO = new Date().toISOString().slice(0, 10);
-  const todayAtt = attendance.find((a) => a.employeeId === employee.id && a.date === todayISO);
+  /* لو الموظف فضل شغال لحد بعد منتصف الليل، سجل أمس المفتوح (له حضور بدون انصراف) هو المعتمد لعرض
+     الحالة الحالية، مش سجل اليوم (اللي لسه ما اتعملش) */
+  const todayAtt =
+    attendance.find((a) => a.employeeId === employee.id && a.date === todayISO) ||
+    (() => {
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      const yesterdayISO = y.toISOString().slice(0, 10);
+      return attendance.find((a) => a.employeeId === employee.id && a.date === yesterdayISO && !a.checkOutTime);
+    })();
   /* مرحلة الحضور/الانصراف الحالية — تدعم دوامين لبعض الموظفين */
   const attStage = !todayAtt
     ? "in1"
