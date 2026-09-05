@@ -1396,6 +1396,16 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
      لصفحة الموظف الذاتية (دور "employee"): الحفظ تلقائي زي الأول — التعديل بيتزامن مع القاعدة
      بدون تدخل (تسجيل حضور/انصراف، طلب إجازة، إلخ).
      لباقي الأدوار (أدمن، مدير كيان، مسؤول فرع...): الحفظ يدوي فقط عند ضغط أيقونة الحفظ. */
+  const [retryTick, setRetryTick] = useState(0);
+  /* لو فشل الحفظ التلقائي مرة (انقطاع إنترنت لحظي مثلاً)، نعيد المحاولة كل 5 ثواني تلقائيًا بدل ما
+     نسيب النظام عالق على "غير محفوظ" للأبد بدون أي محاولة تانية — وده كان بيسبب توقف استقبال أي
+     تحديثات جديدة من القاعدة (بما فيها بيانات الموظفين نفسها) لحد ما يعمل المستخدم ريفرش يدوي */
+  useEffect(() => {
+    if (role !== "employee" || !dirty) return;
+    const interval = setInterval(() => setRetryTick((n) => n + 1), 5000);
+    return () => clearInterval(interval);
+  }, [role, dirty]);
+
   useEffect(() => {
     if (!loaded) return;
     const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages };
@@ -1418,13 +1428,13 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           .catch(() => {
             setSaving(false);
             setDirty(true);
-            setSaveMsg("تعذر الحفظ — تحقّق من الإنترنت");
+            setSaveMsg("تعذر الحفظ — جارِ إعادة المحاولة تلقائيًا...");
           });
       }, 400);
       return () => clearTimeout(t);
     }
     setDirty(true);
-  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, loaded, role]);
+  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, loaded, role, retryTick]);
 
   /* نسخة احتياطية يومية تلقائية (بيانات النظام + حسابات الدخول معًا) — لو انحذف أو اتغيّر شيء بالغلط
      (من داخل النظام أو حتى من Firestore Console مباشرة) يقدر الأدمن يسترجعها من تبويب "الإعدادات" */
