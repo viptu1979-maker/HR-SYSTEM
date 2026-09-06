@@ -311,7 +311,9 @@ function SaveStatusIcon({ saving, syncError, dirty, onSave, compact = false }) {
     icon = "⚠";
     color = "#E8A9A0";
     bg = "rgba(232,169,160,0.18)";
-    label = t("تعذر الحفظ — تحقّق من الإنترنت", "Couldn't save — check your connection");
+    /* لو الخطأ نص وصفي فعلي (مش بس true عامة)، نعرضه بالظبط بدل رسالة عامة — عشان يبان سبب الفشل
+       الحقيقي على الشاشة مباشرة (مهم جدًا على الموبايل، مافيش hover يوري الـ tooltip) */
+    label = typeof syncError === "string" && syncError.length > 3 ? syncError : t("تعذر الحفظ — تحقّق من الإنترنت", "Couldn't save — check your connection");
   } else if (saving) {
     icon = "⏳";
     color = COLORS.gold;
@@ -1454,6 +1456,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     }
     if (role === "employee") {
       setSaving(true);
+      setSyncError("");
       /* الحفظ فوري (بدون أي تأخير) — أهم حاجة إن تسجيل الحضور/الانصراف ينحفظ في قاعدة البيانات
          *قبل* ما الموظف يقفل المتصفح أو يبدّل تطبيق على جواله، لأن المتصفحات على الموبايل بتوقف أي
          مؤقّت (setTimeout) لسه ما اشتغلش لو التطبيق راح للخلفية — فأي تأخير هنا كان بيخاطر بضياع
@@ -1463,13 +1466,16 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           lastSyncedRef.current = json;
           setDirty(false);
           setSaving(false);
+          setSyncError("");
           setSaveMsg("تم الحفظ ✓");
           setTimeout(() => setSaveMsg(""), 1500);
         })
-        .catch(() => {
+        .catch((err) => {
           setSaving(false);
           setDirty(true);
-          setSaveMsg("تعذر الحفظ — جارِ إعادة المحاولة تلقائيًا...");
+          const detail = (err && (err.code || err.message)) || "خطأ غير معروف";
+          setSyncError(`تعذر الحفظ [${detail}] — جارِ إعادة المحاولة تلقائيًا`);
+          setSaveMsg("");
         });
       return;
     }
@@ -1607,6 +1613,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return;
     }
     setSaving(true);
+    setSyncError("");
     DATA_DOC.set(payload)
       .then(() => {
         lastSyncedRef.current = json;
@@ -1615,9 +1622,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         setSaveMsg("تم الحفظ ✓");
         setTimeout(() => setSaveMsg(""), 1500);
       })
-      .catch(() => {
+      .catch((err) => {
         setSaving(false);
-        setSaveMsg("تعذر الحفظ — تحقّق من الإنترنت");
+        const detail = (err && (err.code || err.message)) || "خطأ غير معروف";
+        setSyncError(`تعذر الحفظ [${detail}] — تحقّق من الإنترنت`);
       });
   };
 
