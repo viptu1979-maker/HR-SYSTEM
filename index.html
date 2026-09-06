@@ -1461,7 +1461,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
          *قبل* ما الموظف يقفل المتصفح أو يبدّل تطبيق على جواله، لأن المتصفحات على الموبايل بتوقف أي
          مؤقّت (setTimeout) لسه ما اشتغلش لو التطبيق راح للخلفية — فأي تأخير هنا كان بيخاطر بضياع
          الحركة بالكامل دون أي إشعار بالفشل */
-      DATA_DOC.set(payload)
+      /* شبكة أمان: أي قيمة "undefined" في أي مكان بالبيانات (حتى لو ما انتبهناش لها) هترفض الحفظ
+         بالكامل من Firestore — تحويلها لـ JSON وإرجاعها يشيلها تلقائيًا قبل الحفظ */
+      DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
         .then(() => {
           lastSyncedRef.current = json;
           setDirty(false);
@@ -1614,7 +1616,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     }
     setSaving(true);
     setSyncError("");
-    DATA_DOC.set(payload)
+    DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
       .then(() => {
         lastSyncedRef.current = json;
         setDirty(false);
@@ -1869,6 +1871,15 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       const [h, m] = (hhmm || "00:00").split(":").map(Number);
       return h * 60 + m;
     };
+    /* Firestore يرفض القيم "undefined" بالكامل (خطأ invalid-argument) — بعض متصفحات الموبايل بترجّع
+       دقة الموقع (accuracy) أو حقول تانية بقيمة undefined أحيانًا. نضمن هنا إن كل حقل يبقى رقم حقيقي
+       أو null (Firestore بيقبل null عادي) قبل ما نحفظه أبدًا */
+    const sanitizeLocation = (c) => ({
+      lat: c?.lat ?? null,
+      lng: c?.lng ?? null,
+      distance: c?.distance ?? null,
+      accuracy: c?.accuracy ?? null,
+    });
     /* لو الموظف بصم حضور وفضل شغال لحد بعد منتصف الليل، وقت ما يجي يبصم انصراف بيكون التاريخ اتغيّر
        (يوم جديد) — فنفتش كمان عن سجل أمس المفتوح (له حضور بدون انصراف) بدل ما نفترض إنه محتاج
        يسجّل حضور جديد من الأول */
@@ -1987,7 +1998,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           checkInTime2: "",
           checkOutTime2: "",
           branchId: check.branchId,
-          checkInLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
+          checkInLocation: sanitizeLocation(check),
           checkInPhoto: uploadedPhotoUrl,
         };
         setAttendance((prev) => [...prev, rec]);
@@ -1999,7 +2010,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === already.id
-              ? { ...a, checkInTime2: timeStr, lateMinutes2, checkInLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy }, checkInPhoto2: uploadedPhotoUrl }
+              ? { ...a, checkInTime2: timeStr, lateMinutes2, checkInLocation2: sanitizeLocation(check), checkInPhoto2: uploadedPhotoUrl }
               : a
           )
         );
@@ -2074,7 +2085,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
                   overtimeHours,
                   earlyLeaveMinutes,
                   ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
-                  checkOutLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
+                  checkOutLocation: sanitizeLocation(check),
                   checkOutPhoto: uploadedPhotoUrl,
                 }
               : a
@@ -2102,7 +2113,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === rec.id
-              ? { ...a, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy }, checkOutPhoto2: uploadedPhotoUrl }
+              ? { ...a, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: sanitizeLocation(check), checkOutPhoto2: uploadedPhotoUrl }
               : a
           )
         );
