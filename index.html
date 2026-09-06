@@ -1475,7 +1475,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         .catch((err) => {
           setSaving(false);
           setDirty(true);
-          const detail = (err && (err.code || err.message)) || "خطأ غير معروف";
+          const detail = (err ? `${err.code || ""} ${err.message || ""}`.trim() : "") || "خطأ غير معروف";
           setSyncError(`تعذر الحفظ [${detail}] — جارِ إعادة المحاولة تلقائيًا`);
           setSaveMsg("");
         });
@@ -1626,7 +1626,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       })
       .catch((err) => {
         setSaving(false);
-        const detail = (err && (err.code || err.message)) || "خطأ غير معروف";
+        const detail = (err ? `${err.code || ""} ${err.message || ""}`.trim() : "") || "خطأ غير معروف";
         setSyncError(`تعذر الحفظ [${detail}] — تحقّق من الإنترنت`);
       });
   };
