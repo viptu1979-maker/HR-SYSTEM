@@ -22,6 +22,8 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <!-- Firebase Authentication: تسجيل دخول حقيقي محقَّق من جهة Firebase — أساس تشديد قواعد Firestore -->
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<!-- Firebase Storage: لتخزين ملفات الفيديو (توثيق إنجاز المهام) خارج Firestore، تفاديًا لحد حجم المستند -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <!-- face-api.js: التعرف على الوجه للحضور والانصراف — تحليل الوجه يتم بالكامل داخل جهاز الموظف -->
 <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
@@ -176,6 +178,7 @@
   firebase.initializeApp(firebaseConfig);
   window.__hrDb = firebase.firestore();
   window.__hrAuth = firebase.auth();
+  window.__hrStorage = firebase.storage();
   /* تطبيق Firebase ثانوي منفصل — يُستخدم فقط لإنشاء حسابات Firebase Authentication للموظفين من شاشة الأدمن
      بدون ما يأثر على جلسة تسجيل دخول الأدمن الحالية في التطبيق الرئيسي (createUser بيسجّل دخول تلقائي
      في نفس instance لو استخدمنا نفس التطبيق، فبنعزلها في تطبيق منفصل بالكامل) */
@@ -187,6 +190,7 @@ const { useState, useEffect, useMemo, useRef, useContext, createContext } = Reac
 const db = window.__hrDb;
 const auth = window.__hrAuth;
 const secondaryAuth = window.__hrSecondaryAuth;
+const storage = window.__hrStorage;
 const DATA_DOC = db.collection("hrSystem").doc("data");
 const USERS_DOC = db.collection("hrSystem").doc("users");
 const LOG_DOC = db.collection("hrSystem").doc("activityLog");
@@ -398,6 +402,22 @@ function compressImage(file, maxDim = 900, quality = 0.72) {
     };
     reader.readAsDataURL(file);
   });
+}
+
+/* رفع ملف (فيديو غالبًا) إلى Firebase Storage — بيرجع رابط تحميل مباشر بعد ما يخلص الرفع. مختلف عن
+   الصور (اللي بتتخزّن base64 جوّه Firestore نفسه) لأن الفيديو أكبر بكتير من حد حجم مستند Firestore (1MB) */
+function uploadFileToStorage(file, folder) {
+  const path = `${folder}/${Date.now()}_${uid()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+  const ref = storage.ref().child(path);
+  return ref.put(file).then((snap) => snap.ref.getDownloadURL());
+}
+/* حذف ملف من Storage عبر رابط تحميله المباشر (لو الحذف فشل — مثلًا الملف مش موجود أصلاً — نتجاهل بصمت) */
+function deleteFileFromStorage(downloadUrl) {
+  try {
+    storage.refFromURL(downloadUrl).delete().catch(() => {});
+  } catch (e) {
+    /* رابط غير صالح أو ملف محذوف مسبقًا — نتجاهل */
+  }
 }
 
 /* حساب المسافة (بالمتر) بين نقطتين جغرافيتين — معادلة Haversine */
@@ -1647,6 +1667,20 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       prev.map((ts) => (ts.id === taskId ? { ...ts, completionPhotos: (ts.completionPhotos || []).filter((_, i) => i !== photoIndex) } : ts))
     );
   };
+  /* الفيديوهات تُخزَّن في Firebase Storage (مش Firestore) — هنا بنحفظ بس رابط التحميل بعد ما يخلص الرفع */
+  const addTaskVideos = (taskId, videoUrls) => {
+    setTasks((prev) => prev.map((ts) => (ts.id === taskId ? { ...ts, completionVideos: [...(ts.completionVideos || []), ...videoUrls] } : ts)));
+    const ts = tasks.find((x) => x.id === taskId);
+    logActivity && logActivity("توثيق مهمة بفيديو", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+  };
+  const removeTaskVideo = (taskId, videoIndex) => {
+    setTasks((prev) => {
+      const ts = prev.find((x) => x.id === taskId);
+      const url = ts?.completionVideos?.[videoIndex];
+      if (url) deleteFileFromStorage(url);
+      return prev.map((x) => (x.id === taskId ? { ...x, completionVideos: (x.completionVideos || []).filter((_, i) => i !== videoIndex) } : x));
+    });
+  };
 
   /* ============ رسائل للموظفين ============
      scope: "employee" (موظف واحد) / "branch" (كل موظفي فرع) / "all" (كل الموظفين النشطين)
@@ -2079,6 +2113,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         onAddTaskComment={addTaskComment}
         onAddTaskPhotos={addTaskPhotos}
         onRemoveTaskPhoto={removeTaskPhoto}
+        onAddTaskVideos={addTaskVideos}
+        onRemoveTaskVideo={removeTaskVideo}
         messages={messages.filter(
           (m) => m.scope === "all" || (m.scope === "employee" && m.employeeId === myEmployee?.id) || (m.scope === "branch" && m.branchId === myEmployee?.branchId)
         )}
@@ -2626,6 +2662,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             onAddTaskComment={addTaskComment}
             onAddTaskPhotos={addTaskPhotos}
             onRemoveTaskPhoto={removeTaskPhoto}
+            onAddTaskVideos={addTaskVideos}
+            onRemoveTaskVideo={removeTaskVideo}
             branchName={(id) => branchName(employees.find((e) => e.id === id)?.branchId)}
           />
         )}
@@ -7633,7 +7671,7 @@ function LeaveRequestsTab({ employees, leaveRequests, isEntityManager, isFinalAp
     <div>
       <Header title={t("طلبات الإجازات", "Leave Requests")} subtitle={t("موافقة مبدئية من مدير الكيان، ثم موافقة نهائية من الأدمن/المسؤول العام", "Preliminary approval by the entity manager, then final approval by the admin/general manager")} />
 
-      {isEntityManager && (
+      {(isEntityManager || isFinalApprover) && (
         <>
           <SectionTitle>{t("بانتظار الموافقة المبدئية", "Awaiting Preliminary Approval")} ({pendingPreliminary.length})</SectionTitle>
           {pendingPreliminary.length === 0 && <Empty text={t("لا توجد طلبات بانتظار الموافقة المبدئية", "No requests awaiting preliminary approval")} />}
@@ -7749,13 +7787,15 @@ function AdvanceRequestsTab({ employees, advanceRequests, onApprove, onReject, b
   );
 }
 
-function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, onRemoveTask, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, branchName }) {
+function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, onRemoveTask, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, onAddTaskVideos, onRemoveTaskVideo, branchName }) {
   const { t } = useLang();
-  const [form, setForm] = useState({ employeeId: "", title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "" });
+  const [form, setForm] = useState({ employeeId: "", title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "", recurring: "لا يتكرر" });
   const [statusFilter, setStatusFilter] = useState("");
   const [branchFilter, setBranchFilter] = useState("");
   const [commentDrafts, setCommentDrafts] = useState({});
   const [photoBusy, setPhotoBusy] = useState({});
+  const [videoBusy, setVideoBusy] = useState({});
+  const [videoError, setVideoError] = useState({});
   const [lightbox, setLightbox] = useState(null);
   const empName = (id) => employees.find((e) => e.id === id)?.name || t("موظف محذوف", "Deleted employee");
   const todayISO = new Date().toISOString().slice(0, 10);
@@ -7772,10 +7812,29 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
     setPhotoBusy((p) => ({ ...p, [taskId]: false }));
   };
 
+  const handleVideoUpload = async (taskId, files) => {
+    if (!files || files.length === 0) return;
+    const MAX_MB = 100;
+    setVideoError((v) => ({ ...v, [taskId]: "" }));
+    const tooLarge = Array.from(files).find((f) => f.size > MAX_MB * 1024 * 1024);
+    if (tooLarge) {
+      setVideoError((v) => ({ ...v, [taskId]: t(`الملف "${tooLarge.name}" أكبر من ${MAX_MB} ميجابايت — قلّل مدة الفيديو أو جودته وحاول تاني.`, `"${tooLarge.name}" is larger than ${MAX_MB}MB — shorten or lower the video quality and try again.`) }));
+      return;
+    }
+    setVideoBusy((v) => ({ ...v, [taskId]: true }));
+    try {
+      const urls = await Promise.all(Array.from(files).map((f) => uploadFileToStorage(f, `taskVideos/${taskId}`)));
+      onAddTaskVideos && onAddTaskVideos(taskId, urls);
+    } catch (err) {
+      setVideoError((v) => ({ ...v, [taskId]: t("تعذّر رفع الفيديو — تأكد من اتصال الإنترنت وحاول تاني.", "Couldn't upload the video — check your internet connection and try again.") }));
+    }
+    setVideoBusy((v) => ({ ...v, [taskId]: false }));
+  };
+
   const submit = () => {
     if (!form.employeeId || !form.title.trim() || !form.to) return;
     onAddTask && onAddTask({ ...form, title: form.title.trim(), description: form.description.trim() });
-    setForm({ employeeId: form.employeeId, title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "" });
+    setForm({ employeeId: form.employeeId, title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "", recurring: form.recurring });
   };
 
   const effectiveStatus = (ts) => (ts.status !== "مكتملة" && ts.to && ts.to < todayISO ? "متأخرة" : ts.status);
@@ -7817,6 +7876,13 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
           </Field>
           <Field label={t("إلى تاريخ (موعد الإنجاز)", "To (Due Date)")}>
             <DateField style={inputStyle} value={form.to} onChange={(v) => setForm({ ...form, to: v })} />
+          </Field>
+          <Field label={t("التكرار", "Recurrence")}>
+            <select style={inputStyle} value={form.recurring} onChange={(e) => setForm({ ...form, recurring: e.target.value })}>
+              <option value="لا يتكرر">{t("لا يتكرر (مرة واحدة)", "One-time (no repeat)")}</option>
+              <option value="يومي">{t("يومي", "Daily")}</option>
+              <option value="أسبوعي">{t("أسبوعي", "Weekly")}</option>
+            </select>
           </Field>
         </div>
         <div style={{ marginTop: 10 }}>
@@ -7871,13 +7937,20 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
                   {ts.description && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{ts.description}</div>}
                   <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 6 }}>{t("أُسندت بواسطة", "Assigned by")}: {ts.assignedBy || "—"}</div>
                 </div>
-                <Stamp tone={statusTone(st)}>{trLabel(t, TASK_STATUS_LABELS_EN, st)}</Stamp>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                  <Stamp tone={statusTone(st)}>{trLabel(t, TASK_STATUS_LABELS_EN, st)}</Stamp>
+                  {ts.recurring && ts.recurring !== "لا يتكرر" && (
+                    <Stamp tone="gold">{t(`🔁 ${ts.recurring}`, `🔁 ${ts.recurring === "يومي" ? "Daily" : "Weekly"}`)}</Stamp>
+                  )}
+                </div>
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 10 }} className="no-print">
                 {ts.status !== "مكتملة" ? (
                   <Btn small onClick={() => onUpdateTaskStatus(ts.id, "مكتملة")}>{t("✔ تمييز كمكتملة", "✔ Mark Completed")}</Btn>
                 ) : (
-                  <Btn small tone="secondary" onClick={() => onUpdateTaskStatus(ts.id, "قيد التنفيذ")}>{t("↺ إعادة فتح", "↺ Reopen")}</Btn>
+                  <Btn small tone="secondary" onClick={() => onUpdateTaskStatus(ts.id, "قيد التنفيذ")}>
+                    {ts.recurring && ts.recurring !== "لا يتكرر" ? t("↺ تفعيل للدورة القادمة", "↺ Activate Next Cycle") : t("↺ إعادة فتح", "↺ Reopen")}
+                  </Btn>
                 )}
                 <Btn small tone="danger" onClick={() => onRemoveTask(ts.id)}>{t("✕ حذف", "✕ Delete")}</Btn>
               </div>
@@ -7921,6 +7994,43 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
                   }}
                 />
                 {photoBusy[ts.id] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+              </div>
+
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>
+                  {t("توثيق الإنجاز (فيديو)", "Completion Documentation (Video)")} {ts.completionVideos && ts.completionVideos.length > 0 ? `(${ts.completionVideos.length})` : ""}
+                </div>
+                {(ts.completionVideos || []).length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                    {ts.completionVideos.map((url, idx) => (
+                      <div key={idx} style={{ position: "relative" }}>
+                        <video src={url} controls style={{ width: 160, height: 100, borderRadius: 8, border: `1px solid ${COLORS.line}`, background: "#000" }} />
+                        <button
+                          className="no-print"
+                          onClick={() => onRemoveTaskVideo && onRemoveTaskVideo(ts.id, idx)}
+                          style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}
+                          title={t("حذف الفيديو", "Delete video")}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="video/*"
+                  multiple
+                  disabled={!!videoBusy[ts.id]}
+                  className="no-print"
+                  style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
+                  onChange={(e) => {
+                    handleVideoUpload(ts.id, e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+                {videoBusy[ts.id] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الفيديو، قد يستغرق وقتًا حسب حجمه وسرعة الإنترنت...", "Uploading video, may take a while depending on size and connection speed...")}</div>}
+                {videoError[ts.id] && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4 }}>{videoError[ts.id]}</div>}
               </div>
 
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
@@ -8488,11 +8598,13 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, advanceRequests, onSubmitAdvanceRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, messages = [], onMarkMessageRead, onAcknowledgeMessage, dirty, saving, syncError, onSave, faceModal, onFaceCancel, onFaceVerified }) {
+function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, advanceRequests, onSubmitAdvanceRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, onAddTaskVideos, onRemoveTaskVideo, messages = [], onMarkMessageRead, onAcknowledgeMessage, dirty, saving, syncError, onSave, faceModal, onFaceCancel, onFaceVerified }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
   const [taskPhotoBusy, setTaskPhotoBusy] = useState({});
+  const [taskVideoBusy, setTaskVideoBusy] = useState({});
+  const [taskVideoError, setTaskVideoError] = useState({});
   const [taskLightbox, setTaskLightbox] = useState(null);
 
   /* تحميل نماذج التعرف على الوجه مبكرًا في الخلفية من أول ما تفتح شاشة الموظف — بدل ما ننتظر لحظة
@@ -8512,6 +8624,24 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
       /* تجاهل الأخطاء الفردية لملفات غير صالحة */
     }
     setTaskPhotoBusy((p) => ({ ...p, [taskId]: false }));
+  };
+  const handleTaskVideoUpload = async (taskId, files) => {
+    if (!files || files.length === 0) return;
+    const MAX_MB = 100;
+    setTaskVideoError((v) => ({ ...v, [taskId]: "" }));
+    const tooLarge = Array.from(files).find((f) => f.size > MAX_MB * 1024 * 1024);
+    if (tooLarge) {
+      setTaskVideoError((v) => ({ ...v, [taskId]: t(`الملف "${tooLarge.name}" أكبر من ${MAX_MB} ميجابايت — قلّل مدة الفيديو أو جودته وحاول تاني.`, `"${tooLarge.name}" is larger than ${MAX_MB}MB — shorten or lower the video quality and try again.`) }));
+      return;
+    }
+    setTaskVideoBusy((v) => ({ ...v, [taskId]: true }));
+    try {
+      const urls = await Promise.all(Array.from(files).map((f) => uploadFileToStorage(f, `taskVideos/${taskId}`)));
+      onAddTaskVideos && onAddTaskVideos(taskId, urls);
+    } catch (err) {
+      setTaskVideoError((v) => ({ ...v, [taskId]: t("تعذّر رفع الفيديو — تأكد من اتصال الإنترنت وحاول تاني.", "Couldn't upload the video — check your internet connection and try again.") }));
+    }
+    setTaskVideoBusy((v) => ({ ...v, [taskId]: false }));
   };
   if (!employee) {
     return (
@@ -8863,7 +8993,12 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
                       {ts.description && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{ts.description}</div>}
                       <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 6 }}>{t("أُسندت بواسطة", "Assigned by")}: {ts.assignedBy || "—"}</div>
                     </div>
-                    <Stamp tone={tone}>{trLabel(t, TASK_STATUS_LABELS_EN, st)}</Stamp>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                      <Stamp tone={tone}>{trLabel(t, TASK_STATUS_LABELS_EN, st)}</Stamp>
+                      {ts.recurring && ts.recurring !== "لا يتكرر" && (
+                        <Stamp tone="gold">{t(`🔁 ${ts.recurring}`, `🔁 ${ts.recurring === "يومي" ? "Daily" : "Weekly"}`)}</Stamp>
+                      )}
+                    </div>
                   </div>
                   {ts.status !== "مكتملة" ? (
                     <div style={{ marginTop: 10 }}>
@@ -8913,6 +9048,42 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
                       }}
                     />
                     {taskPhotoBusy[ts.id] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+                  </div>
+
+                  <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>
+                      {t("توثيق الإنجاز (فيديو)", "Completion Documentation (Video)")} {ts.completionVideos && ts.completionVideos.length > 0 ? `(${ts.completionVideos.length})` : ""}
+                    </div>
+                    {(ts.completionVideos || []).length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                        {ts.completionVideos.map((url, idx) => (
+                          <div key={idx} style={{ position: "relative" }}>
+                            <video src={url} controls style={{ width: 160, height: 100, borderRadius: 8, border: `1px solid ${COLORS.line}`, background: "#000" }} />
+                            <button
+                              onClick={() => onRemoveTaskVideo && onRemoveTaskVideo(ts.id, idx)}
+                              style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}
+                              title={t("حذف الفيديو", "Delete video")}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <input
+                      type="file"
+                      accept="video/*"
+                      multiple
+                      capture="environment"
+                      disabled={!!taskVideoBusy[ts.id]}
+                      style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 260 }}
+                      onChange={(e) => {
+                        handleTaskVideoUpload(ts.id, e.target.files);
+                        e.target.value = "";
+                      }}
+                    />
+                    {taskVideoBusy[ts.id] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الفيديو، قد يستغرق وقتًا حسب حجمه وسرعة الإنترنت...", "Uploading video, may take a while depending on size and connection speed...")}</div>}
+                    {taskVideoError[ts.id] && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4 }}>{taskVideoError[ts.id]}</div>}
                   </div>
 
                   <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
