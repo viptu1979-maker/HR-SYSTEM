@@ -419,6 +419,24 @@ function deleteFileFromStorage(downloadUrl) {
     /* رابط غير صالح أو ملف محذوف مسبقًا — نتجاهل */
   }
 }
+/* تحويل صورة base64 (Data URL) إلى Blob تمهيدًا لرفعها على Storage — مستخدمة لصور الحضور/الانصراف
+   وصور توثيق المهام، بدل تخزينها كنص base64 ضخم جوّه مستند Firestore نفسه (اللي له حد 1 ميجابايت) */
+function dataUrlToBlob(dataUrl) {
+  const [header, base64] = dataUrl.split(",");
+  const mimeMatch = header.match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+  const binary = atob(base64);
+  const array = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) array[i] = binary.charCodeAt(i);
+  return new Blob([array], { type: mime });
+}
+/* رفع صورة base64 إلى Storage وإرجاع رابط التحميل — تُستخدم بدل تخزين الصورة نفسها في Firestore */
+function uploadPhotoToStorage(dataUrl, folder) {
+  if (!dataUrl) return Promise.resolve("");
+  const blob = dataUrlToBlob(dataUrl);
+  const path = `${folder}/${Date.now()}_${uid()}.jpg`;
+  return storage.ref().child(path).put(blob).then((snap) => snap.ref.getDownloadURL());
+}
 
 /* حساب المسافة (بالمتر) بين نقطتين جغرافيتين — معادلة Haversine */
 function distanceMeters(lat1, lng1, lat2, lng2) {
@@ -1550,6 +1568,36 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     logActivity && logActivity("استرجاع نسخة احتياطية", "settings", `تاريخ النسخة: ${backupData.date || "—"}`);
   };
 
+  /* تنظيف عاجل: صور الحضور/الانصراف وصور توثيق المهام كانت تُخزَّن قديمًا كنص base64 ضخم داخل نفس
+     مستند البيانات المشترك، لحد ما تخطّى حجمه حد Firestore (1 ميجابايت) ووقف كل عمليات الحفظ للجميع.
+     الصور الجديدة بقت تُرفع على Firebase Storage (رابط قصير بس)، لكن الصور القديمة لسه متضمّنة في
+     المستند وتحتاج إزالة يدوية مرة واحدة لتفريغ المساحة وإرجاع الحفظ لطبيعته */
+  const cleanupLegacyBase64Photos = () => {
+    const isBase64 = (s) => typeof s === "string" && s.startsWith("data:");
+    let removedCount = 0;
+    setAttendance((prev) =>
+      prev.map((a) => {
+        const clean = { ...a };
+        ["checkInPhoto", "checkOutPhoto", "checkInPhoto2", "checkOutPhoto2"].forEach((k) => {
+          if (isBase64(clean[k])) {
+            clean[k] = "";
+            removedCount++;
+          }
+        });
+        return clean;
+      })
+    );
+    setTasks((prev) =>
+      prev.map((ts) => {
+        const before = (ts.completionPhotos || []).length;
+        const kept = (ts.completionPhotos || []).filter((p) => !isBase64(p));
+        removedCount += before - kept.length;
+        return { ...ts, completionPhotos: kept };
+      })
+    );
+    logActivity && logActivity("تنظيف صور قديمة لتقليل حجم قاعدة البيانات", "settings", `${removedCount} صورة`);
+  };
+
   /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
   const saveNow = () => {
     const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages };
@@ -1665,9 +1713,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     logActivity && logActivity("توثيق مهمة بصور", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
   };
   const removeTaskPhoto = (taskId, photoIndex) => {
-    setTasks((prev) =>
-      prev.map((ts) => (ts.id === taskId ? { ...ts, completionPhotos: (ts.completionPhotos || []).filter((_, i) => i !== photoIndex) } : ts))
-    );
+    setTasks((prev) => {
+      const ts = prev.find((x) => x.id === taskId);
+      const url = ts?.completionPhotos?.[photoIndex];
+      if (url && url.startsWith("http")) deleteFileFromStorage(url);
+      return prev.map((x) => (x.id === taskId ? { ...x, completionPhotos: (x.completionPhotos || []).filter((_, i) => i !== photoIndex) } : x));
+    });
   };
   /* الفيديوهات تُخزَّن في Firebase Storage (مش Firestore) — هنا بنحفظ بس رابط التحميل بعد ما يخلص الرفع */
   const addTaskVideos = (taskId, videoUrls) => {
@@ -1904,6 +1955,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       }
       const timeStr = nowTimeStr();
       const checkInBranchName = branches.find((b) => b.id === check.branchId)?.name || "";
+      /* الصورة تُرفع على Firebase Storage (مش تُخزَّن كنص base64 جوّه Firestore) — عشان ما تتسبّبش في
+         تضخيم مستند البيانات لحد ما يتخطى حد Firestore (1 ميجابايت) ويوقف كل عمليات الحفظ للجميع */
+      const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
       if (stage === "in1") {
         /* الدوام الحر: بدون وقت دخول محدد — دايمًا "حاضر"، النقص أو الزيادة في الساعات يُحتسب وقت الانصراف
            بناءً على إجمالي الساعات الفعلية بدل وقت دخول ثابت. وكمان لو داوم في يوم إجازته الأسبوعية، ما
@@ -1926,7 +1980,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           checkOutTime2: "",
           branchId: check.branchId,
           checkInLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
-          checkInPhoto: facePhoto || "",
+          checkInPhoto: uploadedPhotoUrl,
         };
         setAttendance((prev) => [...prev, rec]);
         logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
@@ -1937,7 +1991,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === already.id
-              ? { ...a, checkInTime2: timeStr, lateMinutes2, checkInLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy }, checkInPhoto2: facePhoto || "" }
+              ? { ...a, checkInTime2: timeStr, lateMinutes2, checkInLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy }, checkInPhoto2: uploadedPhotoUrl }
               : a
           )
         );
@@ -1961,6 +2015,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         return;
       }
       const timeStr = nowTimeStr();
+      const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
       if (stage === "out1") {
         let overtimeHours = 0;
         let shortfallMinutes = 0;
@@ -2012,7 +2067,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
                   earlyLeaveMinutes,
                   ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
                   checkOutLocation: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy },
-                  checkOutPhoto: facePhoto || "",
+                  checkOutPhoto: uploadedPhotoUrl,
                 }
               : a
           )
@@ -2039,7 +2094,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === rec.id
-              ? { ...a, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy }, checkOutPhoto2: facePhoto || "" }
+              ? { ...a, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: { lat: check.lat, lng: check.lng, distance: check.distance, accuracy: check.accuracy }, checkOutPhoto2: uploadedPhotoUrl }
               : a
           )
         );
@@ -2700,7 +2755,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           <ReportsTab activityLog={activityLog} users={users} />
         )}
         {hasTab("settings") && tab === "settings" && (
-          <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} isAdmin={isAdmin} onRestoreBackup={restoreBackup} logActivity={logActivity} />
+          <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} isAdmin={isAdmin} onRestoreBackup={restoreBackup} onCleanupLegacyPhotos={cleanupLegacyBase64Photos} logActivity={logActivity} />
         )}
         {isAdmin && tab === "users" && (
           <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} logActivity={logActivity} />
@@ -6777,7 +6832,7 @@ function EOSTab({ employees }) {
 }
 
 /* ============ الإعدادات ============ */
-function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, logActivity }) {
+function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onCleanupLegacyPhotos, logActivity }) {
   const { t } = useLang();
   const [backups, setBackups] = useState([]);
   const [backupsLoaded, setBackupsLoaded] = useState(false);
@@ -6852,6 +6907,30 @@ function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, logAct
           "All data is stored and synced via the shared Firestore database and is not shared with any third party."
         )}
       </div>
+
+      {isAdmin && (
+        <div style={{ marginTop: 26, background: "#FEF3F0", border: `2px solid ${COLORS.brick}`, borderRadius: 10, padding: 18, maxWidth: 560 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.brick, marginBottom: 4 }}>
+            {t("⚠ تنظيف عاجل: صور قديمة تمنع حفظ البيانات", "⚠ Urgent Cleanup: Old Photos Blocking Saves")}
+          </div>
+          <div style={{ fontSize: 11.5, color: COLORS.espresso, marginBottom: 14, lineHeight: 1.7 }}>
+            {t(
+              "صور الحضور/الانصراف وتوثيق المهام القديمة كانت تُخزَّن داخل قاعدة البيانات الرئيسية نفسها بدل مكان منفصل، وتراكمت لحد ما قربت/تخطّت الحد الأقصى المسموح به — وهذا يمنع حفظ أي تسجيل حضور جديد لكل الموظفين. اضغط الزر ده مرة واحدة لتفريغ المساحة (هيمسح الصور القديمة فقط، مش بيانات الحضور نفسها — التاريخ والوقت والحالة كلها تفضل موجودة).",
+              "Old attendance and task-documentation photos were stored inside the main database itself instead of a separate location, and accumulated until they neared/exceeded the size limit — this blocks new attendance check-ins for everyone. Press this once to free up space (it only removes the old photos, not the attendance data itself — dates, times, and status all remain)."
+            )}
+          </div>
+          <Btn
+            tone="danger"
+            onClick={() => {
+              if (window.confirm(t("متأكد؟ هذا هيمسح الصور القديمة (المخزّنة كنص طويل) من سجلات الحضور والمهام القديمة نهائيًا. البيانات النصية (الوقت، الحالة...) تفضل زي ما هي.", "Are you sure? This will permanently remove old embedded photos from attendance and task records. Text data (times, status...) stays as-is."))) {
+                onCleanupLegacyPhotos && onCleanupLegacyPhotos();
+              }
+            }}
+          >
+            {t("🧹 نظّف الصور القديمة الآن", "🧹 Clean Up Old Photos Now")}
+          </Btn>
+        </div>
+      )}
 
       {isAdmin && (
         <div style={{ marginTop: 26, background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, maxWidth: 560 }}>
@@ -7806,8 +7885,11 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
     if (!files || files.length === 0) return;
     setPhotoBusy((p) => ({ ...p, [taskId]: true }));
     try {
-      const dataUrls = await Promise.all(Array.from(files).map((f) => compressImage(f, 900, 0.7)));
-      onAddTaskPhotos && onAddTaskPhotos(taskId, dataUrls);
+      /* نضغط الصورة محليًا الأول، وبعدين نرفعها على Storage (مش نخزّنها base64 داخل Firestore)
+         عشان ما تتسبّبش في تضخيم مستند البيانات المشترك مع الوقت */
+      const compressed = await Promise.all(Array.from(files).map((f) => compressImage(f, 900, 0.7)));
+      const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `taskPhotos/${taskId}`)));
+      onAddTaskPhotos && onAddTaskPhotos(taskId, urls);
     } catch (err) {
       /* تجاهل الأخطاء الفردية لملفات غير صالحة */
     }
@@ -8620,8 +8702,9 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
     if (!files || files.length === 0) return;
     setTaskPhotoBusy((p) => ({ ...p, [taskId]: true }));
     try {
-      const dataUrls = await Promise.all(Array.from(files).map((f) => compressImage(f, 900, 0.7)));
-      onAddTaskPhotos && onAddTaskPhotos(taskId, dataUrls);
+      const compressed = await Promise.all(Array.from(files).map((f) => compressImage(f, 900, 0.7)));
+      const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `taskPhotos/${taskId}`)));
+      onAddTaskPhotos && onAddTaskPhotos(taskId, urls);
     } catch (err) {
       /* تجاهل الأخطاء الفردية لملفات غير صالحة */
     }
