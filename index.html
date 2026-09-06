@@ -1436,22 +1436,24 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     }
     if (role === "employee") {
       setSaving(true);
-      const t = setTimeout(() => {
-        DATA_DOC.set(payload)
-          .then(() => {
-            lastSyncedRef.current = json;
-            setDirty(false);
-            setSaving(false);
-            setSaveMsg("تم الحفظ ✓");
-            setTimeout(() => setSaveMsg(""), 1500);
-          })
-          .catch(() => {
-            setSaving(false);
-            setDirty(true);
-            setSaveMsg("تعذر الحفظ — جارِ إعادة المحاولة تلقائيًا...");
-          });
-      }, 400);
-      return () => clearTimeout(t);
+      /* الحفظ فوري (بدون أي تأخير) — أهم حاجة إن تسجيل الحضور/الانصراف ينحفظ في قاعدة البيانات
+         *قبل* ما الموظف يقفل المتصفح أو يبدّل تطبيق على جواله، لأن المتصفحات على الموبايل بتوقف أي
+         مؤقّت (setTimeout) لسه ما اشتغلش لو التطبيق راح للخلفية — فأي تأخير هنا كان بيخاطر بضياع
+         الحركة بالكامل دون أي إشعار بالفشل */
+      DATA_DOC.set(payload)
+        .then(() => {
+          lastSyncedRef.current = json;
+          setDirty(false);
+          setSaving(false);
+          setSaveMsg("تم الحفظ ✓");
+          setTimeout(() => setSaveMsg(""), 1500);
+        })
+        .catch(() => {
+          setSaving(false);
+          setDirty(true);
+          setSaveMsg("تعذر الحفظ — جارِ إعادة المحاولة تلقائيًا...");
+        });
+      return;
     }
     setDirty(true);
   }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, loaded, role, retryTick]);
