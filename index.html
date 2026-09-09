@@ -2058,15 +2058,13 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           shortfallMinutes = workedMinutes < requiredMinutes ? requiredMinutes - workedMinutes : 0;
           overtimeHours = workedMinutes > requiredMinutes ? Math.min(12, Math.round(((workedMinutes - requiredMinutes) / 60) * 2) / 2) : 0;
         } else {
-          /* لو وقت نهاية الدوام "00:00" (فاضي فعليًا أو خطأ إدخال)، نرجع للافتراضي 17:00 بدل ما نحسب
-             الفرق من منتصف الليل ويطلع رقم وقت إضافي غير منطقي (زي 24 ساعة) */
           const shiftInfo = effectiveShift(myEmployee, JS_DAY_INDEX_TO_AR[new Date().getDay()]);
           const shiftStartRaw = shiftInfo.start || "08:00";
-          const rawShiftEnd = shiftInfo.end;
-          const shiftEnd = rawShiftEnd && rawShiftEnd !== "00:00" ? rawShiftEnd : "17:00";
-          /* دوام ليلي (وقت النهاية أصغر رقميًا من وقت البداية، زي 17:00 → 03:00) يمتد فعليًا لليوم
-             التالي — نضيف 24 ساعة لوقت النهاية عشان الفرق يُحسب صح مقابل وقت الانصراف المعدَّل هو
-             الآخر لعبور منتصف الليل، بدل ما يطلع خصم "خروج مبكر" ضخم وهمي */
+          /* دوام ليلي (وقت النهاية أصغر من أو يساوي وقت البداية، زي 16:00 → 00:00 أو 17:00 → 03:00)
+             يمتد فعليًا لليوم التالي — نضيف 24 ساعة لوقت النهاية عشان الفرق يُحسب صح مقابل وقت
+             الانصراف المعدَّل هو الآخر لعبور منتصف الليل، بدل ما يطلع خصم/إضافي وهمي كبير.
+             ده بيغطي حتى حالة "00:00" بالظبط (منتصف الليل) كوقت نهاية حقيقي، مش بس خطأ إدخال */
+          const shiftEnd = shiftInfo.end || "17:00";
           let shiftEndMinutes = minutesOf(shiftEnd);
           if (shiftEndMinutes <= minutesOf(shiftStartRaw)) shiftEndMinutes += 24 * 60;
           const diff = checkoutMinutesAdj - shiftEndMinutes;
@@ -2103,7 +2101,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           overtimeHours2 = workedMinutes2 > 0 ? Math.min(12, Math.round((workedMinutes2 / 60) * 2) / 2) : 0;
         } else {
           const shiftStart2Raw = myEmployee.workShift2?.start || "17:00";
-          const shiftEnd2 = (myEmployee.workShift2?.end && myEmployee.workShift2.end !== "00:00") ? myEmployee.workShift2.end : "22:00";
+          const shiftEnd2 = myEmployee.workShift2?.end || "22:00";
           let shiftEnd2Minutes = minutesOf(shiftEnd2);
           if (shiftEnd2Minutes <= minutesOf(shiftStart2Raw)) shiftEnd2Minutes += 24 * 60;
           const diff2 = checkoutMinutesAdj2 - shiftEnd2Minutes;
