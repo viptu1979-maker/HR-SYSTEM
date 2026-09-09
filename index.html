@@ -8598,7 +8598,10 @@ function AdvanceRequestForm({ onSubmit, t }) {
    أول مرة يستخدم فيها الموظف تسجيل الحضور: تُلتقط صورته وتُحفظ "بصمة وجه" رقمية (مصفوفة أرقام فقط،
    وليست الصورة نفسها) داخل ملفه الشخصي، ومنها فصاعدًا تُستخدم هذه البصمة للتحقق تلقائيًا في كل مرة.
    في كل الحالات — أول مرة والمرات التالية — تُحفظ صورة مصغّرة مع كل حركة حضور/انصراف ليطّلع عليها الأدمن. */
-const FACE_MODELS_URL = "https://raw.githubusercontent.com/justadudewhohacks/face-api.js/master/weights/";
+/* نستخدم jsdelivr (شبكة توزيع محتوى حقيقية مبنية للاستخدام المكثّف) بدل raw.githubusercontent.com
+   مباشرة — الأخير مش مصمم لتحمّل طلبات متكررة من عدة مستخدمين في نفس الوقت وبيرفض بعضها أحيانًا
+   (خطأ 503)، بينما jsdelivr مصمم بالظبط لتوزيع نفس ملفات مستودعات GitHub بشكل موثوق */
+const FACE_MODELS_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights/";
 const FACE_MATCH_THRESHOLD = 0.5;
 let __faceModelsPromise = null;
 function loadFaceModels() {
