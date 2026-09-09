@@ -2692,6 +2692,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             logActivity={logActivity}
             entities={scopedEntities}
             branches={scopedBranches}
+            leaves={scopedLeaves}
+            onSendMessage={sendMessage}
           />
         )}
         {hasTab("compliance") && tab === "compliance" && (
@@ -5742,11 +5744,51 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
 }
 
 /* ============ سجل الحضور اليومي (قسم مستقل تحت الحضور والإجازات) ============ */
-function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches }) {
+function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage }) {
   const { t } = useLang();
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [logSearch, setLogSearch] = useState("");
+  const [notifyResult, setNotifyResult] = useState("");
+
+  /* تنبيه الموظفين اللي لسه ما سجّلوش حضور النهاردة رغم إن وقت دوامهم بدأ (بهامش سماح نص ساعة) —
+     يستثني: يوم إجازته الأسبوعية، إجازة معتمدة، قبل تاريخ تعيينه، أو دوام حر (مالوش وقت دخول ثابت) */
+  const notifyAbsentees = () => {
+    const minutesOfLocal = (hhmm) => {
+      const [h, m] = (hhmm || "00:00").split(":").map(Number);
+      return h * 60 + m;
+    };
+    const now = new Date();
+    const todayISO = now.toISOString().slice(0, 10);
+    const todayDayName = JS_DAY_INDEX_TO_AR[now.getDay()];
+    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const GRACE_MINUTES = 30;
+    let notified = 0;
+    employees
+      .filter((e) => e.status === "نشط" && !e.flexibleSchedule)
+      .forEach((e) => {
+        const hasToday = attendance.some((a) => a.employeeId === e.id && a.date === todayISO);
+        if (hasToday) return;
+        if (getOffDays(e).includes(todayDayName)) return;
+        const onLeave = (leaves || []).some((l) => l.employeeId === e.id && l.from <= todayISO && l.to >= todayISO);
+        if (onLeave) return;
+        if (e.joinDate && e.joinDate > todayISO) return;
+        const shiftStart = effectiveShift(e, todayDayName).start;
+        if (nowMinutes < minutesOfLocal(shiftStart) + GRACE_MINUTES) return;
+        const text = t(
+          "لم يتم تسجيل حضورك اليوم حتى الآن. برجاء تسجيل حضورك أو التواصل مع الإدارة إذا كان هناك عذر.",
+          "You haven't checked in today yet. Please check in or contact management if there's a valid reason."
+        );
+        onSendMessage && onSendMessage({ scope: "employee", employeeId: e.id, text });
+        notified++;
+      });
+    setNotifyResult(
+      notified > 0
+        ? t(`✔ تم إرسال تنبيه لـ ${notified} موظف`, `✔ Notified ${notified} employees`)
+        : t("لا يوجد موظفون غائبون حاليًا حسب أوقات دوامهم", "No employees currently absent based on their shift times")
+    );
+    setTimeout(() => setNotifyResult(""), 5000);
+  };
 
   const attBranches = attForm.entityId ? branches.filter((b) => b.entityId === attForm.entityId) : branches;
   const attEmployees = attForm.branchId
@@ -5853,13 +5895,17 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
           </div>
         </div>
       </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12 }} className="no-print">
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12, alignItems: "center" }} className="no-print">
         <input
           style={{ ...inputStyle, maxWidth: 260 }}
           placeholder={t("ابحث بالاسم، رقم الهوية، أو التاريخ (YYYY-MM-DD)...", "Search by name, ID number, or date (YYYY-MM-DD)...")}
           value={logSearch}
           onChange={(e) => setLogSearch(e.target.value)}
         />
+        <Btn tone="secondary" onClick={notifyAbsentees}>
+          {t("🔔 تنبيه من لم يسجّل حضور اليوم", "🔔 Notify Today's Absentees")}
+        </Btn>
+        {notifyResult && <span style={{ fontSize: 12, color: COLORS.espresso, fontWeight: 700 }}>{notifyResult}</span>}
       </div>
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
         {attendance.length === 0 && <Empty text={t("لا توجد سجلات حضور", "No attendance records")} />}
