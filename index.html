@@ -8639,12 +8639,13 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
         }
         setReady(true);
       } catch (e) {
+        const fullDetail = e ? `${e.name || "Error"}: ${e.message || String(e)}` : "غير معروف";
         setError(
           e && e.name === "NotAllowedError"
             ? t("تم رفض إذن الكاميرا. فعّل إذن الكاميرا للمتصفح من إعدادات جهازك وحاول مرة أخرى.", "Camera permission denied. Enable camera access in your device settings and try again.")
             : t(
-                `تعذّر تشغيل الكاميرا أو تحميل نظام التعرّف على الوجه. تأكد من اتصال الإنترنت وحاول مرة أخرى. [التفاصيل: ${(e && (e.name || e.message)) || "غير معروف"}]`,
-                `Couldn't start the camera or load the face recognition system. Check your internet connection and try again. [Details: ${(e && (e.name || e.message)) || "unknown"}]`
+                `تعذّر تشغيل الكاميرا أو تحميل نظام التعرّف على الوجه. تأكد من اتصال الإنترنت وحاول مرة أخرى. [التفاصيل: ${fullDetail}]`,
+                `Couldn't start the camera or load the face recognition system. Check your internet connection and try again. [Details: ${fullDetail}]`
               )
         );
       }
