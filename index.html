@@ -6093,6 +6093,9 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [logSearch, setLogSearch] = useState("");
+  /* تعديل سجل حضور/انصراف قائم — لتصحيح خطأ الموظف في وقت البصمة أو حالة اليوم */
+  const [editAttId, setEditAttId] = useState(null);
+  const [editAttForm, setEditAttForm] = useState(null);
   const [notifyResult, setNotifyResult] = useState("");
 
   /* تنبيه الموظفين اللي لسه ما سجّلوش حضور النهاردة رغم إن وقت دوامهم بدأ (بهامش سماح نص ساعة) —
@@ -6160,6 +6163,49 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
     setAttForm({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   };
   const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
+
+  const startEditAtt = (a) => {
+    setEditAttId(a.id);
+    setEditAttForm({
+      checkInTime: a.checkInTime || "",
+      checkOutTime: a.checkOutTime || "",
+      checkInTime2: a.checkInTime2 || "",
+      checkOutTime2: a.checkOutTime2 || "",
+      status: a.status || "حاضر",
+      lateMinutes: a.lateMinutes || "",
+      earlyLeaveMinutes: a.earlyLeaveMinutes || "",
+      overtimeHours: a.overtimeHours || "",
+      overtimeHours2: a.overtimeHours2 || "",
+    });
+  };
+  const cancelEditAtt = () => {
+    setEditAttId(null);
+    setEditAttForm(null);
+  };
+  const saveEditAtt = () => {
+    if (!editAttId || !editAttForm) return;
+    setAttendance((prev) =>
+      prev.map((a) =>
+        a.id === editAttId
+          ? {
+              ...a,
+              checkInTime: editAttForm.checkInTime.trim(),
+              checkOutTime: editAttForm.checkOutTime.trim(),
+              checkInTime2: editAttForm.checkInTime2.trim(),
+              checkOutTime2: editAttForm.checkOutTime2.trim(),
+              status: editAttForm.status,
+              lateMinutes: editAttForm.status === "متأخر" ? Number(editAttForm.lateMinutes || 0) : 0,
+              earlyLeaveMinutes: Number(editAttForm.earlyLeaveMinutes || 0),
+              overtimeHours: Number(editAttForm.overtimeHours || 0),
+              overtimeHours2: Number(editAttForm.overtimeHours2 || 0),
+            }
+          : a
+      )
+    );
+    const a = attendance.find((x) => x.id === editAttId);
+    logActivity && logActivity("تعديل سجل حضور", "attendance", `${empName(a?.employeeId)} — ${a?.date || ""}`);
+    cancelEditAtt();
+  };
 
   /* بحث في سجل الحضور اليومي: بالاسم، رقم الهوية/الإقامة، أو التاريخ */
   const filteredAttendance = attendance.filter((a) => {
@@ -6308,11 +6354,68 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
               {Number(a.earlyLeaveMinutes2 || 0) > 0 && (
                 <Stamp tone="brick">{t(`خروج مبكر ف2 ${a.earlyLeaveMinutes2} د`, `Left early S2 ${a.earlyLeaveMinutes2}m`)}</Stamp>
               )}
+              <Btn small onClick={() => startEditAtt(a)}>{t("✎ تعديل", "✎ Edit")}</Btn>
               <Btn small tone="danger" onClick={() => removeAtt(a.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
         ))}
       </div>
+
+      {editAttId && editAttForm && (() => {
+        const editingRecord = attendance.find((x) => x.id === editAttId);
+        return (
+          <div style={{ position: "fixed", inset: 0, background: "rgba(20,14,8,0.72)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} className="no-print">
+            <div style={{ background: "#fff", borderRadius: 14, padding: 20, width: "100%", maxWidth: 460, maxHeight: "88vh", overflowY: "auto" }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>{t("تعديل سجل حضور", "Edit Attendance Record")}</div>
+              <div style={{ fontSize: 12, color: "#8a7a63", marginBottom: 14 }}>
+                {empName(editingRecord?.employeeId)} — {editingRecord?.date}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                <Field label={t("وقت الحضور (صباحي)", "Check-in (AM)")}>
+                  <input type="time" style={inputStyle} value={editAttForm.checkInTime} onChange={(e) => setEditAttForm({ ...editAttForm, checkInTime: e.target.value })} />
+                </Field>
+                <Field label={t("وقت الانصراف (صباحي)", "Check-out (AM)")}>
+                  <input type="time" style={inputStyle} value={editAttForm.checkOutTime} onChange={(e) => setEditAttForm({ ...editAttForm, checkOutTime: e.target.value })} />
+                </Field>
+                <Field label={t("وقت الحضور (مسائي)", "Check-in (PM)")}>
+                  <input type="time" style={inputStyle} value={editAttForm.checkInTime2} onChange={(e) => setEditAttForm({ ...editAttForm, checkInTime2: e.target.value })} />
+                </Field>
+                <Field label={t("وقت الانصراف (مسائي)", "Check-out (PM)")}>
+                  <input type="time" style={inputStyle} value={editAttForm.checkOutTime2} onChange={(e) => setEditAttForm({ ...editAttForm, checkOutTime2: e.target.value })} />
+                </Field>
+                <Field label={t("الحالة", "Status")}>
+                  <select style={inputStyle} value={editAttForm.status} onChange={(e) => setEditAttForm({ ...editAttForm, status: e.target.value })}>
+                    <option value="حاضر">{t("حاضر", "Present")}</option>
+                    <option value="غائب">{t("غائب", "Absent")}</option>
+                    <option value="متأخر">{t("متأخر", "Late")}</option>
+                  </select>
+                </Field>
+                {editAttForm.status === "متأخر" && (
+                  <Field label={t("عدد دقائق التأخير", "Minutes Late")}>
+                    <input type="number" style={inputStyle} value={editAttForm.lateMinutes} onChange={(e) => setEditAttForm({ ...editAttForm, lateMinutes: e.target.value })} />
+                  </Field>
+                )}
+                <Field label={t("دقائق الخروج المبكر", "Early Leave Minutes")}>
+                  <input type="number" style={inputStyle} value={editAttForm.earlyLeaveMinutes} onChange={(e) => setEditAttForm({ ...editAttForm, earlyLeaveMinutes: e.target.value })} />
+                </Field>
+                <Field label={t("ساعات العمل الإضافي", "Overtime Hours")}>
+                  <input type="number" step="0.5" style={inputStyle} value={editAttForm.overtimeHours} onChange={(e) => setEditAttForm({ ...editAttForm, overtimeHours: e.target.value })} />
+                </Field>
+              </div>
+              <div style={{ marginTop: 14, fontSize: 11, color: "#a3927a" }}>
+                {t(
+                  "اترك أي وقت فارغًا لو ما ينطبق (مثلاً موظف بدوام واحد ما يحتاج وقت مسائي).",
+                  "Leave a time blank if it doesn't apply (e.g. a single-shift employee doesn't need PM times)."
+                )}
+              </div>
+              <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+                <Btn tone="secondary" onClick={cancelEditAtt}>{t("إلغاء", "Cancel")}</Btn>
+                <Btn onClick={saveEditAtt}>{t("💾 حفظ التعديل", "💾 Save Changes")}</Btn>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {viewingPhoto && (
         <div
