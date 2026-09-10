@@ -1340,6 +1340,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       : navForRole(role);
   const hasTab = (key) => navItems.some((n) => n.key === key);
   const [tab, setTab] = useState(navItems[0]?.key || "dash");
+  /* حساب إداري (أدمن/مسؤول/...) مرتبط أيضًا بسجل موظف: يقدر يتنقّل بين لوحة التحكم الكاملة
+     وشاشته الشخصية (حضور/انصراف، إجازات، سلف) بنفس الحساب دون تسجيل خروج */
+  const [selfView, setSelfView] = useState(false);
   /* أي قسم فرعي معروض حاليًا داخل تبويب "تراخيص الفروع" (السجل التجاري / باقي الرخص / الشهادات الصحية والتأمين الطبي / السيارات) */
   const [licenseSubTab, setLicenseSubTab] = useState("cr");
   /* أي الأقسام الرئيسية في القائمة الجانبية مفتوحة حاليًا — يُفتح تلقائيًا القسم الذي يحوي البند النشط */
@@ -1985,8 +1988,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     logActivity && logActivity("رفض طلب سلفة", "advanceRequests", employees.find((e) => e.id === advanceRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
   };
 
-  /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل */
-  if (role === "employee") {
+  /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل — وكذلك أي حساب إداري مرتبط بسجل
+     موظف وفعّل "بياناتي" مؤقتًا (selfView) عشان يسجّل حضوره/إجازاته بنفسه */
+  if (role === "employee" || selfView) {
     const myEmployee = employees.find((e) => e.id === currentUser.employeeId);
     /* موظف عنده صلاحية جودة و/أو صيانة إضافية: يشوف بيانات فرعه فقط من المعدات وطلبات الصيانة وقوالب/سجلات الجودة */
     const myBranchIdForQm = myEmployee?.branchId || "";
@@ -2335,6 +2339,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         geoError={geoError}
         branchName={branchName}
         onLogout={onLogout}
+        onBackToDashboard={role !== "employee" ? () => setSelfView(false) : undefined}
         setUsers={setUsers}
         logActivity={logActivity}
         tasks={tasks.filter((ts) => ts.employeeId === myEmployee?.id)}
@@ -2700,6 +2705,24 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             {isBranchManager && ` · ${branchName(currentUser.branchId)}`}
             {isEntityManager && ` · ${entityName(currentUser.entityId)}`}
           </div>
+          {currentUser.employeeId && (
+            <button
+              onClick={() => setSelfView(true)}
+              style={{
+                width: "100%",
+                background: "transparent",
+                border: "1px solid rgba(216,168,90,0.4)",
+                color: "#D9CBB2",
+                borderRadius: 6,
+                padding: "7px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                marginBottom: 8,
+              }}
+            >
+              {t("🧑‍💼 بياناتي (حضور وإجازات)", "🧑‍💼 My Profile (Attendance & Leave)")}
+            </button>
+          )}
           <button
             onClick={() => setShowChangePassword(true)}
             style={{
@@ -8721,14 +8744,12 @@ function MaintenanceTab({
                   <option value="منخفض">{t("منخفض", "Low")}</option>
                 </select>
               </Field>
-              {!defaultBranchId && (
-                <Field label={t("الفرع", "Branch")} required>
-                  <select style={inputStyle} value={woForm.branchId} onChange={(e) => setWoForm({ ...woForm, branchId: e.target.value })}>
-                    <option value="">{t("اختر الفرع", "Select branch")}</option>
-                    {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                  </select>
-                </Field>
-              )}
+              <Field label={t("الفرع", "Branch")} required>
+                <select style={inputStyle} value={woForm.branchId} onChange={(e) => setWoForm({ ...woForm, branchId: e.target.value })}>
+                  <option value="">{t("اختر الفرع", "Select branch")}</option>
+                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </Field>
               <Field label={t("التكلفة (اختياري)", "Cost (optional)")}>
                 <input type="number" min="0" style={inputStyle} value={woForm.cost} onChange={(e) => setWoForm({ ...woForm, cost: e.target.value })} />
               </Field>
@@ -9719,6 +9740,7 @@ function EmployeeSelfView({
   onAddEquipment, onUpdateEquipment, onRemoveEquipment, onAddEquipmentPhotos, onRemoveEquipmentPhoto,
   onAddWorkOrder, onUpdateWorkOrderStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
   onAddQualityTemplate, onRemoveQualityTemplate, onAddQualitySubmission, onRemoveQualitySubmission,
+  onBackToDashboard,
 }) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
@@ -9785,7 +9807,8 @@ function EmployeeSelfView({
         <div style={{ fontSize: 14, color: COLORS.ink }}>
           {t("هذا الحساب غير مرتبط بسجل موظف بعد. تواصل مع الإدارة لربط الحساب.", "This account isn't linked to an employee record yet. Contact management to link the account.")}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
+          {onBackToDashboard && <Btn tone="secondary" onClick={onBackToDashboard}>{t("🏠 الرجوع للوحة التحكم", "🏠 Back to Dashboard")}</Btn>}
           <Btn tone="secondary" onClick={() => setShowChangePassword(true)}>{t("🔑 تغيير كلمة المرور", "🔑 Change Password")}</Btn>
           <Btn onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
         </div>
@@ -9867,6 +9890,7 @@ function EmployeeSelfView({
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <SaveStatusIcon saving={saving} syncError={syncError} dirty={dirty} onSave={onSave} />
             <LangToggle />
+            {onBackToDashboard && <Btn tone="secondary" onClick={onBackToDashboard}>{t("🏠 الرجوع للوحة التحكم", "🏠 Back to Dashboard")}</Btn>}
             <Btn tone="secondary" onClick={() => setShowChangePassword(true)}>{t("🔑 تغيير كلمة المرور", "🔑 Change Password")}</Btn>
             <Btn tone="secondary" onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
           </div>
@@ -10484,7 +10508,9 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
      اسم المستخدم = رقم الهوية/الإقامة، كلمة المرور الافتراضية = admin@123،
      ومطلوب من الموظف تغييرها إجباريًا أول ما يدخل بيها (mustChangePassword) */
   const generateAccountsForAllEmployees = () => {
-    const linkedEmployeeIds = new Set(users.filter((u) => u.role === "employee" && u.employeeId).map((u) => u.employeeId));
+    /* أي حساب مرتبط بموظف (سواء دوره "موظف" أو دور إداري مرتبط بسجل موظف أيضًا) يُستبعد،
+       عشان ما نولّد حساب "موظف" مكرر لموظف عنده أصلًا حساب إداري مرتبط بسجله */
+    const linkedEmployeeIds = new Set(users.filter((u) => u.employeeId).map((u) => u.employeeId));
     const existingUsernames = new Set(users.map((u) => u.username));
     const created = [];
     const skippedNoId = [];
@@ -10727,7 +10753,10 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
               onChange={(e) => {
                 const newRole = e.target.value;
                 const defaultTabs = defaultTabsForRole(newRole);
-                setForm({ ...form, role: newRole, branchId: "", employeeId: "", entityId: "", customTabs: defaultTabs });
+                /* ما نصفّر employeeId هنا: لو الحساب مرتبط بسجل موظف، الرابط لازم يفضل موجود حتى
+                   بعد تغيير الدور — عشان يقدر يبقى "موظف ومسؤول" في نفس الوقت (دخول لوحة تحكم
+                   إدارية + شاشة شخصية لتسجيل حضوره وإجازاته) */
+                setForm({ ...form, role: newRole, branchId: "", entityId: "", customTabs: defaultTabs });
               }}
             >
               <option value="admin">{t("أدمن (كل الصلاحيات)", "Admin (full access)")}</option>
@@ -10777,7 +10806,20 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
               <EmployeeSelect employees={employees} value={form.employeeId} onChange={(id) => setForm({ ...form, employeeId: id })} />
             </Field>
           )}
+          {form.role !== "employee" && (
+            <Field label={t("ربط بسجل موظف (اختياري)", "Link to Employee Record (optional)")}>
+              <EmployeeSelect employees={employees} value={form.employeeId} onChange={(id) => setForm({ ...form, employeeId: id })} />
+            </Field>
+          )}
         </div>
+        {form.role !== "employee" && form.employeeId && (
+          <div style={{ fontSize: 11, color: "#a3927a", marginTop: -6, marginBottom: 10 }}>
+            {t(
+              "هذا الحساب سيقدر يدخل لوحة تحكمه الإدارية الكاملة، وكمان يفتح شاشة \"بياناتي\" لتسجيل حضوره/انصرافه وتقديم طلبات إجازة/سلفة بصفته موظف.",
+              "This account will access its full admin dashboard, and can also open a \"My Profile\" screen to clock in/out and submit leave/advance requests as an employee."
+            )}
+          </div>
+        )}
 
         {form.role === "employee" && (
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px dashed ${COLORS.line}` }}>
@@ -10901,6 +10943,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
                       {u.role === "entity_manager" && ` · ${entities.find((en) => en.id === u.entityId)?.name || "—"}`}
                       {(u.role === "branch_manager" || u.role === "quality" || u.role === "maintenance") && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
                       {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
+                      {u.role !== "employee" && u.employeeId && ` · 🧑‍💼 ${t("مرتبط بسجل موظف:", "Linked to employee:")} ${employees.find((e) => e.id === u.employeeId)?.name || "—"}`}
                       {Array.isArray(u.customTabs) && ` · 🔧 ${t(`صلاحيات مخصصة (${u.customTabs.length} تبويب)`, `Custom access (${u.customTabs.length} tabs)`)}`}
                       {u.qualityAccess && ` · ◒ ${t("الجودة", "Quality")}`}
                       {u.maintenanceAccess && ` · 🔧 ${t("الصيانة", "Maintenance")}`}
