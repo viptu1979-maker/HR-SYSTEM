@@ -1882,7 +1882,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   };
 
   const addWorkOrder = (wo) => {
-    const newWo = { ...wo, id: uid(), branchId: wo.branchId || defaultQmBranchId, status: "مفتوح", photos: [], videoUrl: "", createdBy: currentUser.name, createdAt: new Date().toISOString() };
+    const newWo = { ...wo, id: uid(), branchId: wo.branchId || defaultQmBranchId, status: "مفتوح", costStatus: wo.cost ? "قيد المراجعة" : "", photos: [], videoUrl: "", createdBy: currentUser.name, createdAt: new Date().toISOString() };
     setWorkOrders((prev) => [newWo, ...prev]);
     logActivity && logActivity("طلب صيانة جديد", "maintenance", wo.title || "");
     /* أي موظف يرسل طلب صيانة يوصل تلقائيًا كرسالة لمسؤول الصيانة العام المحدد من الإعدادات
@@ -1901,6 +1901,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const updateWorkOrderStatus = (id, status) => {
     setWorkOrders((prev) => prev.map((x) => (x.id === id ? { ...x, status, completedAt: status === "مكتمل" ? new Date().toISOString() : x.completedAt } : x)));
     logActivity && logActivity("تحديث حالة طلب صيانة", "maintenance", workOrders.find((x) => x.id === id)?.title || "");
+  };
+  /* قبول أو رفض سعر التكلفة المُدخَل لطلب الصيانة — قرار منفصل عن حالة تنفيذ الطلب نفسه */
+  const updateWorkOrderCostStatus = (id, costStatus) => {
+    setWorkOrders((prev) => prev.map((x) => (x.id === id ? { ...x, costStatus, costDecidedBy: currentUser.name, costDecidedAt: new Date().toISOString() } : x)));
+    logActivity && logActivity(costStatus === "مقبول" ? "قبول سعر تكلفة صيانة" : "رفض سعر تكلفة صيانة", "maintenance", workOrders.find((x) => x.id === id)?.title || "");
   };
   const removeWorkOrder = (id) => {
     const wo = workOrders.find((x) => x.id === id);
@@ -2462,6 +2467,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         onRemoveEquipmentPhoto={removeEquipmentPhoto}
         onAddWorkOrder={addWorkOrder}
         onUpdateWorkOrderStatus={updateWorkOrderStatus}
+        onUpdateWorkOrderCostStatus={updateWorkOrderCostStatus}
         onRemoveWorkOrder={removeWorkOrder}
         onAddWorkOrderPhotos={addWorkOrderPhotos}
         onRemoveWorkOrderPhoto={removeWorkOrderPhoto}
@@ -3074,6 +3080,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             onRemoveEquipmentPhoto={removeEquipmentPhoto}
             onAddWorkOrder={addWorkOrder}
             onUpdateWorkOrderStatus={updateWorkOrderStatus}
+            onUpdateWorkOrderCostStatus={updateWorkOrderCostStatus}
             onRemoveWorkOrder={removeWorkOrder}
             onAddWorkOrderPhotos={addWorkOrderPhotos}
             onRemoveWorkOrderPhoto={removeWorkOrderPhoto}
@@ -8634,7 +8641,7 @@ function isEquipmentOverdue(eq) {
 function MaintenanceTab({
   equipment, workOrders, branches, defaultBranchId,
   onAddEquipment, onUpdateEquipment, onRemoveEquipment, onAddEquipmentPhotos, onRemoveEquipmentPhoto,
-  onAddWorkOrder, onUpdateWorkOrderStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
+  onAddWorkOrder, onUpdateWorkOrderStatus, onUpdateWorkOrderCostStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
 }) {
   const { t } = useLang();
   const [subView, setSubView] = useState("equipment");
@@ -8718,6 +8725,8 @@ function MaintenanceTab({
 
   const priorityTone = (p) => (p === "عالي" ? "brick" : p === "منخفض" ? "green" : "gold");
   const statusTone = (s) => (s === "مكتمل" ? "green" : s === "قيد التنفيذ" ? "gold" : "brick");
+  const costStatusTone = (s) => (s === "مقبول" ? "green" : s === "مرفوض" ? "brick" : "gold");
+  const costStatusLabel = (s) => (s === "مقبول" ? t("السعر مقبول", "Cost Accepted") : s === "مرفوض" ? t("السعر مرفوض", "Cost Rejected") : t("السعر قيد المراجعة", "Cost Pending Review"));
 
   return (
     <div>
@@ -8912,7 +8921,12 @@ function MaintenanceTab({
                   <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{wo.title}</div>
                   <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{wo.equipmentId ? equipmentName(wo.equipmentId) : t("بدون معدة محددة", "No specific equipment")} · {branchName(wo.branchId)}</div>
                   {wo.description && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{wo.description}</div>}
-                  {wo.cost ? <div style={{ fontSize: 11.5, marginTop: 6, fontFamily: "Consolas, monospace" }}>{t("التكلفة", "Cost")}: {fmt(wo.cost)} ﷼</div> : null}
+                  {wo.cost ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 11.5, fontFamily: "Consolas, monospace" }}>{t("التكلفة", "Cost")}: {fmt(wo.cost)} ﷼</div>
+                      {wo.costStatus && <Stamp tone={costStatusTone(wo.costStatus)}>{costStatusLabel(wo.costStatus)}</Stamp>}
+                    </div>
+                  ) : null}
                   <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 6 }}>{t("أُنشئ بواسطة", "Created by")}: {wo.createdBy || "—"}</div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -8920,6 +8934,12 @@ function MaintenanceTab({
                   <Stamp tone={priorityTone(wo.priority)}>{wo.priority}</Stamp>
                 </div>
               </div>
+              {wo.cost && wo.costStatus === "قيد المراجعة" && (
+                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }} className="no-print">
+                  <Btn small onClick={() => onUpdateWorkOrderCostStatus(wo.id, "مقبول")}>{t("✔ قبول السعر", "✔ Accept Cost")}</Btn>
+                  <Btn small tone="danger" onClick={() => onUpdateWorkOrderCostStatus(wo.id, "مرفوض")}>{t("✕ رفض السعر", "✕ Reject Cost")}</Btn>
+                </div>
+              )}
               <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }} className="no-print">
                 {wo.status !== "مكتمل" ? (
                   <React.Fragment>
@@ -8931,6 +8951,11 @@ function MaintenanceTab({
                 )}
                 <Btn small tone="danger" onClick={() => onRemoveWorkOrder(wo.id)}>{t("✕ حذف", "✕ Delete")}</Btn>
               </div>
+              {wo.costStatus === "مرفوض" && (
+                <div style={{ marginTop: 8, fontSize: 11, color: COLORS.brick }}>
+                  {t("تم رفض السعر — يقدر مقدّم الطلب يعدّل التكلفة أو ينتظر مراجعة أخرى.", "Cost was rejected — the requester can adjust the cost or wait for another review.")}
+                </div>
+              )}
 
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("صور", "Photos")} {wo.photos && wo.photos.length > 0 ? `(${wo.photos.length})` : ""}</div>
@@ -9885,7 +9910,7 @@ function EmployeeSelfView({
   onAddTaskVideos, onRemoveTaskVideo, messages = [], onMarkMessageRead, onAcknowledgeMessage, dirty, saving, syncError, onSave, faceModal, onFaceCancel, onFaceVerified,
   qualityAccess = false, maintenanceAccess = false, branches = [], equipment = [], workOrders = [], qualityTemplates = [], qualitySubmissions = [],
   onAddEquipment, onUpdateEquipment, onRemoveEquipment, onAddEquipmentPhotos, onRemoveEquipmentPhoto,
-  onAddWorkOrder, onUpdateWorkOrderStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
+  onAddWorkOrder, onUpdateWorkOrderStatus, onUpdateWorkOrderCostStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
   onAddQualityTemplate, onRemoveQualityTemplate, onAddQualitySubmission, onRemoveQualitySubmission,
   onBackToDashboard,
 }) {
@@ -10552,6 +10577,7 @@ function EmployeeSelfView({
             onRemoveEquipmentPhoto={onRemoveEquipmentPhoto}
             onAddWorkOrder={onAddWorkOrder}
             onUpdateWorkOrderStatus={onUpdateWorkOrderStatus}
+            onUpdateWorkOrderCostStatus={onUpdateWorkOrderCostStatus}
             onRemoveWorkOrder={onRemoveWorkOrder}
             onAddWorkOrderPhotos={onAddWorkOrderPhotos}
             onRemoveWorkOrderPhoto={onRemoveWorkOrderPhoto}
