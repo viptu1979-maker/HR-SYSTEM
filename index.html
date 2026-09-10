@@ -374,6 +374,37 @@ const COLORS = {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+/* نغمة تنبيه قصيرة (نغمتين متتاليتين) للإشعارات — تُولَّد مباشرة بمكتبة Web Audio بدون ملف صوتي خارجي،
+   عشان تشتغل فورًا على الجوال والمتصفح حتى بدون اتصال إنترنت لحظة التشغيل */
+let __notifAudioCtx = null;
+function playNotificationSound() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    if (!__notifAudioCtx) __notifAudioCtx = new Ctx();
+    const ctx = __notifAudioCtx;
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    const playTone = (freq, startAt, duration) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, startAt);
+      gain.gain.linearRampToValueAtTime(0.18, startAt + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, startAt + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(startAt);
+      osc.stop(startAt + duration);
+    };
+    const now = ctx.currentTime;
+    playTone(880, now, 0.16);
+    playTone(1174.66, now + 0.14, 0.22);
+  } catch (err) {
+    /* تجاهل أي فشل في تشغيل الصوت (مثلاً قبل أول تفاعل من المستخدم مع الصفحة) */
+  }
+}
+
 /* ضغط وتصغير صورة قبل تحويلها لـ base64 وتخزينها في Firestore — لتفادي تضخّم حجم المستند */
 function compressImage(file, maxDim = 900, quality = 0.72) {
   return new Promise((resolve, reject) => {
@@ -2022,6 +2053,30 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     );
     logActivity && logActivity("رفض طلب سلفة", "advanceRequests", employees.find((e) => e.id === advanceRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
   };
+
+  /* تنبيه صوتي عند وصول رسالة جديدة تخص المستخدم الحالي (طلب صيانة/جودة جديد، أو أي رسالة إدارية) —
+     يقارن الرسائل الجديدة الواردة من المزامنة اللحظية بآخر رسائل معروفة، ويشغّل نغمة فقط للرسائل
+     الجديدة فعليًا بعد أول تحميل للصفحة (عشان ما يرن على كل الرسائل القديمة أول ما يفتح النظام) */
+  const myEmployeeForNotif = currentUser.employeeId ? employees.find((e) => e.id === currentUser.employeeId) : null;
+  const notifSeenIdsRef = useRef(null);
+  useEffect(() => {
+    if (!loaded) return;
+    const relevantMsgs = messages.filter((m) => {
+      if (m.scope === "all") return true;
+      if (m.scope === "employee") return myEmployeeForNotif && m.employeeId === myEmployeeForNotif.id;
+      if (m.scope === "branch") return myEmployeeForNotif && m.branchId === myEmployeeForNotif.branchId;
+      return false;
+    });
+    const currentIds = new Set(relevantMsgs.map((m) => m.id));
+    if (notifSeenIdsRef.current === null) {
+      /* أول مرة بعد تحميل البيانات: نسجّل الرسائل الموجودة كمعروفة بدون تنبيه صوتي */
+      notifSeenIdsRef.current = currentIds;
+      return;
+    }
+    const hasNew = relevantMsgs.some((m) => m.sentBy !== currentUser.name && !notifSeenIdsRef.current.has(m.id));
+    if (hasNew) playNotificationSound();
+    notifSeenIdsRef.current = currentIds;
+  }, [messages, loaded]);
 
   /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل — وكذلك أي حساب إداري مرتبط بسجل
      موظف وفعّل "بياناتي" مؤقتًا (selfView) عشان يسجّل حضوره/إجازاته بنفسه */
