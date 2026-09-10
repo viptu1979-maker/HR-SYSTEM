@@ -8884,6 +8884,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
   const [fillPhotos, setFillPhotos] = useState([]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [templateFilter, setTemplateFilter] = useState("");
+  const [branchFilter, setBranchFilter] = useState(defaultBranchId || "");
   const [lightbox, setLightbox] = useState(null);
   const [expandedSub, setExpandedSub] = useState({});
   const [issueMsg, setIssueMsg] = useState({});
@@ -8954,17 +8955,43 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
     setShowTplForm(false);
   };
 
-  const visibleSubmissions = submissions.filter((s) => !templateFilter || s.templateId === templateFilter).slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
-  const recentSubmissions = submissions.slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1)).slice(0, 20);
+  /* تقرير كل فرع منفصل عن الآخر: كل الإحصائيات وسجل الفحوصات تُحسب فقط على فحوصات الفرع المختار
+     (أو كل الفروع مجتمعة لو ما فيه فرع محدد) بدل خلط بيانات كل الفروع مع بعض */
+  const branchScopedSubmissions = branchFilter ? submissions.filter((s) => s.branchId === branchFilter) : submissions;
+  const branchScopedTemplates = branchFilter ? templates.filter((tpl) => tpl.branchId === branchFilter) : templates;
+  const visibleSubmissions = branchScopedSubmissions.filter((s) => !templateFilter || s.templateId === templateFilter).slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
+  const recentSubmissions = branchScopedSubmissions.slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1)).slice(0, 20);
   const complianceRate = recentSubmissions.length ? Math.round((recentSubmissions.filter((s) => s.overallPass).length / recentSubmissions.length) * 100) : 0;
   const weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 7);
-  const thisWeekCount = submissions.filter((s) => new Date(s.submittedAt) >= weekAgo).length;
-  const issuesCount = submissions.filter((s) => !s.overallPass).length;
+  const thisWeekCount = branchScopedSubmissions.filter((s) => new Date(s.submittedAt) >= weekAgo).length;
+  const issuesCount = branchScopedSubmissions.filter((s) => !s.overallPass).length;
 
   return (
     <div>
       <Header title={t("الجودة", "Quality")} subtitle={t("قوالب فحوصات الجودة، تعبئتها، ومتابعة نتائجها", "Quality inspection templates, filling them out, and tracking results")} />
+
+      {!defaultBranchId && branches.length > 1 && (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }} className="no-print">
+          <Field label={t("تقرير الفرع", "Branch Report")}>
+            <select style={inputStyle} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
+              <option value="">{t("كل الفروع (مجتمعة)", "All Branches (combined)")}</option>
+              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </Field>
+          <Btn small onClick={() => window.print()}>{t("🖶 طباعة تقرير الفرع", "🖶 Print Branch Report")}</Btn>
+        </div>
+      )}
+
+      <div className="print-section">
+        <div style={{ display: "none" }} className="print-only-title">
+          <div className="print-brand">{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
+          {t("تقرير الجودة", "Quality Report")} — {branchFilter ? branchName(branchFilter) : t("كل الفروع", "All Branches")}
+        </div>
+        <div style={{ display: "none" }} className="print-only-meta">
+          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
+          <span>{visibleSubmissions.length} {t("فحص", "checks")}</span>
+        </div>
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
         <ReceiptCard label={t("نسبة الالتزام (آخر 20 فحص)", "Compliance Rate (last 20 checks)")} value={`${complianceRate}%`} tone={complianceRate >= 80 ? COLORS.green : COLORS.brick} />
@@ -8973,7 +9000,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }} className="no-print">
-        <SectionTitle>{t("قوالب الفحص", "Inspection Templates")} ({templates.length})</SectionTitle>
+        <SectionTitle>{t("قوالب الفحص", "Inspection Templates")} ({branchScopedTemplates.length})</SectionTitle>
         <Btn small onClick={() => setShowTplForm((s) => !s)}>{showTplForm ? t("إلغاء", "Cancel") : t("➕ قالب جديد", "➕ New Template")}</Btn>
       </div>
 
@@ -9015,7 +9042,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
         </div>
       )}
 
-      {templates.length === 0 && !showTplForm && (
+      {branchScopedTemplates.length === 0 && !showTplForm && (
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, marginBottom: 16 }} className="no-print">
           <Empty text={t("لا توجد قوالب فحص بعد", "No inspection templates yet")} />
           <div style={{ padding: "0 20px 20px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, justifyContent: "center" }}>
@@ -9035,7 +9062,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
         </div>
       )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
-        {templates.map((tpl) => (
+        {branchScopedTemplates.map((tpl) => (
           <div key={tpl.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, flex: "1 1 240px", minWidth: 220 }}>
             <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{tpl.name}</div>
             <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{tpl.frequency} · {tpl.items.length} {t("بند", "items")} · {branchName(tpl.branchId)}</div>
@@ -9158,6 +9185,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
           </div>
         );
       })}
+      </div>
 
       {lightbox && (
         <div onClick={() => setLightbox(null)} style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.75)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }}>
