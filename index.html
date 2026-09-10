@@ -1371,6 +1371,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     saudiEmployer: 11.75,
     nonSaudiEmployer: 2,
   });
+  /* مسؤول الصيانة العام ومسؤول الجودة العام: شخص واحد لكل الفروع، يحدده الأدمن من تبويب الإعدادات.
+     أي طلب صيانة أو فحص جودة من أي موظف يُرسل له تلقائيًا كرسالة داخل النظام */
+  const [maintenanceManagerId, setMaintenanceManagerId] = useState("");
+  const [qualityManagerId, setQualityManagerId] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1421,6 +1425,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             advanceRequests: d.advanceRequests || [],
             attendance: d.attendance || [],
             gosiRates: d.gosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
+            maintenanceManagerId: d.maintenanceManagerId || "",
+            qualityManagerId: d.qualityManagerId || "",
             vehicles: d.vehicles || [],
             payrollItems: d.payrollItems || [],
             tasks: d.tasks || [],
@@ -1439,6 +1445,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setAttendance(next.attendance);
           setVehicles(next.vehicles);
           setGosiRates(next.gosiRates);
+          setMaintenanceManagerId(next.maintenanceManagerId);
+          setQualityManagerId(next.qualityManagerId);
           setPayrollItems(next.payrollItems);
           setTasks(next.tasks);
           setMessages(next.messages);
@@ -1449,7 +1457,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           lastSyncedRef.current = JSON.stringify(next);
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [] }).catch(() => {});
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, maintenanceManagerId: "", qualityManagerId: "", payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [] }).catch(() => {});
         }
         setSyncError("");
         setLoaded(true);
@@ -1478,7 +1486,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   useEffect(() => {
     if (!loaded) return;
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1512,7 +1520,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return;
     }
     setDirty(true);
-  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, loaded, role, retryTick]);
+  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, loaded, role, retryTick]);
 
   /* نسخة احتياطية يومية تلقائية (بيانات النظام + حسابات الدخول معًا) — لو انحذف أو اتغيّر شيء بالغلط
      (من داخل النظام أو حتى من Firestore Console مباشرة) يقدر الأدمن يسترجعها من تبويب "الإعدادات" */
@@ -1528,7 +1536,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           date: today,
           savedAt: firebase.firestore.FieldValue.serverTimestamp(),
           entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance,
-          gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, users,
+          gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, users,
         });
       })
       .then(() => {
@@ -1575,7 +1583,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     const {
       entities: bEntities, branches: bBranches, employees: bEmployees, leaves: bLeaves,
       leaveRequests: bLeaveRequests, advanceRequests: bAdvanceRequests, attendance: bAttendance,
-      gosiRates: bGosiRates, vehicles: bVehicles, payrollItems: bPayrollItems, tasks: bTasks,
+      gosiRates: bGosiRates, maintenanceManagerId: bMaintenanceManagerId, qualityManagerId: bQualityManagerId,
+      vehicles: bVehicles, payrollItems: bPayrollItems, tasks: bTasks,
       messages: bMessages, equipment: bEquipment, workOrders: bWorkOrders, qualityTemplates: bQualityTemplates,
       qualitySubmissions: bQualitySubmissions, users: bUsers,
     } = backupData;
@@ -1587,6 +1596,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     setAdvanceRequests(bAdvanceRequests || []);
     setAttendance(bAttendance || []);
     setGosiRates(bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 });
+    setMaintenanceManagerId(bMaintenanceManagerId || "");
+    setQualityManagerId(bQualityManagerId || "");
     setVehicles(bVehicles || []);
     setPayrollItems(bPayrollItems || []);
     setTasks(bTasks || []);
@@ -1599,6 +1610,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       entities: bEntities || [], branches: bBranches || [], employees: bEmployees || [], leaves: bLeaves || [],
       leaveRequests: bLeaveRequests || [], advanceRequests: bAdvanceRequests || [], attendance: bAttendance || [],
       gosiRates: bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
+      maintenanceManagerId: bMaintenanceManagerId || "", qualityManagerId: bQualityManagerId || "",
       vehicles: bVehicles || [], payrollItems: bPayrollItems || [], tasks: bTasks || [], messages: bMessages || [],
       equipment: bEquipment || [], workOrders: bWorkOrders || [], qualityTemplates: bQualityTemplates || [], qualitySubmissions: bQualitySubmissions || [],
     };
@@ -1644,7 +1656,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
   const saveNow = () => {
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1842,6 +1854,18 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     const newWo = { ...wo, id: uid(), branchId: wo.branchId || defaultQmBranchId, status: "مفتوح", photos: [], videoUrl: "", createdBy: currentUser.name, createdAt: new Date().toISOString() };
     setWorkOrders((prev) => [newWo, ...prev]);
     logActivity && logActivity("طلب صيانة جديد", "maintenance", wo.title || "");
+    /* أي موظف يرسل طلب صيانة يوصل تلقائيًا كرسالة لمسؤول الصيانة العام المحدد من الإعدادات
+       (إلا لو هو نفسه مسؤول الصيانة، فما فيه داعي يراسل نفسه) */
+    if (maintenanceManagerId && maintenanceManagerId !== currentUser.employeeId) {
+      sendMessage({
+        scope: "employee",
+        employeeId: maintenanceManagerId,
+        text: t(
+          `طلب صيانة جديد من ${currentUser.name}: "${newWo.title}" — الفرع: ${branchName(newWo.branchId)} (الأولوية: ${newWo.priority || "—"})`,
+          `New maintenance request from ${currentUser.name}: "${newWo.title}" — Branch: ${branchName(newWo.branchId)} (Priority: ${newWo.priority || "—"})`
+        ),
+      });
+    }
   };
   const updateWorkOrderStatus = (id, status) => {
     setWorkOrders((prev) => prev.map((x) => (x.id === id ? { ...x, status, completedAt: status === "مكتمل" ? new Date().toISOString() : x.completedAt } : x)));
@@ -1889,6 +1913,17 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     const newSub = { ...sub, id: uid(), branchId: sub.branchId || defaultQmBranchId, submittedBy: currentUser.name, submittedAt: new Date().toISOString(), photos: sub.photos || [] };
     setQualitySubmissions((prev) => [newSub, ...prev]);
     logActivity && logActivity("تعبئة فحص جودة", "quality", sub.templateName || "");
+    /* أي موظف يعبّي فحص جودة يوصل تلقائيًا كرسالة لمسؤول الجودة العام المحدد من الإعدادات */
+    if (qualityManagerId && qualityManagerId !== currentUser.employeeId) {
+      sendMessage({
+        scope: "employee",
+        employeeId: qualityManagerId,
+        text: t(
+          `فحص جودة جديد من ${currentUser.name}: "${newSub.templateName || ""}" — الفرع: ${branchName(newSub.branchId)} — النتيجة: ${newSub.overallPass ? "مطابق" : "يوجد ملاحظات"}`,
+          `New quality check from ${currentUser.name}: "${newSub.templateName || ""}" — Branch: ${branchName(newSub.branchId)} — Result: ${newSub.overallPass ? "Pass" : "Has Issues"}`
+        ),
+      });
+    }
   };
   const removeQualitySubmission = (id) => {
     const sub = qualitySubmissions.find((x) => x.id === id);
@@ -3009,7 +3044,19 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           <ReportsTab activityLog={activityLog} users={users} />
         )}
         {hasTab("settings") && tab === "settings" && (
-          <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} isAdmin={isAdmin} onRestoreBackup={restoreBackup} onCleanupLegacyPhotos={cleanupLegacyBase64Photos} logActivity={logActivity} />
+          <SettingsTab
+            gosiRates={gosiRates}
+            setGosiRates={setGosiRates}
+            isAdmin={isAdmin}
+            onRestoreBackup={restoreBackup}
+            onCleanupLegacyPhotos={cleanupLegacyBase64Photos}
+            logActivity={logActivity}
+            employees={employees}
+            maintenanceManagerId={maintenanceManagerId}
+            setMaintenanceManagerId={setMaintenanceManagerId}
+            qualityManagerId={qualityManagerId}
+            setQualityManagerId={setQualityManagerId}
+          />
         )}
         {isAdmin && tab === "users" && (
           <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} logActivity={logActivity} />
@@ -7130,7 +7177,7 @@ function EOSTab({ employees }) {
 }
 
 /* ============ الإعدادات ============ */
-function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onCleanupLegacyPhotos, logActivity }) {
+function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onCleanupLegacyPhotos, logActivity, employees = [], maintenanceManagerId, setMaintenanceManagerId, qualityManagerId, setQualityManagerId }) {
   const { t } = useLang();
   const [backups, setBackups] = useState([]);
   const [backupsLoaded, setBackupsLoaded] = useState(false);
@@ -7205,6 +7252,28 @@ function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onClea
           "All data is stored and synced via the shared Firestore database and is not shared with any third party."
         )}
       </div>
+
+      {isAdmin && (
+        <div style={{ marginTop: 26, background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, maxWidth: 480 }}>
+          <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>
+            {t("مسؤولا الصيانة والجودة العامَّان", "General Maintenance & Quality Managers")}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#a3927a", marginBottom: 14 }}>
+            {t(
+              "كل الموظفين يقدرون يرسلوا طلبات صيانة وفحوصات جودة من صفحتهم الذاتية. حدّد هنا شخصًا واحدًا يستلم كل طلبات الصيانة من كل الفروع، وشخصًا آخر (أو نفس الشخص) يستلم كل فحوصات الجودة — تصله كرسالة داخل النظام فور الإرسال.",
+              "All employees can send maintenance requests and quality checks from their self-service page. Set one person here to receive all maintenance requests from every branch, and one (or the same) person to receive all quality checks — they get an in-system message as soon as it's sent."
+            )}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <Field label={t("مسؤول الصيانة العام", "General Maintenance Manager")}>
+              <EmployeeSelect employees={employees} value={maintenanceManagerId} onChange={(id) => setMaintenanceManagerId(id)} />
+            </Field>
+            <Field label={t("مسؤول الجودة العام", "General Quality Manager")}>
+              <EmployeeSelect employees={employees} value={qualityManagerId} onChange={(id) => setQualityManagerId(id)} />
+            </Field>
+          </div>
+        </div>
+      )}
 
       {isAdmin && (
         <div style={{ marginTop: 26, background: "#FEF3F0", border: `2px solid ${COLORS.brick}`, borderRadius: 10, padding: 18, maxWidth: 560 }}>
@@ -10377,45 +10446,41 @@ function EmployeeSelfView({
           ))}
         </div>
 
-        {qualityAccess && (
-          <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
-            <QualityTab
-              equipment={equipment}
-              templates={qualityTemplates}
-              submissions={qualitySubmissions}
-              branches={branches}
-              defaultBranchId={employee.branchId}
-              onAddTemplate={onAddQualityTemplate}
-              onRemoveTemplate={onRemoveQualityTemplate}
-              onAddSubmission={onAddQualitySubmission}
-              onRemoveSubmission={onRemoveQualitySubmission}
-              onReportIssue={onAddWorkOrder}
-            />
-          </div>
-        )}
+        <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
+          <QualityTab
+            equipment={equipment}
+            templates={qualityTemplates}
+            submissions={qualitySubmissions}
+            branches={branches}
+            defaultBranchId={employee.branchId}
+            onAddTemplate={onAddQualityTemplate}
+            onRemoveTemplate={onRemoveQualityTemplate}
+            onAddSubmission={onAddQualitySubmission}
+            onRemoveSubmission={onRemoveQualitySubmission}
+            onReportIssue={onAddWorkOrder}
+          />
+        </div>
 
-        {maintenanceAccess && (
-          <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
-            <MaintenanceTab
-              equipment={equipment}
-              workOrders={workOrders}
-              branches={branches}
-              defaultBranchId={employee.branchId}
-              onAddEquipment={onAddEquipment}
-              onUpdateEquipment={onUpdateEquipment}
-              onRemoveEquipment={onRemoveEquipment}
-              onAddEquipmentPhotos={onAddEquipmentPhotos}
-              onRemoveEquipmentPhoto={onRemoveEquipmentPhoto}
-              onAddWorkOrder={onAddWorkOrder}
-              onUpdateWorkOrderStatus={onUpdateWorkOrderStatus}
-              onRemoveWorkOrder={onRemoveWorkOrder}
-              onAddWorkOrderPhotos={onAddWorkOrderPhotos}
-              onRemoveWorkOrderPhoto={onRemoveWorkOrderPhoto}
-              onAddWorkOrderVideo={onAddWorkOrderVideo}
-              onRemoveWorkOrderVideo={onRemoveWorkOrderVideo}
-            />
-          </div>
-        )}
+        <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
+          <MaintenanceTab
+            equipment={equipment}
+            workOrders={workOrders}
+            branches={branches}
+            defaultBranchId={employee.branchId}
+            onAddEquipment={onAddEquipment}
+            onUpdateEquipment={onUpdateEquipment}
+            onRemoveEquipment={onRemoveEquipment}
+            onAddEquipmentPhotos={onAddEquipmentPhotos}
+            onRemoveEquipmentPhoto={onRemoveEquipmentPhoto}
+            onAddWorkOrder={onAddWorkOrder}
+            onUpdateWorkOrderStatus={onUpdateWorkOrderStatus}
+            onRemoveWorkOrder={onRemoveWorkOrder}
+            onAddWorkOrderPhotos={onAddWorkOrderPhotos}
+            onRemoveWorkOrderPhoto={onRemoveWorkOrderPhoto}
+            onAddWorkOrderVideo={onAddWorkOrderVideo}
+            onRemoveWorkOrderVideo={onRemoveWorkOrderVideo}
+          />
+        </div>
       </div>
     </div>
   );
@@ -10823,24 +10888,11 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
 
         {form.role === "employee" && (
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px dashed ${COLORS.line}` }}>
-            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8, color: COLORS.espresso }}>
-              {t("صلاحيات إضافية لهذا الموظف", "Additional access for this employee")}
-            </div>
-            <div style={{ fontSize: 11, color: "#a3927a", marginBottom: 8 }}>
+            <div style={{ fontSize: 11, color: "#a3927a" }}>
               {t(
-                "لموظف يجمع بين وظيفته الأساسية ومسؤولية الجودة أو الصيانة — يحتفظ بصفحته الذاتية (حضور، إجازات، مهام) ويُضاف له قسم الجودة/الصيانة الخاص بفرعه في نفس الصفحة.",
-                "For an employee who combines their regular role with quality or maintenance responsibility — they keep their self-service page (attendance, leave, tasks) and get their branch's Quality/Maintenance section added to the same page."
+                "كل الموظفين الآن يشوفون قسمَي الجودة والصيانة الخاصين بفرعهم تلقائيًا في صفحتهم الذاتية — وطلباتهم تصل مباشرة لمسؤولَي الجودة والصيانة العامَّين المحدَّدين من تبويب \"الإعدادات\".",
+                "All employees now automatically see their branch's Quality and Maintenance sections on their self-service page — their requests go straight to the general Quality and Maintenance managers set from the \"Settings\" tab."
               )}
-            </div>
-            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
-                <input type="checkbox" checked={!!form.qualityAccess} onChange={(e) => setForm({ ...form, qualityAccess: e.target.checked })} />
-                {t("مسؤول عن الجودة في فرعه", "Responsible for Quality at their branch")}
-              </label>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
-                <input type="checkbox" checked={!!form.maintenanceAccess} onChange={(e) => setForm({ ...form, maintenanceAccess: e.target.checked })} />
-                {t("مسؤول عن الصيانة في فرعه", "Responsible for Maintenance at their branch")}
-              </label>
             </div>
           </div>
         )}
@@ -10945,8 +10997,6 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
                       {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
                       {u.role !== "employee" && u.employeeId && ` · 🧑‍💼 ${t("مرتبط بسجل موظف:", "Linked to employee:")} ${employees.find((e) => e.id === u.employeeId)?.name || "—"}`}
                       {Array.isArray(u.customTabs) && ` · 🔧 ${t(`صلاحيات مخصصة (${u.customTabs.length} تبويب)`, `Custom access (${u.customTabs.length} tabs)`)}`}
-                      {u.qualityAccess && ` · ◒ ${t("الجودة", "Quality")}`}
-                      {u.maintenanceAccess && ` · 🔧 ${t("الصيانة", "Maintenance")}`}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
