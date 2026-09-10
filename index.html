@@ -8997,10 +8997,22 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
     setFillResults(tpl.items.map((it) => ({ item: it, pass: true })));
     setFillNote("");
     setFillPhotos([]);
+    setNewFillItemText("");
   };
 
   const toggleResult = (idx, pass) => {
     setFillResults((prev) => prev.map((r, i) => (i === idx ? { ...r, pass } : r)));
+  };
+
+  const [newFillItemText, setNewFillItemText] = useState("");
+  const addFillItem = () => {
+    const text = newFillItemText.trim();
+    if (!text) return;
+    setFillResults((prev) => [...prev, { item: text, pass: true }]);
+    setNewFillItemText("");
+  };
+  const removeFillItem = (idx) => {
+    setFillResults((prev) => prev.filter((_, i) => i !== idx));
   };
 
   const submitFill = () => {
@@ -9171,12 +9183,23 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
             {fillResults.map((r, idx) => (
               <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px dashed ${COLORS.line}` }}>
                 <div style={{ fontSize: 12.5, flex: 1 }}>{r.item}</div>
-                <div style={{ display: "flex", gap: 4 }}>
+                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                   <button type="button" onClick={() => toggleResult(idx, true)} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: r.pass ? COLORS.greenBg : "#f2f2f2", color: r.pass ? COLORS.green : "#999" }}>{t("مطابق", "Pass")}</button>
                   <button type="button" onClick={() => toggleResult(idx, false)} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: !r.pass ? COLORS.brickBg : "#f2f2f2", color: !r.pass ? COLORS.brick : "#999" }}>{t("غير مطابق", "Fail")}</button>
+                  <button type="button" onClick={() => removeFillItem(idx)} title={t("حذف البند", "Remove item")} style={{ border: "none", background: "transparent", color: "#c9a98f", fontSize: 13, cursor: "pointer", padding: "4px 2px" }}>✕</button>
                 </div>
               </div>
             ))}
+            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+              <input
+                style={{ ...inputStyle, flex: 1 }}
+                value={newFillItemText}
+                onChange={(e) => setNewFillItemText(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addFillItem(); } }}
+                placeholder={t("بند إضافي لهذا الفحص فقط...", "Extra item for this check only...")}
+              />
+              <Btn small tone="secondary" onClick={addFillItem}>{t("➕ إضافة بند", "➕ Add Item")}</Btn>
+            </div>
             <div style={{ marginTop: 12 }}>
               <Field label={t("ملاحظات عامة (اختياري)", "General Notes (optional)")}>
                 <textarea style={{ ...inputStyle, width: "100%", minHeight: 50, resize: "vertical", fontFamily: "inherit" }} value={fillNote} onChange={(e) => setFillNote(e.target.value)} />
