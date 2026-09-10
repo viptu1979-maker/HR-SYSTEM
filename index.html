@@ -685,6 +685,8 @@ const NAV = [
   { key: "messages", label: "الرسائل", labelEn: "Messages", icon: "✉" },
   { key: "payroll", label: "الرواتب و GOSI", labelEn: "Payroll & GOSI", icon: "◎" },
   { key: "eos", label: "نهاية الخدمة", labelEn: "End of Service", icon: "◆" },
+  { key: "quality", label: "الجودة", labelEn: "Quality", icon: "◒" },
+  { key: "maintenance", label: "الصيانة", labelEn: "Maintenance", icon: "🔧" },
   { key: "reports", label: "التقارير", labelEn: "Reports", icon: "▥" },
   { key: "settings", label: "الإعدادات", labelEn: "Settings", icon: "⚙" },
 ];
@@ -732,6 +734,13 @@ const NAV_GROUPS = [
     icon: "◎",
     items: ["payroll", "eos"],
   },
+  {
+    key: "grp-quality-maintenance",
+    label: "الجودة والصيانة",
+    labelEn: "Quality & Maintenance",
+    icon: "🔧",
+    items: ["quality", "maintenance"],
+  },
   { key: "reports", standalone: true },
   { key: "settings", standalone: true },
   { key: "users", standalone: true },
@@ -745,8 +754,8 @@ const USERS_SEED = [
 /* كلمة المرور الافتراضية عند توليد حسابات جماعية للموظفين — يُجبر الموظف على تغييرها أول ما يدخل بيها */
 const DEFAULT_BULK_PASSWORD = "admin@123";
 
-const ROLE_LABELS = { admin: "أدمن", manager: "مسؤول عام", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", accountant: "محاسب", cashier: "أمين صندوق", employee: "موظف" };
-const ROLE_LABELS_EN = { admin: "Admin", manager: "General Manager", entity_manager: "Entity Manager", branch_manager: "Branch Manager", accountant: "Accountant", cashier: "Cashier", employee: "Employee" };
+const ROLE_LABELS = { admin: "أدمن", manager: "مسؤول عام", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", accountant: "محاسب", cashier: "أمين صندوق", quality: "مختص الجودة", maintenance: "مختص الصيانة", employee: "موظف" };
+const ROLE_LABELS_EN = { admin: "Admin", manager: "General Manager", entity_manager: "Entity Manager", branch_manager: "Branch Manager", accountant: "Accountant", cashier: "Cashier", quality: "Quality Specialist", maintenance: "Maintenance Specialist", employee: "Employee" };
 /* اسم الدور المعروض — لو الدور "custom" (دور مخصص كتبه الأدمن يدويًا) بيرجّع الاسم اللي كتبه، وإلا بيرجّع الترجمة القياسية */
 function roleLabel(u, t) {
   if (!u) return "—";
@@ -779,14 +788,16 @@ function trLabel(t, dict, v) {
   return t(v, dict[v] || v);
 }
 
-const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "", mustChangePassword: false };
-const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "attendanceLog", "compliance", "leaveRequests", "advanceRequests", "tasks", "messages", "payroll", "eos", "settings"];
+const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "", mustChangePassword: false, qualityAccess: false, maintenanceAccess: false };
+const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "attendanceLog", "compliance", "leaveRequests", "advanceRequests", "tasks", "messages", "payroll", "eos", "quality", "maintenance", "settings"];
 
 /* التبويبات الافتراضية المقترحة لكل دور — تظهر مُفعّلة تلقائيًا عند اختيار الدور، وتقدر تعدّلها يدويًا بعد كده */
 const ROLE_DEFAULT_TABS = {
   accountant: ["dash", "employees", "iqamas", "licenses", "payroll", "eos", "advanceRequests"],
   cashier: ["dash", "advanceRequests", "payroll"],
   custom: ["dash"],
+  quality: ["quality"],
+  maintenance: ["maintenance"],
 };
 function defaultTabsForRole(role) {
   if (ROLE_DEFAULT_TABS[role]) return ROLE_DEFAULT_TABS[role];
@@ -801,6 +812,8 @@ function navForRole(role) {
   if (role === "entity_manager") return NAV.filter((n) => n.key !== "reports"); // كل التبويبات عدا التقارير (سجل الدخول حصري للأدمن العام) وبدون تبويب المستخدمين
   if (role === "branch_manager")
     return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "attendanceLog", "compliance", "tasks", "payroll", "eos"].includes(n.key));
+  if (role === "quality") return NAV.filter((n) => ["dash", "quality"].includes(n.key));
+  if (role === "maintenance") return NAV.filter((n) => ["dash", "maintenance"].includes(n.key));
   return [];
 }
 
@@ -1319,6 +1332,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const isManager = role === "manager";
   const isEntityManager = role === "entity_manager";
   const isBranchManager = role === "branch_manager";
+  const isQuality = role === "quality";
+  const isMaintenance = role === "maintenance";
   const navItems =
     !isAdmin && Array.isArray(currentUser.customTabs)
       ? NAV.filter((n) => currentUser.customTabs.includes(n.key))
@@ -1344,6 +1359,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [payrollItems, setPayrollItems] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [messages, setMessages] = useState([]);
+  const [equipment, setEquipment] = useState([]);
+  const [workOrders, setWorkOrders] = useState([]);
+  const [qualityTemplates, setQualityTemplates] = useState([]);
+  const [qualitySubmissions, setQualitySubmissions] = useState([]);
   const [gosiRates, setGosiRates] = useState({
     saudiEmployee: 9.75,
     saudiEmployer: 11.75,
@@ -1403,6 +1422,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             payrollItems: d.payrollItems || [],
             tasks: d.tasks || [],
             messages: d.messages || [],
+            equipment: d.equipment || [],
+            workOrders: d.workOrders || [],
+            qualityTemplates: d.qualityTemplates || [],
+            qualitySubmissions: d.qualitySubmissions || [],
           };
           setEntities(next.entities);
           setBranches(next.branches);
@@ -1416,10 +1439,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setPayrollItems(next.payrollItems);
           setTasks(next.tasks);
           setMessages(next.messages);
+          setEquipment(next.equipment);
+          setWorkOrders(next.workOrders);
+          setQualityTemplates(next.qualityTemplates);
+          setQualitySubmissions(next.qualitySubmissions);
           lastSyncedRef.current = JSON.stringify(next);
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [], messages: [] }).catch(() => {});
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [] }).catch(() => {});
         }
         setSyncError("");
         setLoaded(true);
@@ -1448,7 +1475,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   useEffect(() => {
     if (!loaded) return;
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1482,7 +1509,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return;
     }
     setDirty(true);
-  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, loaded, role, retryTick]);
+  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, loaded, role, retryTick]);
 
   /* نسخة احتياطية يومية تلقائية (بيانات النظام + حسابات الدخول معًا) — لو انحذف أو اتغيّر شيء بالغلط
      (من داخل النظام أو حتى من Firestore Console مباشرة) يقدر الأدمن يسترجعها من تبويب "الإعدادات" */
@@ -1498,7 +1525,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           date: today,
           savedAt: firebase.firestore.FieldValue.serverTimestamp(),
           entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance,
-          gosiRates, vehicles, payrollItems, tasks, messages, users,
+          gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, users,
         });
       })
       .then(() => {
@@ -1546,7 +1573,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       entities: bEntities, branches: bBranches, employees: bEmployees, leaves: bLeaves,
       leaveRequests: bLeaveRequests, advanceRequests: bAdvanceRequests, attendance: bAttendance,
       gosiRates: bGosiRates, vehicles: bVehicles, payrollItems: bPayrollItems, tasks: bTasks,
-      messages: bMessages, users: bUsers,
+      messages: bMessages, equipment: bEquipment, workOrders: bWorkOrders, qualityTemplates: bQualityTemplates,
+      qualitySubmissions: bQualitySubmissions, users: bUsers,
     } = backupData;
     setEntities(bEntities || []);
     setBranches(bBranches || []);
@@ -1560,11 +1588,16 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     setPayrollItems(bPayrollItems || []);
     setTasks(bTasks || []);
     setMessages(bMessages || []);
+    setEquipment(bEquipment || []);
+    setWorkOrders(bWorkOrders || []);
+    setQualityTemplates(bQualityTemplates || []);
+    setQualitySubmissions(bQualitySubmissions || []);
     const payload = {
       entities: bEntities || [], branches: bBranches || [], employees: bEmployees || [], leaves: bLeaves || [],
       leaveRequests: bLeaveRequests || [], advanceRequests: bAdvanceRequests || [], attendance: bAttendance || [],
       gosiRates: bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
       vehicles: bVehicles || [], payrollItems: bPayrollItems || [], tasks: bTasks || [], messages: bMessages || [],
+      equipment: bEquipment || [], workOrders: bWorkOrders || [], qualityTemplates: bQualityTemplates || [], qualitySubmissions: bQualitySubmissions || [],
     };
     DATA_DOC.set(payload).then(() => {
       lastSyncedRef.current = JSON.stringify(payload);
@@ -1608,7 +1641,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
   const saveNow = () => {
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1678,6 +1711,27 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     : isEntityManager
     ? vehicles.filter((v) => scopedBranches.some((b) => b.id === v.branchId))
     : vehicles;
+  /* نطاق معدات ومهام الجودة/الصيانة: مسؤول الفرع ومختص الجودة ومختص الصيانة يشوفون فرعهم فقط */
+  const scopedEquipment = isBranchManager || isQuality || isMaintenance
+    ? equipment.filter((x) => x.branchId === currentUser.branchId)
+    : isEntityManager
+    ? equipment.filter((x) => scopedBranches.some((b) => b.id === x.branchId))
+    : equipment;
+  const scopedWorkOrders = isBranchManager || isQuality || isMaintenance
+    ? workOrders.filter((x) => x.branchId === currentUser.branchId)
+    : isEntityManager
+    ? workOrders.filter((x) => scopedBranches.some((b) => b.id === x.branchId))
+    : workOrders;
+  const scopedQualityTemplates = isBranchManager || isQuality || isMaintenance
+    ? qualityTemplates.filter((x) => x.branchId === currentUser.branchId)
+    : isEntityManager
+    ? qualityTemplates.filter((x) => scopedBranches.some((b) => b.id === x.branchId))
+    : qualityTemplates;
+  const scopedQualitySubmissions = isBranchManager || isQuality || isMaintenance
+    ? qualitySubmissions.filter((x) => x.branchId === currentUser.branchId)
+    : isEntityManager
+    ? qualitySubmissions.filter((x) => scopedBranches.some((b) => b.id === x.branchId))
+    : qualitySubmissions;
   const scopedPayrollItems = isBranchManager || isEntityManager
     ? payrollItems.filter((p) => scopedEmployees.some((e) => e.id === p.employeeId))
     : payrollItems;
@@ -1743,6 +1797,101 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       if (url) deleteFileFromStorage(url);
       return prev.map((x) => (x.id === taskId ? { ...x, completionVideos: (x.completionVideos || []).filter((_, i) => i !== videoIndex) } : x));
     });
+  };
+
+  /* ============ الجودة والصيانة ============
+     المعدات وطلبات الصيانة مرتبطة بفرع محدد (branchId) — مختص الصيانة/الجودة والمسؤول عن الفرع
+     يضيفون بيانات فرعهم تلقائيًا، بينما الأدمن/المسؤول العام يختار الفرع يدويًا */
+  const defaultQmBranchId = (isBranchManager || isQuality || isMaintenance)
+    ? currentUser.branchId || ""
+    : (role === "employee" && (currentUser.qualityAccess || currentUser.maintenanceAccess))
+    ? employees.find((e) => e.id === currentUser.employeeId)?.branchId || ""
+    : "";
+
+  const addEquipment = (eq) => {
+    const newEq = { ...eq, id: uid(), branchId: eq.branchId || defaultQmBranchId, photos: [] };
+    setEquipment((prev) => [newEq, ...prev]);
+    logActivity && logActivity("إضافة معدة", "maintenance", eq.name);
+  };
+  const updateEquipment = (id, patch) => {
+    setEquipment((prev) => prev.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+    logActivity && logActivity("تعديل معدة", "maintenance", equipment.find((x) => x.id === id)?.name || "");
+  };
+  const removeEquipment = (id) => {
+    const eq = equipment.find((x) => x.id === id);
+    (eq?.photos || []).forEach((u) => u && deleteFileFromStorage(u));
+    setEquipment((prev) => prev.filter((x) => x.id !== id));
+    logActivity && logActivity("حذف معدة", "maintenance", eq?.name || "");
+  };
+  const addEquipmentPhotos = (id, urls) => {
+    setEquipment((prev) => prev.map((x) => (x.id === id ? { ...x, photos: [...(x.photos || []), ...urls] } : x)));
+  };
+  const removeEquipmentPhoto = (id, idx) => {
+    setEquipment((prev) => {
+      const eq = prev.find((x) => x.id === id);
+      const url = eq?.photos?.[idx];
+      if (url) deleteFileFromStorage(url);
+      return prev.map((x) => (x.id === id ? { ...x, photos: (x.photos || []).filter((_, i) => i !== idx) } : x));
+    });
+  };
+
+  const addWorkOrder = (wo) => {
+    const newWo = { ...wo, id: uid(), branchId: wo.branchId || defaultQmBranchId, status: "مفتوح", photos: [], videoUrl: "", createdBy: currentUser.name, createdAt: new Date().toISOString() };
+    setWorkOrders((prev) => [newWo, ...prev]);
+    logActivity && logActivity("طلب صيانة جديد", "maintenance", wo.title || "");
+  };
+  const updateWorkOrderStatus = (id, status) => {
+    setWorkOrders((prev) => prev.map((x) => (x.id === id ? { ...x, status, completedAt: status === "مكتمل" ? new Date().toISOString() : x.completedAt } : x)));
+    logActivity && logActivity("تحديث حالة طلب صيانة", "maintenance", workOrders.find((x) => x.id === id)?.title || "");
+  };
+  const removeWorkOrder = (id) => {
+    const wo = workOrders.find((x) => x.id === id);
+    (wo?.photos || []).forEach((u) => u && deleteFileFromStorage(u));
+    if (wo?.videoUrl) deleteFileFromStorage(wo.videoUrl);
+    setWorkOrders((prev) => prev.filter((x) => x.id !== id));
+    logActivity && logActivity("حذف طلب صيانة", "maintenance", wo?.title || "");
+  };
+  const addWorkOrderPhotos = (id, urls) => {
+    setWorkOrders((prev) => prev.map((x) => (x.id === id ? { ...x, photos: [...(x.photos || []), ...urls] } : x)));
+  };
+  const removeWorkOrderPhoto = (id, idx) => {
+    setWorkOrders((prev) => {
+      const wo = prev.find((x) => x.id === id);
+      const url = wo?.photos?.[idx];
+      if (url) deleteFileFromStorage(url);
+      return prev.map((x) => (x.id === id ? { ...x, photos: (x.photos || []).filter((_, i) => i !== idx) } : x));
+    });
+  };
+  const addWorkOrderVideo = (id, url) => {
+    setWorkOrders((prev) => prev.map((x) => (x.id === id ? { ...x, videoUrl: url } : x)));
+  };
+  const removeWorkOrderVideo = (id) => {
+    setWorkOrders((prev) => {
+      const wo = prev.find((x) => x.id === id);
+      if (wo?.videoUrl) deleteFileFromStorage(wo.videoUrl);
+      return prev.map((x) => (x.id === id ? { ...x, videoUrl: "" } : x));
+    });
+  };
+
+  const addQualityTemplate = (tpl) => {
+    setQualityTemplates((prev) => [{ ...tpl, id: uid(), branchId: tpl.branchId || defaultQmBranchId }, ...prev]);
+    logActivity && logActivity("إضافة قالب فحص جودة", "quality", tpl.name);
+  };
+  const removeQualityTemplate = (id) => {
+    const tp = qualityTemplates.find((x) => x.id === id);
+    setQualityTemplates((prev) => prev.filter((x) => x.id !== id));
+    logActivity && logActivity("حذف قالب فحص جودة", "quality", tp?.name || "");
+  };
+  const addQualitySubmission = (sub) => {
+    const newSub = { ...sub, id: uid(), branchId: sub.branchId || defaultQmBranchId, submittedBy: currentUser.name, submittedAt: new Date().toISOString(), photos: sub.photos || [] };
+    setQualitySubmissions((prev) => [newSub, ...prev]);
+    logActivity && logActivity("تعبئة فحص جودة", "quality", sub.templateName || "");
+  };
+  const removeQualitySubmission = (id) => {
+    const sub = qualitySubmissions.find((x) => x.id === id);
+    (sub?.photos || []).forEach((u) => u && deleteFileFromStorage(u));
+    setQualitySubmissions((prev) => prev.filter((x) => x.id !== id));
+    logActivity && logActivity("حذف فحص جودة", "quality", sub?.templateName || "");
   };
 
   /* ============ رسائل للموظفين ============
@@ -1839,6 +1988,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل */
   if (role === "employee") {
     const myEmployee = employees.find((e) => e.id === currentUser.employeeId);
+    /* موظف عنده صلاحية جودة و/أو صيانة إضافية: يشوف بيانات فرعه فقط من المعدات وطلبات الصيانة وقوالب/سجلات الجودة */
+    const myBranchIdForQm = myEmployee?.branchId || "";
+    const myQmEquipment = equipment.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmWorkOrders = workOrders.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmTemplates = qualityTemplates.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmSubmissions = qualitySubmissions.filter((x) => x.branchId === myBranchIdForQm);
     const submitLeaveRequest = (req) => {
       const newReq = {
         ...req,
@@ -2198,6 +2353,29 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         saving={saving}
         syncError={syncError}
         onSave={saveNow}
+        qualityAccess={!!currentUser.qualityAccess}
+        maintenanceAccess={!!currentUser.maintenanceAccess}
+        branches={branches}
+        equipment={myQmEquipment}
+        workOrders={myQmWorkOrders}
+        qualityTemplates={myQmTemplates}
+        qualitySubmissions={myQmSubmissions}
+        onAddEquipment={addEquipment}
+        onUpdateEquipment={updateEquipment}
+        onRemoveEquipment={removeEquipment}
+        onAddEquipmentPhotos={addEquipmentPhotos}
+        onRemoveEquipmentPhoto={removeEquipmentPhoto}
+        onAddWorkOrder={addWorkOrder}
+        onUpdateWorkOrderStatus={updateWorkOrderStatus}
+        onRemoveWorkOrder={removeWorkOrder}
+        onAddWorkOrderPhotos={addWorkOrderPhotos}
+        onRemoveWorkOrderPhoto={removeWorkOrderPhoto}
+        onAddWorkOrderVideo={addWorkOrderVideo}
+        onRemoveWorkOrderVideo={removeWorkOrderVideo}
+        onAddQualityTemplate={addQualityTemplate}
+        onRemoveQualityTemplate={removeQualityTemplate}
+        onAddQualitySubmission={addQualitySubmission}
+        onRemoveQualitySubmission={removeQualitySubmission}
       />
     );
   }
@@ -2770,6 +2948,40 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           />
         )}
         {tab === "eos" && <EOSTab employees={scopedEmployees} />}
+        {hasTab("maintenance") && tab === "maintenance" && (
+          <MaintenanceTab
+            equipment={scopedEquipment}
+            workOrders={scopedWorkOrders}
+            branches={scopedBranches}
+            defaultBranchId={defaultQmBranchId}
+            onAddEquipment={addEquipment}
+            onUpdateEquipment={updateEquipment}
+            onRemoveEquipment={removeEquipment}
+            onAddEquipmentPhotos={addEquipmentPhotos}
+            onRemoveEquipmentPhoto={removeEquipmentPhoto}
+            onAddWorkOrder={addWorkOrder}
+            onUpdateWorkOrderStatus={updateWorkOrderStatus}
+            onRemoveWorkOrder={removeWorkOrder}
+            onAddWorkOrderPhotos={addWorkOrderPhotos}
+            onRemoveWorkOrderPhoto={removeWorkOrderPhoto}
+            onAddWorkOrderVideo={addWorkOrderVideo}
+            onRemoveWorkOrderVideo={removeWorkOrderVideo}
+          />
+        )}
+        {hasTab("quality") && tab === "quality" && (
+          <QualityTab
+            equipment={scopedEquipment}
+            templates={scopedQualityTemplates}
+            submissions={scopedQualitySubmissions}
+            branches={scopedBranches}
+            defaultBranchId={defaultQmBranchId}
+            onAddTemplate={addQualityTemplate}
+            onRemoveTemplate={removeQualityTemplate}
+            onAddSubmission={addQualitySubmission}
+            onRemoveSubmission={removeQualitySubmission}
+            onReportIssue={addWorkOrder}
+          />
+        )}
         {isAdmin && hasTab("reports") && tab === "reports" && (
           <ReportsTab activityLog={activityLog} users={users} />
         )}
@@ -8237,6 +8449,628 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
 }
 
 
+/* ============ الصيانة: المعدات وطلبات الصيانة ============
+   وحدة جديدة تخدم دور "مختص الصيانة" (وتُعرض أيضًا للأدمن/المسؤول العام ومسؤول الفرع حسب الصلاحيات).
+   المعدات وطلبات الصيانة مرتبطة بفرع محدد؛ الصور تُرفع على Firebase Storage (رابط فقط يُخزَّن في
+   Firestore) بنفس أسلوب صور توثيق المهام تمامًا، تفاديًا لأي تضخّم في حجم مستند البيانات المشترك. */
+const EQUIPMENT_CATEGORIES = ["تحضير القهوة", "طحن", "تبريد", "مياه وتنقية", "تحميص", "عرض وتقديم", "أخرى"];
+const EQUIPMENT_CATEGORIES_EN = { "تحضير القهوة": "Coffee Prep", "طحن": "Grinding", "تبريد": "Refrigeration", "مياه وتنقية": "Water & Filtration", "تحميص": "Roasting", "عرض وتقديم": "Display & Service", "أخرى": "Other" };
+const EQUIPMENT_LOCATIONS = ["منطقة الإسبريسو", "محطة التحضير اليدوي", "الكاونتر", "غرفة تخزين الحبوب", "منطقة التحميص", "الصالة", "المخزن", "أخرى"];
+const EQUIPMENT_LOCATIONS_EN = { "منطقة الإسبريسو": "Espresso Station", "محطة التحضير اليدوي": "Pour-over Station", "الكاونتر": "Counter", "غرفة تخزين الحبوب": "Bean Storage Room", "منطقة التحميص": "Roasting Area", "الصالة": "Dining Area", "المخزن": "Storage", "أخرى": "Other" };
+const EMPTY_EQUIPMENT = { name: "", category: EQUIPMENT_CATEGORIES[0], location: EQUIPMENT_LOCATIONS[0], purchaseDate: "", frequencyDays: 30, notes: "", branchId: "", status: "نشط" };
+const EMPTY_WORK_ORDER = { equipmentId: "", title: "", description: "", priority: "متوسط", cost: "", branchId: "" };
+
+function nextDueDate(eq) {
+  if (!eq.lastMaintenance || !eq.frequencyDays) return null;
+  const d = new Date(eq.lastMaintenance);
+  d.setDate(d.getDate() + Number(eq.frequencyDays || 0));
+  return d.toISOString().slice(0, 10);
+}
+function isEquipmentOverdue(eq) {
+  const due = nextDueDate(eq);
+  if (!due) return false;
+  return due < new Date().toISOString().slice(0, 10);
+}
+
+function MaintenanceTab({
+  equipment, workOrders, branches, defaultBranchId,
+  onAddEquipment, onUpdateEquipment, onRemoveEquipment, onAddEquipmentPhotos, onRemoveEquipmentPhoto,
+  onAddWorkOrder, onUpdateWorkOrderStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
+}) {
+  const { t } = useLang();
+  const [subView, setSubView] = useState("equipment");
+  const [eqForm, setEqForm] = useState({ ...EMPTY_EQUIPMENT, branchId: defaultBranchId || "" });
+  const [woForm, setWoForm] = useState({ ...EMPTY_WORK_ORDER, branchId: defaultBranchId || "" });
+  const [photoBusy, setPhotoBusy] = useState({});
+  const [videoBusy, setVideoBusy] = useState({});
+  const [videoError, setVideoError] = useState({});
+  const [lightbox, setLightbox] = useState(null);
+  const [statusFilter, setStatusFilter] = useState("");
+
+  const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
+  const equipmentName = (id) => equipment.find((x) => x.id === id)?.name || t("معدة محذوفة", "Deleted equipment");
+  const todayISO = new Date().toISOString().slice(0, 10);
+
+  const submitEquipment = () => {
+    if (!eqForm.name.trim()) return;
+    if (!defaultBranchId && !eqForm.branchId) return;
+    onAddEquipment({ ...eqForm, name: eqForm.name.trim(), frequencyDays: Number(eqForm.frequencyDays) || 30, lastMaintenance: todayISO });
+    setEqForm({ ...EMPTY_EQUIPMENT, branchId: defaultBranchId || "" });
+  };
+
+  const submitWorkOrder = () => {
+    if (!woForm.title.trim()) return;
+    if (!defaultBranchId && !woForm.branchId) return;
+    const eq = equipment.find((x) => x.id === woForm.equipmentId);
+    onAddWorkOrder({ ...woForm, title: woForm.title.trim(), branchId: woForm.branchId || (eq ? eq.branchId : defaultBranchId) });
+    setWoForm({ ...EMPTY_WORK_ORDER, branchId: defaultBranchId || "" });
+  };
+
+  const handlePhotoUpload = async (kind, id, files) => {
+    if (!files || files.length === 0) return;
+    const key = `${kind}_${id}`;
+    setPhotoBusy((p) => ({ ...p, [key]: true }));
+    try {
+      const compressed = await Promise.all(Array.from(files).slice(0, 3).map((f) => compressImage(f, 900, 0.7)));
+      const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `${kind === "eq" ? "equipmentPhotos" : "workOrderPhotos"}/${id}`)));
+      if (kind === "eq") onAddEquipmentPhotos(id, urls);
+      else onAddWorkOrderPhotos(id, urls);
+    } catch (err) {
+      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+    }
+    setPhotoBusy((p) => ({ ...p, [key]: false }));
+  };
+
+  const handleVideoUpload = async (id, files) => {
+    if (!files || files.length === 0) return;
+    const MAX_MB = 100;
+    setVideoError((v) => ({ ...v, [id]: "" }));
+    const tooLarge = Array.from(files).find((f) => f.size > MAX_MB * 1024 * 1024);
+    if (tooLarge) {
+      setVideoError((v) => ({ ...v, [id]: t(`الملف أكبر من ${MAX_MB} ميجابايت — قلّل حجمه وحاول تاني`, `File is larger than ${MAX_MB}MB — reduce its size and try again`) }));
+      return;
+    }
+    setVideoBusy((v) => ({ ...v, [id]: true }));
+    try {
+      const url = await uploadFileToStorage(files[0], `workOrderVideos/${id}`);
+      onAddWorkOrderVideo(id, url);
+    } catch (err) {
+      setVideoError((v) => ({ ...v, [id]: t("تعذّر رفع الفيديو — تأكد من اتصال الإنترنت وحاول تاني.", "Couldn't upload the video — check your internet connection and try again.") }));
+    }
+    setVideoBusy((v) => ({ ...v, [id]: false }));
+  };
+
+  const activeEquipment = equipment.filter((x) => x.status !== "خارج الخدمة").length;
+  const overdueEquipment = equipment.filter(isEquipmentOverdue).length;
+  const openOrders = workOrders.filter((x) => x.status !== "مكتمل").length;
+  const doneOrders = workOrders.filter((x) => x.status === "مكتمل").length;
+
+  const visibleOrders = workOrders.filter((x) => !statusFilter || x.status === statusFilter).slice().sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+  const priorityTone = (p) => (p === "عالي" ? "brick" : p === "منخفض" ? "green" : "gold");
+  const statusTone = (s) => (s === "مكتمل" ? "green" : s === "قيد التنفيذ" ? "gold" : "brick");
+
+  return (
+    <div>
+      <Header title={t("الصيانة", "Maintenance")} subtitle={t("متابعة المعدات وطلبات الصيانة الدورية والطارئة", "Track equipment and scheduled/urgent maintenance requests")} />
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+        <ReceiptCard label={t("معدات نشطة", "Active Equipment")} value={fmt(activeEquipment)} tone={COLORS.green} />
+        <ReceiptCard label={t("بحاجة لصيانة", "Needs Maintenance")} value={fmt(overdueEquipment)} tone={COLORS.brick} />
+        <ReceiptCard label={t("طلبات مفتوحة", "Open Requests")} value={fmt(openOrders)} tone={COLORS.gold} />
+        <ReceiptCard label={t("مكتملة", "Completed")} value={fmt(doneOrders)} tone={COLORS.green} />
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }} className="no-print">
+        <Btn small tone={subView === "equipment" ? "primary" : "secondary"} onClick={() => setSubView("equipment")}>{t("المعدات", "Equipment")}</Btn>
+        <Btn small tone={subView === "orders" ? "primary" : "secondary"} onClick={() => setSubView("orders")}>{t("طلبات الصيانة", "Work Orders")}</Btn>
+      </div>
+
+      {subView === "equipment" && (
+        <div>
+          <SectionTitle className="no-print">{t("إضافة معدة جديدة", "Add New Equipment")}</SectionTitle>
+          <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 16 }} className="no-print">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              <Field label={t("اسم المعدة", "Equipment Name")} required>
+                <input style={inputStyle} value={eqForm.name} onChange={(e) => setEqForm({ ...eqForm, name: e.target.value })} placeholder={t("مثال: ماكينة إسبريسو - 3 مجموعات", "e.g. Espresso Machine - 3 Groups")} />
+              </Field>
+              <Field label={t("الفئة", "Category")}>
+                <select style={inputStyle} value={eqForm.category} onChange={(e) => setEqForm({ ...eqForm, category: e.target.value })}>
+                  {EQUIPMENT_CATEGORIES.map((c) => <option key={c} value={c}>{t(c, EQUIPMENT_CATEGORIES_EN[c])}</option>)}
+                </select>
+              </Field>
+              <Field label={t("الموقع", "Location")}>
+                <select style={inputStyle} value={eqForm.location} onChange={(e) => setEqForm({ ...eqForm, location: e.target.value })}>
+                  {EQUIPMENT_LOCATIONS.map((l) => <option key={l} value={l}>{t(l, EQUIPMENT_LOCATIONS_EN[l])}</option>)}
+                </select>
+              </Field>
+              {!defaultBranchId && (
+                <Field label={t("الفرع", "Branch")} required>
+                  <select style={inputStyle} value={eqForm.branchId} onChange={(e) => setEqForm({ ...eqForm, branchId: e.target.value })}>
+                    <option value="">{t("اختر الفرع", "Select branch")}</option>
+                    {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </Field>
+              )}
+              <Field label={t("دورة الصيانة (أيام)", "Maintenance Cycle (days)")}>
+                <input type="number" min="1" style={inputStyle} value={eqForm.frequencyDays} onChange={(e) => setEqForm({ ...eqForm, frequencyDays: e.target.value })} />
+              </Field>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <Field label={t("ملاحظات (اختياري)", "Notes (optional)")}>
+                <input style={{ ...inputStyle, width: "100%" }} value={eqForm.notes} onChange={(e) => setEqForm({ ...eqForm, notes: e.target.value })} />
+              </Field>
+            </div>
+            <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+              <Btn onClick={submitEquipment}>{t("➕ إضافة المعدة", "➕ Add Equipment")}</Btn>
+            </div>
+          </div>
+
+          <SectionTitle>{t("قائمة المعدات", "Equipment List")} ({equipment.length})</SectionTitle>
+          {equipment.length === 0 && (
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+              <Empty text={t("لا توجد معدات مسجّلة", "No equipment registered")} />
+            </div>
+          )}
+          {equipment.map((eq) => {
+            const overdue = isEquipmentOverdue(eq);
+            const due = nextDueDate(eq);
+            const busyKey = `eq_${eq.id}`;
+            return (
+              <div key={eq.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+                  <div>
+                    <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{eq.name}</div>
+                    <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{t(eq.category, EQUIPMENT_CATEGORIES_EN[eq.category] || eq.category)} · {t(eq.location, EQUIPMENT_LOCATIONS_EN[eq.location] || eq.location)} · {branchName(eq.branchId)}</div>
+                    {due && <div style={{ fontSize: 11.5, marginTop: 6, color: overdue ? COLORS.brick : "#5a4c38", fontFamily: "Consolas, monospace" }}>{t("الصيانة القادمة", "Next Maintenance")}: {due}</div>}
+                    {eq.notes && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{eq.notes}</div>}
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                    <Stamp tone={eq.status === "خارج الخدمة" ? "brick" : "green"}>{eq.status === "خارج الخدمة" ? t("خارج الخدمة", "Out of Service") : t("نشط", "Active")}</Stamp>
+                    {overdue && <Stamp tone="brick">{t("متأخرة", "Overdue")}</Stamp>}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }} className="no-print">
+                  <Btn small onClick={() => onUpdateEquipment(eq.id, { lastMaintenance: todayISO })}>{t("✔ سُجّلت الصيانة اليوم", "✔ Maintenance Logged Today")}</Btn>
+                  <Btn small tone="secondary" onClick={() => onUpdateEquipment(eq.id, { status: eq.status === "خارج الخدمة" ? "نشط" : "خارج الخدمة" })}>
+                    {eq.status === "خارج الخدمة" ? t("↺ إعادة للخدمة", "↺ Return to Service") : t("⛔ خارج الخدمة", "⛔ Out of Service")}
+                  </Btn>
+                  <Btn small tone="secondary" onClick={() => { setSubView("orders"); setWoForm({ ...EMPTY_WORK_ORDER, branchId: eq.branchId, equipmentId: eq.id, title: t(`عطل في ${eq.name}`, `Issue with ${eq.name}`) }); }}>
+                    {t("🔧 طلب صيانة", "🔧 Request Maintenance")}
+                  </Btn>
+                  <Btn small tone="danger" onClick={() => onRemoveEquipment(eq.id)}>{t("✕ حذف", "✕ Delete")}</Btn>
+                </div>
+                <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("صور المعدة", "Equipment Photos")} {eq.photos && eq.photos.length > 0 ? `(${eq.photos.length})` : ""}</div>
+                  {(eq.photos || []).length > 0 && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                      {eq.photos.map((photo, idx) => (
+                        <div key={idx} style={{ position: "relative" }}>
+                          <img src={photo} alt="" onClick={() => setLightbox(photo)} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.line}`, cursor: "pointer" }} />
+                          <button className="no-print" onClick={() => onRemoveEquipmentPhoto(eq.id, idx)} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {(!eq.photos || eq.photos.length < 3) && (
+                    <input type="file" accept="image/*" multiple disabled={!!photoBusy[busyKey]} className="no-print" style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
+                      onChange={(e) => { handlePhotoUpload("eq", eq.id, e.target.files); e.target.value = ""; }} />
+                  )}
+                  {photoBusy[busyKey] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {subView === "orders" && (
+        <div>
+          <SectionTitle className="no-print">{t("طلب صيانة جديد", "New Maintenance Request")}</SectionTitle>
+          <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 16 }} className="no-print">
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+              <Field label={t("المعدة", "Equipment")}>
+                <select style={inputStyle} value={woForm.equipmentId} onChange={(e) => setWoForm({ ...woForm, equipmentId: e.target.value, branchId: equipment.find((x) => x.id === e.target.value)?.branchId || woForm.branchId })}>
+                  <option value="">{t("بدون معدة محددة", "No specific equipment")}</option>
+                  {equipment.map((eq) => <option key={eq.id} value={eq.id}>{eq.name}</option>)}
+                </select>
+              </Field>
+              <Field label={t("عنوان الطلب", "Request Title")} required>
+                <input style={inputStyle} value={woForm.title} onChange={(e) => setWoForm({ ...woForm, title: e.target.value })} />
+              </Field>
+              <Field label={t("الأولوية", "Priority")}>
+                <select style={inputStyle} value={woForm.priority} onChange={(e) => setWoForm({ ...woForm, priority: e.target.value })}>
+                  <option value="عالي">{t("عالي", "High")}</option>
+                  <option value="متوسط">{t("متوسط", "Medium")}</option>
+                  <option value="منخفض">{t("منخفض", "Low")}</option>
+                </select>
+              </Field>
+              {!defaultBranchId && (
+                <Field label={t("الفرع", "Branch")} required>
+                  <select style={inputStyle} value={woForm.branchId} onChange={(e) => setWoForm({ ...woForm, branchId: e.target.value })}>
+                    <option value="">{t("اختر الفرع", "Select branch")}</option>
+                    {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </Field>
+              )}
+              <Field label={t("التكلفة (اختياري)", "Cost (optional)")}>
+                <input type="number" min="0" style={inputStyle} value={woForm.cost} onChange={(e) => setWoForm({ ...woForm, cost: e.target.value })} />
+              </Field>
+            </div>
+            <div style={{ marginTop: 10 }}>
+              <Field label={t("الوصف (اختياري)", "Description (optional)")}>
+                <textarea style={{ ...inputStyle, width: "100%", minHeight: 60, resize: "vertical", fontFamily: "inherit" }} value={woForm.description} onChange={(e) => setWoForm({ ...woForm, description: e.target.value })} />
+              </Field>
+            </div>
+            <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+              <Btn onClick={submitWorkOrder}>{t("📌 إرسال الطلب", "📌 Submit Request")}</Btn>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }} className="no-print">
+            <Field label={t("تصفية بالحالة", "Filter by Status")}>
+              <select style={inputStyle} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                <option value="">{t("كل الحالات", "All Statuses")}</option>
+                <option value="مفتوح">{t("مفتوح", "Open")}</option>
+                <option value="قيد التنفيذ">{t("قيد التنفيذ", "In Progress")}</option>
+                <option value="مكتمل">{t("مكتمل", "Completed")}</option>
+              </select>
+            </Field>
+          </div>
+
+          <SectionTitle>{t("طلبات الصيانة", "Maintenance Requests")} ({visibleOrders.length})</SectionTitle>
+          {visibleOrders.length === 0 && (
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+              <Empty text={t("لا توجد طلبات صيانة", "No maintenance requests")} />
+            </div>
+          )}
+          {visibleOrders.map((wo) => (
+            <div key={wo.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
+                <div>
+                  <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{wo.title}</div>
+                  <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{wo.equipmentId ? equipmentName(wo.equipmentId) : t("بدون معدة محددة", "No specific equipment")} · {branchName(wo.branchId)}</div>
+                  {wo.description && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{wo.description}</div>}
+                  {wo.cost ? <div style={{ fontSize: 11.5, marginTop: 6, fontFamily: "Consolas, monospace" }}>{t("التكلفة", "Cost")}: {fmt(wo.cost)} ﷼</div> : null}
+                  <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 6 }}>{t("أُنشئ بواسطة", "Created by")}: {wo.createdBy || "—"}</div>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
+                  <Stamp tone={statusTone(wo.status)}>{wo.status}</Stamp>
+                  <Stamp tone={priorityTone(wo.priority)}>{wo.priority}</Stamp>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }} className="no-print">
+                {wo.status !== "مكتمل" ? (
+                  <React.Fragment>
+                    {wo.status === "مفتوح" && <Btn small onClick={() => onUpdateWorkOrderStatus(wo.id, "قيد التنفيذ")}>{t("▶ بدء التنفيذ", "▶ Start Progress")}</Btn>}
+                    <Btn small onClick={() => onUpdateWorkOrderStatus(wo.id, "مكتمل")}>{t("✔ تمييز كمكتمل", "✔ Mark Completed")}</Btn>
+                  </React.Fragment>
+                ) : (
+                  <Btn small tone="secondary" onClick={() => onUpdateWorkOrderStatus(wo.id, "قيد التنفيذ")}>{t("↺ إعادة فتح", "↺ Reopen")}</Btn>
+                )}
+                <Btn small tone="danger" onClick={() => onRemoveWorkOrder(wo.id)}>{t("✕ حذف", "✕ Delete")}</Btn>
+              </div>
+
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("صور", "Photos")} {wo.photos && wo.photos.length > 0 ? `(${wo.photos.length})` : ""}</div>
+                {(wo.photos || []).length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                    {wo.photos.map((photo, idx) => (
+                      <div key={idx} style={{ position: "relative" }}>
+                        <img src={photo} alt="" onClick={() => setLightbox(photo)} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.line}`, cursor: "pointer" }} />
+                        <button className="no-print" onClick={() => onRemoveWorkOrderPhoto(wo.id, idx)} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <input type="file" accept="image/*" multiple disabled={!!photoBusy[`wo_${wo.id}`]} className="no-print" style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
+                  onChange={(e) => { handlePhotoUpload("wo", wo.id, e.target.files); e.target.value = ""; }} />
+                {photoBusy[`wo_${wo.id}`] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+              </div>
+
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("فيديو توضيحي", "Explanatory Video")}</div>
+                {wo.videoUrl ? (
+                  <div style={{ position: "relative", width: 160 }}>
+                    <video src={wo.videoUrl} controls style={{ width: 160, height: 100, borderRadius: 8, border: `1px solid ${COLORS.line}`, background: "#000" }} />
+                    <button className="no-print" onClick={() => onRemoveWorkOrderVideo(wo.id)} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}>✕</button>
+                  </div>
+                ) : (
+                  <input type="file" accept="video/*" disabled={!!videoBusy[wo.id]} className="no-print" style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
+                    onChange={(e) => { handleVideoUpload(wo.id, e.target.files); e.target.value = ""; }} />
+                )}
+                {videoBusy[wo.id] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الفيديو، قد يستغرق وقتًا حسب حجمه وسرعة الإنترنت...", "Uploading video, may take a while depending on size and connection speed...")}</div>}
+                {videoError[wo.id] && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4 }}>{videoError[wo.id]}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {lightbox && (
+        <div onClick={() => setLightbox(null)} style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.75)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }}>
+          <img src={lightbox} alt="" style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============ الجودة: قوالب الفحص وتعبئتها وسجل النتائج ============
+   وحدة جديدة تخدم دور "مختص الجودة". فشل بند في الفحص يتيح إنشاء طلب صيانة مباشرةً (onReportIssue)
+   لربط ملاحظة الجودة بمتابعة فعلية في وحدة الصيانة. */
+const EMPTY_QUALITY_TEMPLATE = { name: "", frequency: "يومي", items: [""], branchId: "" };
+
+function QualityTab({ equipment, templates, submissions, branches, defaultBranchId, onAddTemplate, onRemoveTemplate, onAddSubmission, onRemoveSubmission, onReportIssue }) {
+  const { t } = useLang();
+  const [tplForm, setTplForm] = useState({ ...EMPTY_QUALITY_TEMPLATE, branchId: defaultBranchId || "" });
+  const [showTplForm, setShowTplForm] = useState(false);
+  const [fillingTemplate, setFillingTemplate] = useState(null);
+  const [fillResults, setFillResults] = useState([]);
+  const [fillNote, setFillNote] = useState("");
+  const [fillPhotos, setFillPhotos] = useState([]);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [templateFilter, setTemplateFilter] = useState("");
+  const [lightbox, setLightbox] = useState(null);
+  const [expandedSub, setExpandedSub] = useState({});
+  const [issueMsg, setIssueMsg] = useState({});
+
+  const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
+  const templateName = (id) => templates.find((x) => x.id === id)?.name || t("قالب محذوف", "Deleted template");
+
+  const startFill = (tpl) => {
+    setFillingTemplate(tpl);
+    setFillResults(tpl.items.map((it) => ({ item: it, pass: true })));
+    setFillNote("");
+    setFillPhotos([]);
+  };
+
+  const toggleResult = (idx, pass) => {
+    setFillResults((prev) => prev.map((r, i) => (i === idx ? { ...r, pass } : r)));
+  };
+
+  const submitFill = () => {
+    if (!fillingTemplate) return;
+    const overallPass = fillResults.every((r) => r.pass);
+    onAddSubmission({
+      templateId: fillingTemplate.id,
+      templateName: fillingTemplate.name,
+      branchId: fillingTemplate.branchId || defaultBranchId,
+      results: fillResults,
+      overallPass,
+      generalNote: fillNote.trim(),
+      photos: fillPhotos,
+    });
+    setFillingTemplate(null);
+  };
+
+  const handleFillPhotoUpload = async (files) => {
+    if (!files || files.length === 0) return;
+    if (fillPhotos.length >= 3) return;
+    setPhotoBusy(true);
+    try {
+      const compressed = await Promise.all(Array.from(files).slice(0, 3 - fillPhotos.length).map((f) => compressImage(f, 900, 0.7)));
+      const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `qualityPhotos/${fillingTemplate?.id || "misc"}`)));
+      setFillPhotos((prev) => [...prev, ...urls]);
+    } catch (err) {
+      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+    }
+    setPhotoBusy(false);
+  };
+
+  const addTemplateItem = () => setTplForm((f) => ({ ...f, items: [...f.items, ""] }));
+  const updateTemplateItem = (idx, val) => setTplForm((f) => ({ ...f, items: f.items.map((it, i) => (i === idx ? val : it)) }));
+  const removeTemplateItem = (idx) => setTplForm((f) => ({ ...f, items: f.items.filter((_, i) => i !== idx) }));
+
+  const submitTemplate = () => {
+    const cleanItems = tplForm.items.map((it) => it.trim()).filter(Boolean);
+    if (!tplForm.name.trim() || cleanItems.length === 0) return;
+    if (!defaultBranchId && !tplForm.branchId) return;
+    onAddTemplate({ ...tplForm, name: tplForm.name.trim(), items: cleanItems });
+    setTplForm({ ...EMPTY_QUALITY_TEMPLATE, branchId: defaultBranchId || "" });
+    setShowTplForm(false);
+  };
+
+  const visibleSubmissions = submissions.filter((s) => !templateFilter || s.templateId === templateFilter).slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
+  const recentSubmissions = submissions.slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1)).slice(0, 20);
+  const complianceRate = recentSubmissions.length ? Math.round((recentSubmissions.filter((s) => s.overallPass).length / recentSubmissions.length) * 100) : 0;
+  const weekAgo = new Date();
+  weekAgo.setDate(weekAgo.getDate() - 7);
+  const thisWeekCount = submissions.filter((s) => new Date(s.submittedAt) >= weekAgo).length;
+  const issuesCount = submissions.filter((s) => !s.overallPass).length;
+
+  return (
+    <div>
+      <Header title={t("الجودة", "Quality")} subtitle={t("قوالب فحوصات الجودة، تعبئتها، ومتابعة نتائجها", "Quality inspection templates, filling them out, and tracking results")} />
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+        <ReceiptCard label={t("نسبة الالتزام (آخر 20 فحص)", "Compliance Rate (last 20 checks)")} value={`${complianceRate}%`} tone={complianceRate >= 80 ? COLORS.green : COLORS.brick} />
+        <ReceiptCard label={t("فحوصات هذا الأسبوع", "Checks This Week")} value={fmt(thisWeekCount)} tone={COLORS.gold} />
+        <ReceiptCard label={t("فحوصات فيها ملاحظات", "Checks With Issues")} value={fmt(issuesCount)} tone={COLORS.brick} />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }} className="no-print">
+        <SectionTitle>{t("قوالب الفحص", "Inspection Templates")} ({templates.length})</SectionTitle>
+        <Btn small onClick={() => setShowTplForm((s) => !s)}>{showTplForm ? t("إلغاء", "Cancel") : t("➕ قالب جديد", "➕ New Template")}</Btn>
+      </div>
+
+      {showTplForm && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 16 }} className="no-print">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            <Field label={t("اسم القالب", "Template Name")} required>
+              <input style={inputStyle} value={tplForm.name} onChange={(e) => setTplForm({ ...tplForm, name: e.target.value })} placeholder={t("مثال: معايرة الإسبريسو اليومية", "e.g. Daily Espresso Calibration")} />
+            </Field>
+            <Field label={t("التكرار", "Frequency")}>
+              <select style={inputStyle} value={tplForm.frequency} onChange={(e) => setTplForm({ ...tplForm, frequency: e.target.value })}>
+                <option value="يومي">{t("يومي", "Daily")}</option>
+                <option value="أسبوعي">{t("أسبوعي", "Weekly")}</option>
+                <option value="شهري">{t("شهري", "Monthly")}</option>
+              </select>
+            </Field>
+            {!defaultBranchId && (
+              <Field label={t("الفرع", "Branch")} required>
+                <select style={inputStyle} value={tplForm.branchId} onChange={(e) => setTplForm({ ...tplForm, branchId: e.target.value })}>
+                  <option value="">{t("اختر الفرع", "Select branch")}</option>
+                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </Field>
+            )}
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("بنود الفحص", "Inspection Items")}</div>
+            {tplForm.items.map((it, idx) => (
+              <div key={idx} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+                <input style={{ ...inputStyle, flex: 1 }} value={it} onChange={(e) => updateTemplateItem(idx, e.target.value)} placeholder={t(`البند ${idx + 1}`, `Item ${idx + 1}`)} />
+                {tplForm.items.length > 1 && <Btn small tone="danger" onClick={() => removeTemplateItem(idx)}>✕</Btn>}
+              </div>
+            ))}
+            <Btn small tone="secondary" onClick={addTemplateItem}>{t("➕ إضافة بند", "➕ Add Item")}</Btn>
+          </div>
+          <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end" }}>
+            <Btn onClick={submitTemplate}>{t("💾 حفظ القالب", "💾 Save Template")}</Btn>
+          </div>
+        </div>
+      )}
+
+      {templates.length === 0 && !showTplForm && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, marginBottom: 16 }}>
+          <Empty text={t("لا توجد قوالب فحص بعد", "No inspection templates yet")} />
+        </div>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
+        {templates.map((tpl) => (
+          <div key={tpl.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, flex: "1 1 240px", minWidth: 220 }}>
+            <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{tpl.name}</div>
+            <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{tpl.frequency} · {tpl.items.length} {t("بند", "items")} · {branchName(tpl.branchId)}</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }} className="no-print">
+              <Btn small onClick={() => startFill(tpl)}>{t("📋 تعبئة فحص", "📋 Fill Inspection")}</Btn>
+              <Btn small tone="danger" onClick={() => onRemoveTemplate(tpl.id)}>✕</Btn>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {fillingTemplate && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(20,14,8,0.72)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: 20, width: "100%", maxWidth: 480, maxHeight: "88vh", overflowY: "auto" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso, marginBottom: 12 }}>{t("تعبئة فحص", "Fill Inspection")}: {fillingTemplate.name}</div>
+            {fillResults.map((r, idx) => (
+              <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px dashed ${COLORS.line}` }}>
+                <div style={{ fontSize: 12.5, flex: 1 }}>{r.item}</div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button type="button" onClick={() => toggleResult(idx, true)} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: r.pass ? COLORS.greenBg : "#f2f2f2", color: r.pass ? COLORS.green : "#999" }}>{t("مطابق", "Pass")}</button>
+                  <button type="button" onClick={() => toggleResult(idx, false)} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: !r.pass ? COLORS.brickBg : "#f2f2f2", color: !r.pass ? COLORS.brick : "#999" }}>{t("غير مطابق", "Fail")}</button>
+                </div>
+              </div>
+            ))}
+            <div style={{ marginTop: 12 }}>
+              <Field label={t("ملاحظات عامة (اختياري)", "General Notes (optional)")}>
+                <textarea style={{ ...inputStyle, width: "100%", minHeight: 50, resize: "vertical", fontFamily: "inherit" }} value={fillNote} onChange={(e) => setFillNote(e.target.value)} />
+              </Field>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("صور توثيقية (اختياري)", "Documentation Photos (optional)")}</div>
+              {fillPhotos.length > 0 && (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                  {fillPhotos.map((p, idx) => (
+                    <div key={idx} style={{ position: "relative" }}>
+                      <img src={p} alt="" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.line}` }} />
+                      <button onClick={() => setFillPhotos((prev) => prev.filter((_, i) => i !== idx))} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}>✕</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {fillPhotos.length < 3 && (
+                <input type="file" accept="image/*" multiple disabled={photoBusy} style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5 }} onChange={(e) => { handleFillPhotoUpload(e.target.files); e.target.value = ""; }} />
+              )}
+              {photoBusy && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+            </div>
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <Btn tone="secondary" onClick={() => setFillingTemplate(null)}>{t("إلغاء", "Cancel")}</Btn>
+              <Btn onClick={submitFill}>{t("✔ حفظ الفحص", "✔ Save Inspection")}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+        <SectionTitle>{t("سجل الفحوصات", "Inspection Log")} ({visibleSubmissions.length})</SectionTitle>
+        <Field label={t("تصفية بالقالب", "Filter by Template")}>
+          <select style={inputStyle} value={templateFilter} onChange={(e) => setTemplateFilter(e.target.value)}>
+            <option value="">{t("كل القوالب", "All Templates")}</option>
+            {templates.map((tpl) => <option key={tpl.id} value={tpl.id}>{tpl.name}</option>)}
+          </select>
+        </Field>
+      </div>
+
+      {visibleSubmissions.length === 0 && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+          <Empty text={t("لا توجد فحوصات مسجّلة", "No inspections recorded")} />
+        </div>
+      )}
+      {visibleSubmissions.map((sub) => {
+        const isOpen = !!expandedSub[sub.id];
+        return (
+          <div key={sub.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10, cursor: "pointer" }} onClick={() => setExpandedSub((p) => ({ ...p, [sub.id]: !p[sub.id] }))}>
+              <div>
+                <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{sub.templateName || templateName(sub.templateId)}</div>
+                <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{sub.submittedBy} · {branchName(sub.branchId)} · {new Date(sub.submittedAt).toLocaleString(t("ar-SA-u-nu-latn", "en-US"))}</div>
+              </div>
+              <Stamp tone={sub.overallPass ? "green" : "brick"}>{sub.overallPass ? t("مطابق", "Pass") : t("يوجد ملاحظات", "Has Issues")}</Stamp>
+            </div>
+            {isOpen && (
+              <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
+                {(sub.results || []).map((r, idx) => (
+                  <div key={idx} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0" }}>
+                    <span>{r.item}</span>
+                    <span style={{ color: r.pass ? COLORS.green : COLORS.brick, fontWeight: 700 }}>{r.pass ? t("مطابق", "Pass") : t("غير مطابق", "Fail")}</span>
+                  </div>
+                ))}
+                {sub.generalNote && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 8 }}>{sub.generalNote}</div>}
+                {(sub.photos || []).length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+                    {sub.photos.map((p, idx) => (
+                      <img key={idx} src={p} alt="" onClick={() => setLightbox(p)} style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.line}`, cursor: "pointer" }} />
+                    ))}
+                  </div>
+                )}
+                <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center", flexWrap: "wrap" }} className="no-print">
+                  {!sub.overallPass && (
+                    <Btn
+                      small
+                      disabled={!!issueMsg[sub.id]}
+                      onClick={() => {
+                        onReportIssue({
+                          title: t(`متابعة فحص: ${sub.templateName}`, `Follow-up: ${sub.templateName}`),
+                          description: sub.generalNote || "",
+                          priority: "متوسط",
+                          branchId: sub.branchId,
+                          equipmentId: "",
+                        });
+                        setIssueMsg((m) => ({ ...m, [sub.id]: true }));
+                      }}
+                    >
+                      {issueMsg[sub.id] ? t("✔ أُنشئ طلب الصيانة", "✔ Maintenance Request Created") : t("🔧 إنشاء طلب صيانة", "🔧 Create Maintenance Request")}
+                    </Btn>
+                  )}
+                  <Btn small tone="danger" onClick={() => onRemoveSubmission(sub.id)}>{t("✕ حذف", "✕ Delete")}</Btn>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {lightbox && (
+        <div onClick={() => setLightbox(null)} style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.75)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }}>
+          <img src={lightbox} alt="" style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ============ رسائل للموظفين ============ */
 function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMessage, onMarkWhatsappSent, canBroadcastAll = true }) {
   const { t } = useLang();
@@ -8752,7 +9586,15 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
   );
 }
 
-function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeaveRequest, advanceRequests, onSubmitAdvanceRequest, attendance, onClockIn, onClockOut, geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, onAddTaskVideos, onRemoveTaskVideo, messages = [], onMarkMessageRead, onAcknowledgeMessage, dirty, saving, syncError, onSave, faceModal, onFaceCancel, onFaceVerified }) {
+function EmployeeSelfView({
+  user, employee, leaves, leaveRequests, onSubmitLeaveRequest, advanceRequests, onSubmitAdvanceRequest, attendance, onClockIn, onClockOut,
+  geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto,
+  onAddTaskVideos, onRemoveTaskVideo, messages = [], onMarkMessageRead, onAcknowledgeMessage, dirty, saving, syncError, onSave, faceModal, onFaceCancel, onFaceVerified,
+  qualityAccess = false, maintenanceAccess = false, branches = [], equipment = [], workOrders = [], qualityTemplates = [], qualitySubmissions = [],
+  onAddEquipment, onUpdateEquipment, onRemoveEquipment, onAddEquipmentPhotos, onRemoveEquipmentPhoto,
+  onAddWorkOrder, onUpdateWorkOrderStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
+  onAddQualityTemplate, onRemoveQualityTemplate, onAddQualitySubmission, onRemoveQualitySubmission,
+}) {
   const { t } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
@@ -9385,6 +10227,46 @@ function EmployeeSelfView({ user, employee, leaves, leaveRequests, onSubmitLeave
             </div>
           ))}
         </div>
+
+        {qualityAccess && (
+          <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
+            <QualityTab
+              equipment={equipment}
+              templates={qualityTemplates}
+              submissions={qualitySubmissions}
+              branches={branches}
+              defaultBranchId={employee.branchId}
+              onAddTemplate={onAddQualityTemplate}
+              onRemoveTemplate={onRemoveQualityTemplate}
+              onAddSubmission={onAddQualitySubmission}
+              onRemoveSubmission={onRemoveQualitySubmission}
+              onReportIssue={onAddWorkOrder}
+            />
+          </div>
+        )}
+
+        {maintenanceAccess && (
+          <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
+            <MaintenanceTab
+              equipment={equipment}
+              workOrders={workOrders}
+              branches={branches}
+              defaultBranchId={employee.branchId}
+              onAddEquipment={onAddEquipment}
+              onUpdateEquipment={onUpdateEquipment}
+              onRemoveEquipment={onRemoveEquipment}
+              onAddEquipmentPhotos={onAddEquipmentPhotos}
+              onRemoveEquipmentPhoto={onRemoveEquipmentPhoto}
+              onAddWorkOrder={onAddWorkOrder}
+              onUpdateWorkOrderStatus={onUpdateWorkOrderStatus}
+              onRemoveWorkOrder={onRemoveWorkOrder}
+              onAddWorkOrderPhotos={onAddWorkOrderPhotos}
+              onRemoveWorkOrderPhoto={onRemoveWorkOrderPhoto}
+              onAddWorkOrderVideo={onAddWorkOrderVideo}
+              onRemoveWorkOrderVideo={onRemoveWorkOrderVideo}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -9530,7 +10412,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
       setErr(t("اسم المستخدم مستخدم بالفعل، اختر اسمًا آخر", "This username is already taken, please choose another"));
       return;
     }
-    const customizableRole = ["manager", "entity_manager", "branch_manager", "accountant", "cashier", "custom"].includes(form.role);
+    const customizableRole = ["manager", "entity_manager", "branch_manager", "accountant", "cashier", "quality", "maintenance", "custom"].includes(form.role);
     const payload = { ...form, username: form.username.trim(), customRoleLabel: form.role === "custom" ? form.customRoleLabel.trim() : "" };
     if (!customizableRole) {
       payload.customTabs = null;
@@ -9729,6 +10611,8 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
               <option value="branch_manager">{t("مسؤول فرع", "Branch Manager")}</option>
               <option value="accountant">{t("محاسب (كل الكيانات)", "Accountant (all entities)")}</option>
               <option value="cashier">{t("أمين صندوق (كل الكيانات)", "Cashier (all entities)")}</option>
+              <option value="quality">{t("مختص الجودة (فرع محدد)", "Quality Specialist (specific branch)")}</option>
+              <option value="maintenance">{t("مختص الصيانة (فرع محدد)", "Maintenance Specialist (specific branch)")}</option>
               <option value="custom">{t("دور مخصص (اكتب اسمه)", "Custom role (type name)")}</option>
               <option value="employee">{t("موظف", "Employee")}</option>
             </select>
@@ -9753,7 +10637,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
               </select>
             </Field>
           )}
-          {form.role === "branch_manager" && (
+          {["branch_manager", "quality", "maintenance"].includes(form.role) && (
             <Field label={t("الفرع", "Branch")}>
               <select style={inputStyle} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
                 <option value="">{t("اختر الفرع", "Select branch")}</option>
@@ -9770,7 +10654,31 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
           )}
         </div>
 
-        {["manager", "entity_manager", "branch_manager", "accountant", "cashier", "custom"].includes(form.role) && (
+        {form.role === "employee" && (
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px dashed ${COLORS.line}` }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8, color: COLORS.espresso }}>
+              {t("صلاحيات إضافية لهذا الموظف", "Additional access for this employee")}
+            </div>
+            <div style={{ fontSize: 11, color: "#a3927a", marginBottom: 8 }}>
+              {t(
+                "لموظف يجمع بين وظيفته الأساسية ومسؤولية الجودة أو الصيانة — يحتفظ بصفحته الذاتية (حضور، إجازات، مهام) ويُضاف له قسم الجودة/الصيانة الخاص بفرعه في نفس الصفحة.",
+                "For an employee who combines their regular role with quality or maintenance responsibility — they keep their self-service page (attendance, leave, tasks) and get their branch's Quality/Maintenance section added to the same page."
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!form.qualityAccess} onChange={(e) => setForm({ ...form, qualityAccess: e.target.checked })} />
+                {t("مسؤول عن الجودة في فرعه", "Responsible for Quality at their branch")}
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!form.maintenanceAccess} onChange={(e) => setForm({ ...form, maintenanceAccess: e.target.checked })} />
+                {t("مسؤول عن الصيانة في فرعه", "Responsible for Maintenance at their branch")}
+              </label>
+            </div>
+          </div>
+        )}
+
+        {["manager", "entity_manager", "branch_manager", "accountant", "cashier", "quality", "maintenance", "custom"].includes(form.role) && (
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px dashed ${COLORS.line}` }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8, color: COLORS.espresso }}>
               {t("التبويبات المسموح بها لهذا الحساب", "Tabs allowed for this account")}
@@ -9821,7 +10729,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
       <SectionTitle>{t("الحسابات الحالية", "Current Accounts")} ({fmt(users.length)})</SectionTitle>
       {(() => {
         const branchIdOf = (u) => {
-          if (u.role === "branch_manager") return u.branchId || null;
+          if (u.role === "branch_manager" || u.role === "quality" || u.role === "maintenance") return u.branchId || null;
           if (u.role === "employee") return employees.find((e) => e.id === u.employeeId)?.branchId || null;
           return null;
         };
@@ -9866,9 +10774,11 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
                     <div style={{ fontSize: 11.5, color: "#8a7a63" }}>
                       {roleLabel(u, t)}
                       {u.role === "entity_manager" && ` · ${entities.find((en) => en.id === u.entityId)?.name || "—"}`}
-                      {u.role === "branch_manager" && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
+                      {(u.role === "branch_manager" || u.role === "quality" || u.role === "maintenance") && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
                       {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
                       {Array.isArray(u.customTabs) && ` · 🔧 ${t(`صلاحيات مخصصة (${u.customTabs.length} تبويب)`, `Custom access (${u.customTabs.length} tabs)`)}`}
+                      {u.qualityAccess && ` · ◒ ${t("الجودة", "Quality")}`}
+                      {u.maintenanceAccess && ` · 🔧 ${t("الصيانة", "Maintenance")}`}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
