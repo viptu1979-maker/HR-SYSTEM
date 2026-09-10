@@ -8460,6 +8460,18 @@ const EQUIPMENT_LOCATIONS_EN = { "منطقة الإسبريسو": "Espresso Stat
 const EMPTY_EQUIPMENT = { name: "", category: EQUIPMENT_CATEGORIES[0], location: EQUIPMENT_LOCATIONS[0], purchaseDate: "", frequencyDays: 30, notes: "", branchId: "", status: "نشط" };
 const EMPTY_WORK_ORDER = { equipmentId: "", title: "", description: "", priority: "متوسط", cost: "", branchId: "" };
 
+/* قائمة معدات جاهزة لمقهى/كافيه مختص — نقطة بداية جاهزة للتعديل بدل ما يبدأ الفرع من صفر.
+   بدون تاريخ آخر صيانة افتراضي (ما نفترض إن صيانة حصلت فعليًا) — يُسجَّل أول تاريخ حقيقي يدويًا. */
+const DEFAULT_EQUIPMENT = [
+  { name: "ماكينة إسبريسو - 3 مجموعات", category: "تحضير القهوة", location: "منطقة الإسبريسو", frequencyDays: 14, notes: "غسل المجموعات (backflush) يوميًا بعد الإغلاق" },
+  { name: "مطحنة الإسبريسو", category: "طحن", location: "منطقة الإسبريسو", frequencyDays: 21, notes: "فحص استواء الشفرات (burrs) دوريًا" },
+  { name: "مطحنة القهوة المقطرة", category: "طحن", location: "محطة التحضير اليدوي", frequencyDays: 30, notes: "" },
+  { name: "محطة التحضير اليدوي (V60 / Chemex)", category: "تحضير القهوة", location: "محطة التحضير اليدوي", frequencyDays: 30, notes: "استبدال خراطيم السيليكون عند التآكل" },
+  { name: "نظام تنقية وتحلية المياه", category: "مياه وتنقية", location: "المخزن", frequencyDays: 60, notes: "يؤثر مباشرة على جودة الاستخلاص" },
+  { name: "ثلاجة تبريد الحليب", category: "تبريد", location: "الكاونتر", frequencyDays: 30, notes: "" },
+  { name: "ماكينة الثلج", category: "تبريد", location: "الكاونتر", frequencyDays: 21, notes: "فحص دوري للضاغط ومستوى التبريد" },
+];
+
 function nextDueDate(eq) {
   if (!eq.lastMaintenance || !eq.frequencyDays) return null;
   const d = new Date(eq.lastMaintenance);
@@ -8486,9 +8498,19 @@ function MaintenanceTab({
   const [videoError, setVideoError] = useState({});
   const [lightbox, setLightbox] = useState(null);
   const [statusFilter, setStatusFilter] = useState("");
+  const [seedBranchId, setSeedBranchId] = useState(defaultBranchId || "");
+  const [seeding, setSeeding] = useState(false);
 
   const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
   const equipmentName = (id) => equipment.find((x) => x.id === id)?.name || t("معدة محذوفة", "Deleted equipment");
+
+  const seedTargetBranchId = defaultBranchId || seedBranchId;
+  const seedDefaultEquipment = () => {
+    if (!seedTargetBranchId || seeding) return;
+    setSeeding(true);
+    DEFAULT_EQUIPMENT.forEach((eq) => onAddEquipment({ ...eq, branchId: seedTargetBranchId, status: "نشط" }));
+    setSeeding(false);
+  };
   const todayISO = new Date().toISOString().slice(0, 10);
 
   const submitEquipment = () => {
@@ -8608,8 +8630,22 @@ function MaintenanceTab({
 
           <SectionTitle>{t("قائمة المعدات", "Equipment List")} ({equipment.length})</SectionTitle>
           {equipment.length === 0 && (
-            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+            <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }} className="no-print">
               <Empty text={t("لا توجد معدات مسجّلة", "No equipment registered")} />
+              <div style={{ padding: "0 20px 20px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, justifyContent: "center" }}>
+                {!defaultBranchId && (
+                  <select style={inputStyle} value={seedBranchId} onChange={(e) => setSeedBranchId(e.target.value)}>
+                    <option value="">{t("اختر الفرع", "Select branch")}</option>
+                    {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                )}
+                <Btn small tone="secondary" disabled={!seedTargetBranchId || seeding} onClick={seedDefaultEquipment}>
+                  {t("⬇ تعبئة قائمة معدات مقهى مختص الجاهزة", "⬇ Load Specialty Coffee Shop Equipment List")}
+                </Btn>
+              </div>
+              <div style={{ padding: "0 20px 18px", fontSize: 11, color: "#a3927a", textAlign: "center" }}>
+                {t("تضيف 7 معدات شائعة في مقاهي القهوة المختصة جاهزة للتعديل — عدّل الأسماء والدورات وأضف/احذف حسب معداتك الفعلية.", "Adds 7 common specialty-coffee-shop items ready to edit — adjust names and cycles, add or remove to match your actual equipment.")}
+              </div>
             </div>
           )}
           {equipment.map((eq) => {
@@ -8801,6 +8837,43 @@ function MaintenanceTab({
    لربط ملاحظة الجودة بمتابعة فعلية في وحدة الصيانة. */
 const EMPTY_QUALITY_TEMPLATE = { name: "", frequency: "يومي", items: [""], branchId: "" };
 
+/* قوالب فحص جاهزة لمقهى/كافيه مختص — نقطة بداية جاهزة للتعديل بدل ما يبدأ الفرع من صفر بلا سجل فحوصات وهمي */
+const DEFAULT_QUALITY_TEMPLATES = [
+  {
+    name: "معايرة الإسبريسو اليومية",
+    frequency: "يومي",
+    items: [
+      "وزن الجرعة (dose) مطابق للمواصفة",
+      "زمن الاستخلاص ضمن 25-30 ثانية",
+      "نسبة السحب (yield ratio) مطابقة للوصفة",
+      "تذوق الشوت وتقييم التوازن والطعم",
+      "ضبط درجة الطحن عند الحاجة",
+    ],
+  },
+  {
+    name: "نظافة معدات التحضير",
+    frequency: "يومي",
+    items: [
+      "غسل المجموعات (backflush) بعد الإغلاق",
+      "تنظيف البورتافلتر والفلاتر",
+      "تعقيم إبريق الحليب وعصا البخار",
+      "تنظيف حجرة المطحنة من بقايا البن",
+      "تنظيف أدوات التحضير اليدوي (V60/Chemex)",
+    ],
+  },
+  {
+    name: "جودة المياه وطزاجة الحبوب",
+    frequency: "أسبوعي",
+    items: [
+      "قياس TDS للمياه ضمن 75-250 ppm",
+      "تاريخ تحميص الحبوب لا يتجاوز 30 يومًا",
+      "تخزين الحبوب في عبوات محكمة الإغلاق",
+      "جدولة استبدال فلتر المياه",
+      "تخزين الحبوب بعيدًا عن الضوء والحرارة",
+    ],
+  },
+];
+
 function QualityTab({ equipment, templates, submissions, branches, defaultBranchId, onAddTemplate, onRemoveTemplate, onAddSubmission, onRemoveSubmission, onReportIssue }) {
   const { t } = useLang();
   const [tplForm, setTplForm] = useState({ ...EMPTY_QUALITY_TEMPLATE, branchId: defaultBranchId || "" });
@@ -8814,9 +8887,19 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
   const [lightbox, setLightbox] = useState(null);
   const [expandedSub, setExpandedSub] = useState({});
   const [issueMsg, setIssueMsg] = useState({});
+  const [seedBranchId, setSeedBranchId] = useState(defaultBranchId || "");
+  const [seeding, setSeeding] = useState(false);
 
   const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
   const templateName = (id) => templates.find((x) => x.id === id)?.name || t("قالب محذوف", "Deleted template");
+
+  const seedTargetBranchId = defaultBranchId || seedBranchId;
+  const seedDefaultTemplates = () => {
+    if (!seedTargetBranchId || seeding) return;
+    setSeeding(true);
+    DEFAULT_QUALITY_TEMPLATES.forEach((tpl) => onAddTemplate({ ...tpl, branchId: seedTargetBranchId }));
+    setSeeding(false);
+  };
 
   const startFill = (tpl) => {
     setFillingTemplate(tpl);
@@ -8933,8 +9016,22 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
       )}
 
       {templates.length === 0 && !showTplForm && (
-        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, marginBottom: 16 }}>
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, marginBottom: 16 }} className="no-print">
           <Empty text={t("لا توجد قوالب فحص بعد", "No inspection templates yet")} />
+          <div style={{ padding: "0 20px 20px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, justifyContent: "center" }}>
+            {!defaultBranchId && (
+              <select style={inputStyle} value={seedBranchId} onChange={(e) => setSeedBranchId(e.target.value)}>
+                <option value="">{t("اختر الفرع", "Select branch")}</option>
+                {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            )}
+            <Btn small tone="secondary" disabled={!seedTargetBranchId || seeding} onClick={seedDefaultTemplates}>
+              {t("⬇ تعبئة قوالب مقهى مختص الجاهزة", "⬇ Load Specialty Coffee Shop Templates")}
+            </Btn>
+          </div>
+          <div style={{ padding: "0 20px 18px", fontSize: 11, color: "#a3927a", textAlign: "center" }}>
+            {t("تضيف 3 قوالب فحص شائعة (معايرة الإسبريسو، نظافة المعدات، جودة المياه والحبوب) جاهزة للتعديل — بدون أي فحوصات وهمية.", "Adds 3 common templates (espresso calibration, equipment cleanliness, water & bean quality) ready to edit — with no fabricated inspection history.")}
+          </div>
         </div>
       )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
