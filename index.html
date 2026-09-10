@@ -6103,6 +6103,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [logSearch, setLogSearch] = useState("");
+  const [logBranchFilter, setLogBranchFilter] = useState("");
   /* تعديل سجل حضور/انصراف قائم — لتصحيح خطأ الموظف في وقت البصمة أو حالة اليوم */
   const [editAttId, setEditAttId] = useState(null);
   const [editAttForm, setEditAttForm] = useState(null);
@@ -6217,8 +6218,9 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
     cancelEditAtt();
   };
 
-  /* بحث في سجل الحضور اليومي: بالاسم، رقم الهوية/الإقامة، أو التاريخ */
+  /* بحث في سجل الحضور اليومي: بالاسم، رقم الهوية/الإقامة، أو التاريخ — بالإضافة لتصفية بالفرع */
   const filteredAttendance = attendance.filter((a) => {
+    if (logBranchFilter && a.branchId !== logBranchFilter) return false;
     if (!logSearch.trim()) return true;
     const q = logSearch.trim().toLowerCase();
     const emp = employees.find((e) => e.id === a.employeeId);
@@ -6302,6 +6304,12 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
           value={logSearch}
           onChange={(e) => setLogSearch(e.target.value)}
         />
+        <select style={{ ...inputStyle, maxWidth: 200 }} value={logBranchFilter} onChange={(e) => setLogBranchFilter(e.target.value)}>
+          <option value="">{t("كل الفروع", "All Branches")}</option>
+          {branches.map((b) => (
+            <option key={b.id} value={b.id}>{b.name}</option>
+          ))}
+        </select>
         <Btn tone="secondary" onClick={notifyAbsentees}>
           {t("🔔 تنبيه من لم يسجّل حضور اليوم", "🔔 Notify Today's Absentees")}
         </Btn>
