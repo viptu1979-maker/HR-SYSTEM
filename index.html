@@ -1882,7 +1882,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   };
 
   const addWorkOrder = (wo) => {
-    const newWo = { ...wo, id: uid(), branchId: wo.branchId || defaultQmBranchId, status: "مفتوح", costStatus: wo.cost ? "قيد المراجعة" : "", photos: [], videoUrl: "", createdBy: currentUser.name, createdAt: new Date().toISOString() };
+    const newWo = { ...wo, id: uid(), branchId: wo.branchId || defaultQmBranchId, status: "مفتوح", costStatus: wo.cost ? "قيد المراجعة" : "", photos: wo.photos || [], videoUrl: wo.videoUrl || "", createdBy: currentUser.name, createdAt: new Date().toISOString() };
     setWorkOrders((prev) => [newWo, ...prev]);
     logActivity && logActivity("طلب صيانة جديد", "maintenance", wo.title || "");
     /* أي موظف يرسل طلب صيانة يوصل تلقائيًا كرسالة لمسؤول الصيانة العام المحدد من الإعدادات
@@ -8740,7 +8740,7 @@ const EQUIPMENT_CATEGORIES_EN = { "تحضير القهوة": "Coffee Prep", "ط�
 const EQUIPMENT_LOCATIONS = ["منطقة الإسبريسو", "محطة التحضير اليدوي", "الكاونتر", "غرفة تخزين الحبوب", "منطقة التحميص", "الصالة", "المخزن", "أخرى"];
 const EQUIPMENT_LOCATIONS_EN = { "منطقة الإسبريسو": "Espresso Station", "محطة التحضير اليدوي": "Pour-over Station", "الكاونتر": "Counter", "غرفة تخزين الحبوب": "Bean Storage Room", "منطقة التحميص": "Roasting Area", "الصالة": "Dining Area", "المخزن": "Storage", "أخرى": "Other" };
 const EMPTY_EQUIPMENT = { name: "", category: EQUIPMENT_CATEGORIES[0], location: EQUIPMENT_LOCATIONS[0], purchaseDate: "", frequencyDays: 30, notes: "", branchId: "", status: "نشط" };
-const EMPTY_WORK_ORDER = { equipmentId: "", title: "", description: "", priority: "متوسط", cost: "", branchId: "" };
+const EMPTY_WORK_ORDER = { equipmentId: "", title: "", description: "", priority: "متوسط", cost: "", branchId: "", photos: [], videoUrl: "" };
 
 /* قائمة معدات جاهزة لمقهى/كافيه مختص — نقطة بداية جاهزة للتعديل بدل ما يبدأ الفرع من صفر.
    بدون تاريخ آخر صيانة افتراضي (ما نفترض إن صيانة حصلت فعليًا) — يُسجَّل أول تاريخ حقيقي يدويًا. */
@@ -8843,6 +8843,43 @@ function MaintenanceTab({
     }
     setVideoBusy((v) => ({ ...v, [id]: false }));
   };
+
+  /* رفع صور/فيديو أثناء تعبئة "طلب صيانة جديد" — قبل ما يتولّد معرّف الطلب نفسه، فنستخدم
+     مسار تخزين مؤقت فريد، والملفات تُرفق مباشرة في الطلب لحظة إرساله */
+  const handleNewWoPhotoUpload = async (files) => {
+    if (!files || files.length === 0) return;
+    setPhotoBusy((p) => ({ ...p, wo_new: true }));
+    try {
+      const compressed = await Promise.all(Array.from(files).slice(0, 3).map((f) => compressImage(f, 900, 0.7)));
+      const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `workOrderPhotos/new_${uid()}`)));
+      setWoForm((f) => ({ ...f, photos: [...(f.photos || []), ...urls] }));
+    } catch (err) {
+      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+    }
+    setPhotoBusy((p) => ({ ...p, wo_new: false }));
+  };
+  const removeNewWoPhoto = (idx) => {
+    setWoForm((f) => ({ ...f, photos: (f.photos || []).filter((_, i) => i !== idx) }));
+  };
+  const handleNewWoVideoUpload = async (files) => {
+    if (!files || files.length === 0) return;
+    const MAX_MB = 100;
+    setVideoError((v) => ({ ...v, new: "" }));
+    const tooLarge = Array.from(files).find((f) => f.size > MAX_MB * 1024 * 1024);
+    if (tooLarge) {
+      setVideoError((v) => ({ ...v, new: t(`الملف أكبر من ${MAX_MB} ميجابايت — قلّل حجمه وحاول تاني`, `File is larger than ${MAX_MB}MB — reduce its size and try again`) }));
+      return;
+    }
+    setVideoBusy((v) => ({ ...v, new: true }));
+    try {
+      const url = await uploadFileToStorage(files[0], `workOrderVideos/new_${uid()}`);
+      setWoForm((f) => ({ ...f, videoUrl: url }));
+    } catch (err) {
+      setVideoError((v) => ({ ...v, new: t("تعذّر رفع الفيديو — تأكد من اتصال الإنترنت وحاول تاني.", "Couldn't upload the video — check your internet connection and try again.") }));
+    }
+    setVideoBusy((v) => ({ ...v, new: false }));
+  };
+  const removeNewWoVideo = () => setWoForm((f) => ({ ...f, videoUrl: "" }));
 
   const activeEquipment = equipment.filter((x) => x.status !== "خارج الخدمة").length;
   const overdueEquipment = equipment.filter(isEquipmentOverdue).length;
@@ -9019,6 +9056,40 @@ function MaintenanceTab({
               <Field label={t("الوصف (اختياري)", "Description (optional)")}>
                 <textarea style={{ ...inputStyle, width: "100%", minHeight: 60, resize: "vertical", fontFamily: "inherit" }} value={woForm.description} onChange={(e) => setWoForm({ ...woForm, description: e.target.value })} />
               </Field>
+            </div>
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${COLORS.line}`, display: "flex", flexWrap: "wrap", gap: 20 }}>
+              <div style={{ minWidth: 200 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("صور (اختياري)", "Photos (optional)")} {woForm.photos && woForm.photos.length > 0 ? `(${woForm.photos.length})` : ""}</div>
+                {(woForm.photos || []).length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                    {woForm.photos.map((photo, idx) => (
+                      <div key={idx} style={{ position: "relative" }}>
+                        <img src={photo} alt="" onClick={() => setLightbox(photo)} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.line}`, cursor: "pointer" }} />
+                        <button onClick={() => removeNewWoPhoto(idx)} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {(!woForm.photos || woForm.photos.length < 3) && (
+                  <input type="file" accept="image/*" multiple disabled={!!photoBusy.wo_new} style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
+                    onChange={(e) => { handleNewWoPhotoUpload(e.target.files); e.target.value = ""; }} />
+                )}
+                {photoBusy.wo_new && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+              </div>
+              <div style={{ minWidth: 200 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("فيديو توضيحي (اختياري)", "Explanatory Video (optional)")}</div>
+                {woForm.videoUrl ? (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <video src={woForm.videoUrl} controls style={{ width: 140, borderRadius: 8, border: `1px solid ${COLORS.line}` }} />
+                    <button onClick={removeNewWoVideo} style={{ width: 20, height: 20, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "20px", cursor: "pointer", padding: 0 }}>✕</button>
+                  </div>
+                ) : (
+                  <input type="file" accept="video/*" disabled={!!videoBusy.new} style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
+                    onChange={(e) => { handleNewWoVideoUpload(e.target.files); e.target.value = ""; }} />
+                )}
+                {videoBusy.new && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الفيديو...", "Uploading video...")}</div>}
+                {videoError.new && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4 }}>{videoError.new}</div>}
+              </div>
             </div>
             <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
               <Btn onClick={submitWorkOrder}>{t("📌 إرسال الطلب", "📌 Submit Request")}</Btn>
