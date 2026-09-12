@@ -405,6 +405,19 @@ function playNotificationSound() {
   }
 }
 
+/* اكتشاف آيفون/آيباد (سفاري) — الإشعارات على iOS Safari لا تشتغل إطلاقًا إلا بشرطين معًا:
+   1) iOS 16.4 أو أحدث
+   2) الموقع مُضاف لشاشة الجوال الرئيسية (Add to Home Screen) ومفتوح من أيقونته، مش من تبويب سفاري عادي
+   لو الموقع مفتوح من سفاري مباشرة (مش مثبّت)، لازم نوجّه المستخدم لتثبيته أولًا وإلا الإشعارات صامتة. */
+function isIOSDevice() {
+  const ua = window.navigator.userAgent || "";
+  const isIOS = /iPad|iPhone|iPod/.test(ua) || (ua.includes("Macintosh") && "ontouchend" in document);
+  return isIOS;
+}
+function isRunningStandalone() {
+  return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+}
+
 /* طلب إذن إشعارات الجوال (مركز الإشعارات/الشاشة المقفلة) من المتصفح — لازم يُستدعى نتيجة ضغطة
    فعلية من الموظف (زر)، وإلا بعض المتصفحات (خصوصًا على الآيفون) بترفض الطلب صامتة */
 async function requestNotifPermission() {
@@ -2885,6 +2898,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
                 ? t("🔕 الإشعارات محظورة (فعّلها من إعدادات المتصفح)", "🔕 Notifications blocked (enable from browser settings)")
                 : t("🔔 تفعيل إشعارات الجوال", "🔔 Enable Mobile Notifications")}
             </button>
+          )}
+          {isIOSDevice() && !isRunningStandalone() && (
+            <div style={{ fontSize: 10.5, color: COLORS.goldLight, background: "rgba(216,168,90,0.12)", border: "1px solid rgba(216,168,90,0.3)", borderRadius: 6, padding: "7px 9px", marginBottom: 8, lineHeight: 1.6 }}>
+              {t(
+                "📱 على الآيفون: الإشعارات ما تشتغل إلا لو ضفت الموقع لشاشتك الرئيسية أولًا (زر المشاركة ← \"إضافة إلى الشاشة الرئيسية\") وفتحته من الأيقونة، مش من سفاري مباشرة — ويلزم iOS 16.4 فأحدث.",
+                "📱 On iPhone: notifications only work if you first add this site to your Home Screen (Share button → \"Add to Home Screen\") and open it from that icon, not directly in Safari — requires iOS 16.4+."
+              )}
+            </div>
           )}
           <button
             onClick={() => setShowChangePassword(true)}
@@ -10556,6 +10577,14 @@ function EmployeeSelfView({
             <Btn tone="secondary" onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
           </div>
         </div>
+        {isIOSDevice() && !isRunningStandalone() && (
+          <div style={{ fontSize: 11.5, color: COLORS.coffee, background: "#FBF3E3", border: `1px solid ${COLORS.line}`, borderRadius: 8, padding: "9px 12px", marginTop: -6, marginBottom: 16, lineHeight: 1.7 }}>
+            {t(
+              "📱 على الآيفون: الإشعارات ما تشتغل إلا لو ضفت الموقع لشاشتك الرئيسية أولًا (زر المشاركة ← \"إضافة إلى الشاشة الرئيسية\") وفتحته من الأيقونة، مش من سفاري مباشرة — ويلزم iOS 16.4 فأحدث.",
+              "📱 On iPhone: notifications only work if you first add this site to your Home Screen (Share button → \"Add to Home Screen\") and open it from that icon, not directly in Safari — requires iOS 16.4+."
+            )}
+          </div>
+        )}
 
         {showChangePassword && (
           <ChangePasswordModal
