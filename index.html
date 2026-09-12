@@ -1420,6 +1420,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   /* حساب إداري (أدمن/مسؤول/...) مرتبط أيضًا بسجل موظف: يقدر يتنقّل بين لوحة التحكم الكاملة
      وشاشته الشخصية (حضور/انصراف، إجازات، سلف) بنفس الحساب دون تسجيل خروج */
   const [selfView, setSelfView] = useState(false);
+  /* لوحة إشعارات صغيرة تظهر لأي دور (مش بس شاشة الموظف الذاتية) — عشان أي رسالة موجّهة للمستخدم
+     الحالي (زي إشعار طلب صيانة/جودة من موظف) توصله فعليًا حتى لو حسابه أدمن/مسؤول ومايفتحش
+     "بياناتي" أبدًا */
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
   /* حالة إذن إشعارات الجوال — يطلبها الموظف بنفسه بضغطة زر (المتصفحات ما بتسمح بطلبها تلقائيًا) */
   const [notifPermission, setNotifPermission] = useState(
     typeof Notification !== "undefined" ? Notification.permission : "unsupported"
@@ -2117,6 +2121,20 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
      يقارن الرسائل الجديدة الواردة من المزامنة اللحظية بآخر رسائل معروفة، ويشغّل نغمة فقط للرسائل
      الجديدة فعليًا بعد أول تحميل للصفحة (عشان ما يرن على كل الرسائل القديمة أول ما يفتح النظام) */
   const myEmployeeForNotif = currentUser.employeeId ? employees.find((e) => e.id === currentUser.employeeId) : null;
+  /* كل الرسائل الموجّهة فعليًا للمستخدم الحالي (عامة، أو لموظفه المرتبط، أو لفرعه) — تُعرض في جرس
+     الإشعارات بالشريط الجانبي بغض النظر عن دوره أو تبويبه الحالي */
+  const myRelevantMessages = messages
+    .filter((m) => {
+      if (m.scope === "all") return true;
+      if (m.scope === "employee") return myEmployeeForNotif && m.employeeId === myEmployeeForNotif.id;
+      if (m.scope === "branch") return myEmployeeForNotif && m.branchId === myEmployeeForNotif.branchId;
+      return false;
+    })
+    .slice()
+    .sort((a, b) => (a.sentAt < b.sentAt ? 1 : -1));
+  const myUnreadCount = myEmployeeForNotif
+    ? myRelevantMessages.filter((m) => !(m.readBy || []).includes(myEmployeeForNotif.id)).length
+    : 0;
   const notifSeenIdsRef = useRef(null);
   useEffect(() => {
     if (!loaded) return;
@@ -2861,6 +2879,30 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             {isBranchManager && ` · ${branchName(currentUser.branchId)}`}
             {isEntityManager && ` · ${entityName(currentUser.entityId)}`}
           </div>
+          <button
+            onClick={() => setShowNotifPanel(true)}
+            style={{
+              width: "100%",
+              background: myUnreadCount > 0 ? "rgba(166,75,63,0.25)" : "transparent",
+              border: `1px solid ${myUnreadCount > 0 ? COLORS.brick : "rgba(216,168,90,0.4)"}`,
+              color: "#fff",
+              borderRadius: 6,
+              padding: "7px 10px",
+              fontSize: 12,
+              cursor: "pointer",
+              marginBottom: 8,
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <span>🔔 {t("الرسائل والإشعارات", "Messages & Notifications")}</span>
+            {myUnreadCount > 0 && (
+              <span style={{ background: COLORS.brick, color: "#fff", borderRadius: 999, minWidth: 18, height: 18, fontSize: 10.5, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 5px" }}>
+                {myUnreadCount}
+              </span>
+            )}
+          </button>
           {currentUser.employeeId && (
             <button
               onClick={() => setSelfView(true)}
@@ -2940,6 +2982,37 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           </button>
         </div>
       </aside>
+
+      {showNotifPanel && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(20,14,8,0.72)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <div style={{ background: "#fff", borderRadius: 14, padding: 20, width: "100%", maxWidth: 460, maxHeight: "82vh", overflowY: "auto" }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>{t("الرسائل والإشعارات", "Messages & Notifications")}</div>
+            <div style={{ fontSize: 11.5, color: "#a3927a", marginBottom: 14 }}>
+              {myEmployeeForNotif
+                ? t("رسائل موجّهة لك، لفرعك، أو لكل الموظفين", "Messages sent to you, your branch, or all employees")
+                : t("رسائل عامة لكل الموظفين — حسابك غير مرتبط بسجل موظف فما توصلك رسائل موجَّهة لك تحديدًا", "General broadcasts to all employees — your account isn't linked to an employee record, so messages targeted specifically at you won't reach you here")}
+            </div>
+            {myRelevantMessages.length === 0 && <Empty text={t("لا توجد رسائل", "No messages")} />}
+            {myRelevantMessages.map((m) => {
+              const isRead = myEmployeeForNotif && (m.readBy || []).includes(myEmployeeForNotif.id);
+              return (
+                <div key={m.id} style={{ padding: "10px 0", borderBottom: `1px dashed ${COLORS.line}` }}>
+                  <div style={{ fontSize: 12.5, lineHeight: 1.6, fontWeight: isRead ? 400 : 700 }}>{m.text}</div>
+                  <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 4, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <span>{m.sentBy} — {new Date(m.sentAt).toLocaleString()}</span>
+                    {myEmployeeForNotif && !isRead && (
+                      <Btn small tone="secondary" onClick={() => markMessageRead(m.id, myEmployeeForNotif.id)}>{t("✔ تعليم كمقروءة", "✔ Mark Read")}</Btn>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
+              <Btn tone="secondary" onClick={() => setShowNotifPanel(false)}>{t("إغلاق", "Close")}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showChangePassword && (
         <ChangePasswordModal
