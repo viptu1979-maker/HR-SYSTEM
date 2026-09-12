@@ -6676,9 +6676,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const [payslip, setPayslip] = useState(null);
   const [printItem, setPrintItem] = useState(null);
   /* تفاصيل أيام غياب موظف معيّن (لعرضها وتعديلها) — نخزّن id الموظف اللي فاتح تفاصيله حاليًا */
-  const [absenceDetailsFor, setAbsenceDetailsFor] = useState(null);
-  const [editingAbsenceDate, setEditingAbsenceDate] = useState(null);
-  const [editAbsenceForm, setEditAbsenceForm] = useState(null);
+  const [detailsFor, setDetailsFor] = useState(null); // { rowId, kind: 'absence' | 'late' | 'overtime' }
+  const [editingDate, setEditingDate] = useState(null);
+  const [editDayForm, setEditDayForm] = useState(null);
 
   /* تحديث أو إنشاء سجل حضور ليوم معيّن — تُستخدم لتصحيح غياب مسجَّل يدويًا، أو لإضافة سجل ليوم
      احتُسب غيابًا تلقائيًا لعدم وجود أي بصمة له (مثلاً لو تبيّن إنه كان حاضر فعليًا) */
@@ -6782,6 +6782,21 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         0
       );
       const totalDeductibleMinutes = lateMinutesTotal + flexibleShortfallMinutes + earlyLeaveMinutesTotal;
+      /* تفاصيل كل يوم ساهم في دقائق التأخير/الخصم (تأخير صريح، نقص ساعات دوام حر، أو خروج مبكر) —
+         لعرضها وتعديلها بدل ما تكون رقمًا مجمَّعًا فقط */
+      const lateDetailRecords = [];
+      monthAttendance.forEach((a) => {
+        const early = Number(a.earlyLeaveMinutes || 0) + Number(a.earlyLeaveMinutes2 || 0);
+        if (a.status === "متأخر" && Number(a.lateMinutes || 0) > 0) {
+          lateDetailRecords.push({ date: a.date, minutes: Number(a.lateMinutes), kindLabel: t("تأخير", "Late") });
+        }
+        if (Number(a.shortfallMinutes || 0) > 0) {
+          lateDetailRecords.push({ date: a.date, minutes: Number(a.shortfallMinutes), kindLabel: t("نقص ساعات (دوام حر)", "Hours shortfall (flexible)") });
+        }
+        if (early > 0) {
+          lateDetailRecords.push({ date: a.date, minutes: early, kindLabel: t("خروج مبكر", "Early leave") });
+        }
+      });
 
       const unpaidLeaveDays = leaves
         .filter((l) => l.employeeId === e.id && l.type === "بدون راتب")
@@ -6796,6 +6811,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const hourlyRate = dailyRate / dailyHours;
       const overtimeHours = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0), 0);
       const overtimePay = overtimeHours * hourlyRate * 1.5;
+      const overtimeDetailRecords = monthAttendance
+        .filter((a) => Number(a.overtimeHours || 0) > 0)
+        .map((a) => ({ date: a.date, hours: Number(a.overtimeHours) }));
 
       /* السلف والخصومات والحوافز المسجّلة لهذا الموظف في الشهر المختار */
       const monthItems = payrollItems.filter((p) => p.employeeId === e.id && p.month === month);
@@ -6815,11 +6833,13 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         absentAutoDates: autoAbsentDates,
         absentDeduction,
         lateMinutesTotal: totalDeductibleMinutes,
+        lateDetailRecords,
         lateDeduction,
         unpaidLeaveDays,
         unpaidLeaveDeduction,
         attendanceDeduction,
         overtimeHours,
+        overtimeDetailRecords,
         overtimePay,
         advances,
         extraDeductions,
@@ -7043,7 +7063,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                     {r.absentDays > 0 ? (
                       <button
                         className="no-print"
-                        onClick={() => setAbsenceDetailsFor(r.id)}
+                        onClick={() => setDetailsFor({ rowId: r.id, kind: "absence" })}
                         style={{ background: "transparent", border: "none", padding: 0, color: COLORS.brick, fontWeight: 700, textDecoration: "underline", textDecorationStyle: "dotted", cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
                         title={t("عرض أيام الغياب بالتفصيل", "View absence details")}
                       >
@@ -7054,12 +7074,38 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                     )}
                   </td>
                   <td data-label={t("خصم الغياب", "Absence Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
-                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.lateMinutesTotal)}</td>
+                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
+                    {r.lateMinutesTotal > 0 ? (
+                      <button
+                        className="no-print"
+                        onClick={() => setDetailsFor({ rowId: r.id, kind: "late" })}
+                        style={{ background: "transparent", border: "none", padding: 0, color: COLORS.brick, fontWeight: 700, textDecoration: "underline", textDecorationStyle: "dotted", cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
+                        title={t("عرض تفاصيل التأخير", "View late details")}
+                      >
+                        {fmt(r.lateMinutesTotal)}
+                      </button>
+                    ) : (
+                      fmt(r.lateMinutesTotal)
+                    )}
+                  </td>
                   <td data-label={t("خصم التأخير", "Lateness Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
                   <td data-label={t("أيام إجازة بدون راتب", "Unpaid Leave Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
-                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.overtimeHours)}</td>
+                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
+                    {r.overtimeHours > 0 ? (
+                      <button
+                        className="no-print"
+                        onClick={() => setDetailsFor({ rowId: r.id, kind: "overtime" })}
+                        style={{ background: "transparent", border: "none", padding: 0, color: COLORS.green, fontWeight: 700, textDecoration: "underline", textDecorationStyle: "dotted", cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
+                        title={t("عرض تفاصيل الوقت الإضافي", "View overtime details")}
+                      >
+                        {fmt(r.overtimeHours)}
+                      </button>
+                    ) : (
+                      fmt(r.overtimeHours)
+                    )}
+                  </td>
                   <td data-label={t("قيمة الإضافي", "Overtime Pay")} style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.overtimePay)}</td>
                   <td data-label={t("السلف", "Advances")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
                   <td data-label={t("خصومات أخرى", "Other Deductions")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
@@ -7079,59 +7125,80 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       </div>
       )}
 
-      {absenceDetailsFor && (() => {
-        const detailRow = rows.find((r) => r.id === absenceDetailsFor);
+      {detailsFor && (() => {
+        const detailRow = rows.find((r) => r.id === detailsFor.rowId);
         if (!detailRow) return null;
-        const combinedDates = [
-          ...(detailRow.absentManualDates || []).map((d) => ({ date: d, manual: true })),
-          ...(detailRow.absentAutoDates || []).map((d) => ({ date: d, manual: false })),
-        ].sort((a, b) => (a.date < b.date ? 1 : -1));
+        let entries = [];
+        let title = "";
+        if (detailsFor.kind === "absence") {
+          title = t("أيام الغياب", "Absence Days");
+          entries = [
+            ...(detailRow.absentManualDates || []).map((d) => ({ date: d, subtitle: t("غياب مسجَّل يدويًا", "Manually recorded absence") })),
+            ...(detailRow.absentAutoDates || []).map((d) => ({ date: d, subtitle: t("بدون بصمة حضور/انصراف", "No clock-in/out record") })),
+          ];
+        } else if (detailsFor.kind === "late") {
+          title = t("تفاصيل التأخير والخصومات بالدقائق", "Late & Per-Minute Deduction Details");
+          entries = (detailRow.lateDetailRecords || []).map((r) => ({ date: r.date, subtitle: `${r.kindLabel} — ${fmt(r.minutes)} ${t("د", "min")}` }));
+        } else if (detailsFor.kind === "overtime") {
+          title = t("تفاصيل الوقت الإضافي", "Overtime Details");
+          entries = (detailRow.overtimeDetailRecords || []).map((r) => ({ date: r.date, subtitle: `${fmt(r.hours)} ${t("ساعة", "hours")}` }));
+        }
+        entries = entries.slice().sort((a, b) => (a.date < b.date ? 1 : -1));
+        const closeModal = () => { setDetailsFor(null); setEditingDate(null); setEditDayForm(null); };
         return (
           <div style={{ position: "fixed", inset: 0, background: "rgba(20,14,8,0.72)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} className="no-print">
             <div style={{ background: "#fff", borderRadius: 14, padding: 20, width: "100%", maxWidth: 480, maxHeight: "88vh", overflowY: "auto" }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>{t("أيام الغياب", "Absence Days")}</div>
+              <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>{title}</div>
               <div style={{ fontSize: 12, color: "#8a7a63", marginBottom: 14 }}>{detailRow.name} — {month}</div>
 
-              {combinedDates.length === 0 && <Empty text={t("لا توجد أيام غياب", "No absence days")} />}
+              {entries.length === 0 && <Empty text={t("لا توجد سجلات", "No records")} />}
 
-              {combinedDates.map(({ date, manual }) => (
-                <div key={date} style={{ padding: "10px 0", borderBottom: `1px dashed ${COLORS.line}` }}>
-                  {editingAbsenceDate === date && editAbsenceForm ? (
+              {entries.map(({ date, subtitle }, i) => (
+                <div key={date + i} style={{ padding: "10px 0", borderBottom: `1px dashed ${COLORS.line}` }}>
+                  {editingDate === date && editDayForm ? (
                     <div>
                       <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>{date} {dayNameOfDate(date, t) && `(${dayNameOfDate(date, t)})`}</div>
                       <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                         <Field label={t("الحالة", "Status")}>
-                          <select style={inputStyle} value={editAbsenceForm.status} onChange={(e) => setEditAbsenceForm({ ...editAbsenceForm, status: e.target.value })}>
+                          <select style={inputStyle} value={editDayForm.status} onChange={(e) => setEditDayForm({ ...editDayForm, status: e.target.value })}>
                             <option value="حاضر">{t("حاضر", "Present")}</option>
                             <option value="متأخر">{t("متأخر", "Late")}</option>
                             <option value="غائب">{t("غائب", "Absent")}</option>
                           </select>
                         </Field>
                         <Field label={t("وقت الحضور", "Check-in")}>
-                          <input type="time" style={inputStyle} value={editAbsenceForm.checkInTime} onChange={(e) => setEditAbsenceForm({ ...editAbsenceForm, checkInTime: e.target.value })} />
+                          <input type="time" style={inputStyle} value={editDayForm.checkInTime} onChange={(e) => setEditDayForm({ ...editDayForm, checkInTime: e.target.value })} />
                         </Field>
                         <Field label={t("وقت الانصراف", "Check-out")}>
-                          <input type="time" style={inputStyle} value={editAbsenceForm.checkOutTime} onChange={(e) => setEditAbsenceForm({ ...editAbsenceForm, checkOutTime: e.target.value })} />
+                          <input type="time" style={inputStyle} value={editDayForm.checkOutTime} onChange={(e) => setEditDayForm({ ...editDayForm, checkOutTime: e.target.value })} />
                         </Field>
-                        {editAbsenceForm.status === "متأخر" && (
+                        {editDayForm.status === "متأخر" && (
                           <Field label={t("دقائق التأخير", "Late Minutes")}>
-                            <input type="number" style={inputStyle} value={editAbsenceForm.lateMinutes} onChange={(e) => setEditAbsenceForm({ ...editAbsenceForm, lateMinutes: e.target.value })} />
+                            <input type="number" style={inputStyle} value={editDayForm.lateMinutes} onChange={(e) => setEditDayForm({ ...editDayForm, lateMinutes: e.target.value })} />
                           </Field>
                         )}
+                        <Field label={t("دقائق الخروج المبكر", "Early Leave Minutes")}>
+                          <input type="number" style={inputStyle} value={editDayForm.earlyLeaveMinutes} onChange={(e) => setEditDayForm({ ...editDayForm, earlyLeaveMinutes: e.target.value })} />
+                        </Field>
+                        <Field label={t("ساعات العمل الإضافي", "Overtime Hours")}>
+                          <input type="number" step="0.5" style={inputStyle} value={editDayForm.overtimeHours} onChange={(e) => setEditDayForm({ ...editDayForm, overtimeHours: e.target.value })} />
+                        </Field>
                       </div>
                       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                        <Btn small tone="secondary" onClick={() => { setEditingAbsenceDate(null); setEditAbsenceForm(null); }}>{t("إلغاء", "Cancel")}</Btn>
+                        <Btn small tone="secondary" onClick={() => { setEditingDate(null); setEditDayForm(null); }}>{t("إلغاء", "Cancel")}</Btn>
                         <Btn
                           small
                           onClick={() => {
                             upsertAttendanceForDate(detailRow.id, date, {
-                              status: editAbsenceForm.status,
-                              checkInTime: editAbsenceForm.checkInTime.trim(),
-                              checkOutTime: editAbsenceForm.checkOutTime.trim(),
-                              lateMinutes: editAbsenceForm.status === "متأخر" ? Number(editAbsenceForm.lateMinutes || 0) : 0,
+                              status: editDayForm.status,
+                              checkInTime: editDayForm.checkInTime.trim(),
+                              checkOutTime: editDayForm.checkOutTime.trim(),
+                              lateMinutes: editDayForm.status === "متأخر" ? Number(editDayForm.lateMinutes || 0) : 0,
+                              earlyLeaveMinutes: Number(editDayForm.earlyLeaveMinutes || 0),
+                              overtimeHours: Number(editDayForm.overtimeHours || 0),
                             });
-                            setEditingAbsenceDate(null);
-                            setEditAbsenceForm(null);
+                            setEditingDate(null);
+                            setEditDayForm(null);
                           }}
                         >
                           {t("💾 حفظ", "💾 Save")}
@@ -7142,16 +7209,22 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
                       <div>
                         <div style={{ fontSize: 12.5, fontWeight: 600 }}>{date} {dayNameOfDate(date, t) && `(${dayNameOfDate(date, t)})`}</div>
-                        <div style={{ fontSize: 10.5, color: "#a3927a" }}>
-                          {manual ? t("غياب مسجَّل يدويًا", "Manually recorded absence") : t("بدون بصمة حضور/انصراف", "No clock-in/out record")}
-                        </div>
+                        <div style={{ fontSize: 10.5, color: "#a3927a" }}>{subtitle}</div>
                       </div>
                       <Btn
                         small
                         tone="secondary"
                         onClick={() => {
-                          setEditingAbsenceDate(date);
-                          setEditAbsenceForm({ status: "حاضر", checkInTime: "", checkOutTime: "", lateMinutes: "" });
+                          const existing = attendance.find((a) => a.employeeId === detailRow.id && a.date === date);
+                          setEditingDate(date);
+                          setEditDayForm({
+                            status: existing?.status || "حاضر",
+                            checkInTime: existing?.checkInTime || "",
+                            checkOutTime: existing?.checkOutTime || "",
+                            lateMinutes: existing?.lateMinutes || "",
+                            earlyLeaveMinutes: existing?.earlyLeaveMinutes || "",
+                            overtimeHours: existing?.overtimeHours || "",
+                          });
                         }}
                       >
                         {t("✎ تعديل", "✎ Edit")}
@@ -7162,7 +7235,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
               ))}
 
               <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-                <Btn tone="secondary" onClick={() => { setAbsenceDetailsFor(null); setEditingAbsenceDate(null); setEditAbsenceForm(null); }}>{t("إغلاق", "Close")}</Btn>
+                <Btn tone="secondary" onClick={closeModal}>{t("إغلاق", "Close")}</Btn>
               </div>
             </div>
           </div>
