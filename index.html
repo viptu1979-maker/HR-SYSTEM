@@ -3549,7 +3549,9 @@ function getMissingAttendanceDates(emp, periodAttendanceRecords, employeeApprove
   const recordedDates = new Set((periodAttendanceRecords || []).map((a) => a.date));
   const missingDates = [];
   for (let dateObj = new Date(start); dateObj <= end; dateObj.setDate(dateObj.getDate() + 1)) {
-    if (dateObj > today) break; /* يوم مستقبلي — ما نحكم عليه */
+    /* اليوم الحالي نفسه ما يُحتسب غيابًا تلقائيًا إطلاقًا — الموظف ممكن يكون لسه ما جاله وقت دوامه
+       أو دوامه لسه شغال؛ الحكم على "غياب بدون بصمة" يبدأ من الأمس فما قبل فقط */
+    if (dateObj >= today) break;
     if (dateObj < join) continue; /* قبل تاريخ التعيين */
     const dateStr = fmtISODate(dateObj);
     if (recordedDates.has(dateStr)) continue; /* له سجل حضور بالفعل (حاضر/متأخر/غائب يدوي...) */
