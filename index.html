@@ -2165,12 +2165,16 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
      موظف وفعّل "بياناتي" مؤقتًا (selfView) عشان يسجّل حضوره/إجازاته بنفسه */
   if (role === "employee" || selfView) {
     const myEmployee = employees.find((e) => e.id === currentUser.employeeId);
-    /* موظف عنده صلاحية جودة و/أو صيانة إضافية: يشوف بيانات فرعه فقط من المعدات وطلبات الصيانة وقوالب/سجلات الجودة */
+    /* موظف عنده صلاحية جودة و/أو صيانة إضافية: يشوف بيانات فرعه فقط من المعدات وطلبات الصيانة وقوالب/سجلات الجودة —
+       إلا لو هو نفسه "مسؤول الصيانة العام" أو "مسؤول الجودة العام" المحدَّد من الإعدادات، فوقتها يشوف
+       طلبات/فحوصات كل الفروع مجتمعة (مو بس فرعه)، لأن دوره أصلًا يغطي كل الفروع */
     const myBranchIdForQm = myEmployee?.branchId || "";
-    const myQmEquipment = equipment.filter((x) => x.branchId === myBranchIdForQm);
-    const myQmWorkOrders = workOrders.filter((x) => x.branchId === myBranchIdForQm);
-    const myQmTemplates = qualityTemplates.filter((x) => x.branchId === myBranchIdForQm);
-    const myQmSubmissions = qualitySubmissions.filter((x) => x.branchId === myBranchIdForQm);
+    const isGlobalMaintenanceManager = myEmployee && myEmployee.id === maintenanceManagerId;
+    const isGlobalQualityManager = myEmployee && myEmployee.id === qualityManagerId;
+    const myQmEquipment = isGlobalMaintenanceManager ? equipment : equipment.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmWorkOrders = isGlobalMaintenanceManager ? workOrders : workOrders.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmTemplates = isGlobalQualityManager ? qualityTemplates : qualityTemplates.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmSubmissions = isGlobalQualityManager ? qualitySubmissions : qualitySubmissions.filter((x) => x.branchId === myBranchIdForQm);
     const submitLeaveRequest = (req) => {
       const newReq = {
         ...req,
@@ -2538,6 +2542,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         workOrders={myQmWorkOrders}
         qualityTemplates={myQmTemplates}
         qualitySubmissions={myQmSubmissions}
+        maintenanceManagerId={maintenanceManagerId}
+        qualityManagerId={qualityManagerId}
         onAddEquipment={addEquipment}
         onUpdateEquipment={updateEquipment}
         onRemoveEquipment={removeEquipment}
@@ -10477,6 +10483,7 @@ function EmployeeSelfView({
   geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto,
   onAddTaskVideos, onRemoveTaskVideo, messages = [], onMarkMessageRead, onAcknowledgeMessage, dirty, saving, syncError, onSave, faceModal, onFaceCancel, onFaceVerified,
   qualityAccess = false, maintenanceAccess = false, branches = [], equipment = [], workOrders = [], qualityTemplates = [], qualitySubmissions = [],
+  maintenanceManagerId = "", qualityManagerId = "",
   onAddEquipment, onUpdateEquipment, onRemoveEquipment, onAddEquipmentPhotos, onRemoveEquipmentPhoto,
   onAddWorkOrder, onUpdateWorkOrderStatus, onUpdateWorkOrderCostStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
   onAddQualityTemplate, onRemoveQualityTemplate, onAddQualitySubmission, onRemoveQualitySubmission,
@@ -11146,7 +11153,7 @@ function EmployeeSelfView({
             templates={qualityTemplates}
             submissions={qualitySubmissions}
             branches={branches}
-            defaultBranchId={employee.branchId}
+            defaultBranchId={employee.id === qualityManagerId ? "" : employee.branchId}
             onAddTemplate={onAddQualityTemplate}
             onRemoveTemplate={onRemoveQualityTemplate}
             onAddSubmission={onAddQualitySubmission}
@@ -11160,7 +11167,7 @@ function EmployeeSelfView({
             equipment={equipment}
             workOrders={workOrders}
             branches={branches}
-            defaultBranchId={employee.branchId}
+            defaultBranchId={employee.id === maintenanceManagerId ? "" : employee.branchId}
             onAddEquipment={onAddEquipment}
             onUpdateEquipment={onUpdateEquipment}
             onRemoveEquipment={onRemoveEquipment}
