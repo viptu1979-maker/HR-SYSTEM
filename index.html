@@ -6361,6 +6361,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
       status: a.status || "حاضر",
       lateMinutes: a.lateMinutes || "",
       earlyLeaveMinutes: a.earlyLeaveMinutes || "",
+      shortfallMinutes: a.shortfallMinutes || "",
       overtimeHours: a.overtimeHours || "",
       overtimeHours2: a.overtimeHours2 || "",
     });
@@ -6383,6 +6384,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
               status: editAttForm.status,
               lateMinutes: editAttForm.status === "متأخر" ? Number(editAttForm.lateMinutes || 0) : 0,
               earlyLeaveMinutes: Number(editAttForm.earlyLeaveMinutes || 0),
+              shortfallMinutes: Number(editAttForm.shortfallMinutes || 0),
               overtimeHours: Number(editAttForm.overtimeHours || 0),
               overtimeHours2: Number(editAttForm.overtimeHours2 || 0),
             }
@@ -6597,6 +6599,9 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
                 )}
                 <Field label={t("دقائق الخروج المبكر", "Early Leave Minutes")}>
                   <input type="number" style={inputStyle} value={editAttForm.earlyLeaveMinutes} onChange={(e) => setEditAttForm({ ...editAttForm, earlyLeaveMinutes: e.target.value })} />
+                </Field>
+                <Field label={t("دقائق نقص الساعات (دوام حر)", "Hours Shortfall Minutes (flexible)")}>
+                  <input type="number" style={inputStyle} value={editAttForm.shortfallMinutes} onChange={(e) => setEditAttForm({ ...editAttForm, shortfallMinutes: e.target.value })} />
                 </Field>
                 <Field label={t("ساعات العمل الإضافي", "Overtime Hours")}>
                   <input type="number" step="0.5" style={inputStyle} value={editAttForm.overtimeHours} onChange={(e) => setEditAttForm({ ...editAttForm, overtimeHours: e.target.value })} />
@@ -7280,6 +7285,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                         <Field label={t("دقائق الخروج المبكر", "Early Leave Minutes")}>
                           <input type="number" style={inputStyle} value={editDayForm.earlyLeaveMinutes} onChange={(e) => setEditDayForm({ ...editDayForm, earlyLeaveMinutes: e.target.value })} />
                         </Field>
+                        <Field label={t("دقائق نقص الساعات (دوام حر)", "Hours Shortfall Minutes (flexible)")}>
+                          <input type="number" style={inputStyle} value={editDayForm.shortfallMinutes} onChange={(e) => setEditDayForm({ ...editDayForm, shortfallMinutes: e.target.value })} />
+                        </Field>
                         <Field label={t("ساعات العمل الإضافي", "Overtime Hours")}>
                           <input type="number" step="0.5" style={inputStyle} value={editDayForm.overtimeHours} onChange={(e) => setEditDayForm({ ...editDayForm, overtimeHours: e.target.value })} />
                         </Field>
@@ -7295,6 +7303,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                               checkOutTime: editDayForm.checkOutTime.trim(),
                               lateMinutes: editDayForm.status === "متأخر" ? Number(editDayForm.lateMinutes || 0) : 0,
                               earlyLeaveMinutes: Number(editDayForm.earlyLeaveMinutes || 0),
+                              shortfallMinutes: Number(editDayForm.shortfallMinutes || 0),
                               overtimeHours: Number(editDayForm.overtimeHours || 0),
                             });
                             setEditingDate(null);
@@ -7323,6 +7332,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                             checkOutTime: existing?.checkOutTime || "",
                             lateMinutes: existing?.lateMinutes || "",
                             earlyLeaveMinutes: existing?.earlyLeaveMinutes || "",
+                            shortfallMinutes: existing?.shortfallMinutes || "",
                             overtimeHours: existing?.overtimeHours || "",
                           });
                         }}
