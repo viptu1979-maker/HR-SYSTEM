@@ -405,6 +405,39 @@ function playNotificationSound() {
   }
 }
 
+/* طلب إذن إشعارات الجوال (مركز الإشعارات/الشاشة المقفلة) من المتصفح — لازم يُستدعى نتيجة ضغطة
+   فعلية من الموظف (زر)، وإلا بعض المتصفحات (خصوصًا على الآيفون) بترفض الطلب صامتة */
+async function requestNotifPermission() {
+  try {
+    if (!("Notification" in window)) return "unsupported";
+    if (Notification.permission === "granted" || Notification.permission === "denied") return Notification.permission;
+    return await Notification.requestPermission();
+  } catch (err) {
+    return "unsupported";
+  }
+}
+
+/* إظهار إشعار حقيقي في مركز إشعارات الجوال (وليس مجرد نغمة داخل الصفحة) — عبر الـ Service Worker
+   المسجَّل أصلًا لو متاح (يشتغل حتى لو المتصفح في الخلفية)، وإلا عبر Notification API مباشرة.
+   يعمل طالما المتصفح/التطبيق شغّال (ولو في الخلفية أو الجوال مقفول) — إشعارات push حقيقية بعد
+   إغلاق التطبيق تمامًا تحتاج خادم إشعارات (FCM) منفصل، وده خارج نطاق هذا الملف. */
+async function showOSNotification(title, body) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const options = { body, icon: "icon-192.png", badge: "icon-192.png", silent: true, tag: "hr-notif-" + Date.now() };
+    if ("serviceWorker" in navigator) {
+      const reg = await navigator.serviceWorker.ready.catch(() => null);
+      if (reg && reg.showNotification) {
+        reg.showNotification(title, options);
+        return;
+      }
+    }
+    new Notification(title, options);
+  } catch (err) {
+    /* تجاهل أي فشل في إظهار الإشعار */
+  }
+}
+
 /* ضغط وتصغير صورة قبل تحويلها لـ base64 وتخزينها في Firestore — لتفادي تضخّم حجم المستند */
 function compressImage(file, maxDim = 900, quality = 0.72) {
   return new Promise((resolve, reject) => {
@@ -1374,6 +1407,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   /* حساب إداري (أدمن/مسؤول/...) مرتبط أيضًا بسجل موظف: يقدر يتنقّل بين لوحة التحكم الكاملة
      وشاشته الشخصية (حضور/انصراف، إجازات، سلف) بنفس الحساب دون تسجيل خروج */
   const [selfView, setSelfView] = useState(false);
+  /* حالة إذن إشعارات الجوال — يطلبها الموظف بنفسه بضغطة زر (المتصفحات ما بتسمح بطلبها تلقائيًا) */
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
+  );
+  const enableNotifications = async () => {
+    const result = await requestNotifPermission();
+    setNotifPermission(result);
+  };
   /* أي قسم فرعي معروض حاليًا داخل تبويب "تراخيص الفروع" (السجل التجاري / باقي الرخص / الشهادات الصحية والتأمين الطبي / السيارات) */
   const [licenseSubTab, setLicenseSubTab] = useState("cr");
   /* أي الأقسام الرئيسية في القائمة الجانبية مفتوحة حاليًا — يُفتح تلقائيًا القسم الذي يحوي البند النشط */
@@ -2079,7 +2120,13 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return;
     }
     const hasNew = relevantMsgs.some((m) => m.sentBy !== currentUser.name && !notifSeenIdsRef.current.has(m.id));
-    if (hasNew) playNotificationSound();
+    if (hasNew) {
+      playNotificationSound();
+      const newOnes = relevantMsgs.filter((m) => m.sentBy !== currentUser.name && !notifSeenIdsRef.current.has(m.id));
+      newOnes.slice(0, 3).forEach((m) => {
+        showOSNotification(t("نظام الموارد البشرية", "HR System"), m.text || "");
+      });
+    }
     notifSeenIdsRef.current = currentIds;
   }, [messages, loaded]);
 
@@ -2817,6 +2864,26 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
               }}
             >
               {t("🧑‍💼 بياناتي (حضور وإجازات)", "🧑‍💼 My Profile (Attendance & Leave)")}
+            </button>
+          )}
+          {notifPermission !== "unsupported" && notifPermission !== "granted" && (
+            <button
+              onClick={enableNotifications}
+              style={{
+                width: "100%",
+                background: "transparent",
+                border: "1px solid rgba(216,168,90,0.4)",
+                color: "#D9CBB2",
+                borderRadius: 6,
+                padding: "7px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                marginBottom: 8,
+              }}
+            >
+              {notifPermission === "denied"
+                ? t("🔕 الإشعارات محظورة (فعّلها من إعدادات المتصفح)", "🔕 Notifications blocked (enable from browser settings)")
+                : t("🔔 تفعيل إشعارات الجوال", "🔔 Enable Mobile Notifications")}
             </button>
           )}
           <button
@@ -10120,6 +10187,14 @@ function EmployeeSelfView({
   const [taskVideoBusy, setTaskVideoBusy] = useState({});
   const [taskVideoError, setTaskVideoError] = useState({});
   const [taskLightbox, setTaskLightbox] = useState(null);
+  /* حالة إذن إشعارات الجوال — يطلبها الموظف بنفسه بضغطة زر */
+  const [notifPermission, setNotifPermission] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
+  );
+  const enableNotifications = async () => {
+    const result = await requestNotifPermission();
+    setNotifPermission(result);
+  };
 
   /* تحميل نماذج التعرف على الوجه مبكرًا في الخلفية من أول ما تفتح شاشة الموظف — بدل ما ننتظر لحظة
      الضغط على "تسجيل حضور/انصراف". كده لما يفتح شاشة التحقق تكون النماذج جاهزة فعليًا (أو شارفت)
@@ -10261,6 +10336,13 @@ function EmployeeSelfView({
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <SaveStatusIcon saving={saving} syncError={syncError} dirty={dirty} onSave={onSave} />
             <LangToggle />
+            {notifPermission !== "unsupported" && notifPermission !== "granted" && (
+              <Btn tone="secondary" onClick={enableNotifications}>
+                {notifPermission === "denied"
+                  ? t("🔕 الإشعارات محظورة (من إعدادات المتصفح)", "🔕 Notifications blocked (browser settings)")
+                  : t("🔔 تفعيل إشعارات الجوال", "🔔 Enable Notifications")}
+              </Btn>
+            )}
             {onBackToDashboard && <Btn tone="secondary" onClick={onBackToDashboard}>{t("🏠 الرجوع للوحة التحكم", "🏠 Back to Dashboard")}</Btn>}
             <Btn tone="secondary" onClick={() => setShowChangePassword(true)}>{t("🔑 تغيير كلمة المرور", "🔑 Change Password")}</Btn>
             <Btn tone="secondary" onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
