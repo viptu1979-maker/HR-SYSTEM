@@ -2321,7 +2321,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         const isOffDayToday = getOffDays(myEmployee).includes(todayDayName);
         const shiftStart = effectiveShift(myEmployee, todayDayName).start;
         const diff = (myEmployee.flexibleSchedule || isOffDayToday) ? 0 : minutesOf(timeStr) - minutesOf(shiftStart);
-        const lateMinutes = diff > 0 ? diff : 0;
+        const lateMinutes = diff > ATTENDANCE_GRACE_MINUTES ? diff : 0;
         const rec = {
           id: uid(),
           employeeId: myEmployee.id,
@@ -2342,7 +2342,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       } else {
         const shiftStart2 = myEmployee.workShift2?.start || "17:00";
         const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart2);
-        const lateMinutes2 = diff > 0 ? diff : 0;
+        const lateMinutes2 = diff > ATTENDANCE_GRACE_MINUTES ? diff : 0;
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === already.id
@@ -2408,7 +2408,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           overtimeHours = diff > 0 ? Math.min(12, Math.round((diff / 60) * 2) / 2) : 0;
           /* لو انصرف قبل نهاية دوامه، نسجّل عدد دقائق الخروج المبكر (يُستخدم في خصم الراتب لاحقًا) —
              السقف الأقصى هو عدد ساعات دوامه الفعلية اليومية، مش 8 ساعات ثابتة للجميع */
-          earlyLeaveMinutes = diff < 0 ? Math.min(dailyWorkHours(myEmployee) * 60, -diff) : 0;
+          earlyLeaveMinutes = diff < -ATTENDANCE_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff) : 0;
         }
         setAttendance((prev) =>
           prev.map((a) =>
@@ -2442,7 +2442,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           if (shiftEnd2Minutes <= minutesOf(shiftStart2Raw)) shiftEnd2Minutes += 24 * 60;
           const diff2 = checkoutMinutesAdj2 - shiftEnd2Minutes;
           overtimeHours2 = diff2 > 0 ? Math.min(12, Math.round((diff2 / 60) * 2) / 2) : 0;
-          earlyLeaveMinutes2 = diff2 < 0 ? Math.min(dailyWorkHours(myEmployee) * 60, -diff2) : 0;
+          earlyLeaveMinutes2 = diff2 < -ATTENDANCE_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff2) : 0;
         }
         setAttendance((prev) =>
           prev.map((a) =>
@@ -3604,6 +3604,10 @@ function formatOffDays(days, t) {
 }
 
 /* ترتيب أيام الأسبوع كما يرجعه Date.getDay() في JS (0=الأحد...6=السبت) — لمطابقتها بأسماء الأيام العربية */
+/* سماحية التأخير والخروج المبكر: 10 دقائق — أي تأخير أو خروج مبكر خلالها ما يُحتسب عليه أي خصم إطلاقًا،
+   وأي تجاوز لها يُحتسب كاملًا من وقت الدوام المقرَّر (مش بس الفرق الزائد عن الـ10 دقائق) */
+const ATTENDANCE_GRACE_MINUTES = 10;
+
 const JS_DAY_INDEX_TO_AR = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
 
 /* اسم اليوم (بالعربي أو الإنجليزي) من تاريخ بصيغة YYYY-MM-DD — تُستخدم لعرض اليوم جنب التاريخ
