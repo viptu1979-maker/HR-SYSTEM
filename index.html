@@ -1561,7 +1561,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setWorkOrders(next.workOrders);
           setQualityTemplates(next.qualityTemplates);
           setQualitySubmissions(next.qualitySubmissions);
-          lastSyncedRef.current = JSON.stringify(next);
+          /* لازم نفس شكل الـ payload المُستخدم في الحفظ بالظبط (بدون attendance، المستبعد لأنه بقى
+             يُحفظ ذرّيًا بشكل منفصل) — وإلا المقارنة هتفشل دايمًا وتظهر "تغيرات غير محفوظة" فورًا بعد
+             كل تحديث للصفحة حتى لو ماحصلش أي تغيير فعلي */
+          const { attendance: _omitAttendance, ...syncedShape } = next;
+          lastSyncedRef.current = JSON.stringify(syncedShape);
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
           DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, maintenanceManagerId: "", qualityManagerId: "", payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [] }).catch(() => {});
