@@ -374,6 +374,24 @@ const COLORS = {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
+/* تحديث سجل حضور موجود على Firestore بشكل ذرّي (إزالة النسخة القديمة بالظبط ثم إضافة النسخة
+   الجديدة) بدل الاعتماد على الحفظ الدوري الشامل للمستند — يمنع ضياع تسجيلات حضور/انصراف زميل
+   تاني لو حصلت في نفس اللحظات تقريبًا. لو الإزالة فشلت لأن النسخة المحلية مو مطابقة تمامًا لنسخة
+   السيرفر (تعديل متزامن من جهاز تاني)، السجل الجديد لسه بينضاف، فأسوأ احتمال نسخة مكرّرة قابلة
+   للتصحيح يدويًا، مش ضياع كامل للبيانات */
+function atomicUpdateAttendanceRecord(oldRecord, newRecord) {
+  DATA_DOC.update({ attendance: firebase.firestore.FieldValue.arrayRemove(oldRecord) })
+    .catch(() => {})
+    .then(() => DATA_DOC.update({ attendance: firebase.firestore.FieldValue.arrayUnion(newRecord) }))
+    .catch(() => {});
+}
+function atomicAddAttendanceRecord(record) {
+  DATA_DOC.update({ attendance: firebase.firestore.FieldValue.arrayUnion(record) }).catch(() => {});
+}
+function atomicRemoveAttendanceRecord(record) {
+  DATA_DOC.update({ attendance: firebase.firestore.FieldValue.arrayRemove(record) }).catch(() => {});
+}
+
 /* نغمة تنبيه قصيرة (نغمتين متتاليتين) للإشعارات — تُولَّد مباشرة بمكتبة Web Audio بدون ملف صوتي خارجي،
    عشان تشتغل فورًا على الجوال والمتصفح حتى بدون اتصال إنترنت لحظة التشغيل */
 let __notifAudioCtx = null;
@@ -1575,7 +1593,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   useEffect(() => {
     if (!loaded) return;
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
+    /* تنبيه: حقل attendance اتشال من هنا عمدًا — بيُحفظ بعملية Firestore ذرّية (arrayUnion/arrayRemove)
+       مباشرة لحظة كل حضور/انصراف بدل ما يكون جزء من هذا الحفظ الدوري الشامل. السبب: هذا الحفظ يكتب
+       نسخة الجهاز المحلية الكاملة فوق المستند، فلو موظفين كتير سجّلوا حضور في نفس الدقايق (زي وقت
+       الذروة صباحًا)، جلسة متأخرة شوية بنسخة قديمة من attendance كانت بتمسح حضور موظف سجّله زميله
+       لحظات قبلها. استخدام merge:true هنا يضمن إن حذف الحقل من هذا الـ payload ما يمسحوش من المستند. */
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1590,7 +1613,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
          الحركة بالكامل دون أي إشعار بالفشل */
       /* شبكة أمان: أي قيمة "undefined" في أي مكان بالبيانات (حتى لو ما انتبهناش لها) هترفض الحفظ
          بالكامل من Firestore — تحويلها لـ JSON وإرجاعها يشيلها تلقائيًا قبل الحفظ */
-      DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
+      DATA_DOC.set(JSON.parse(JSON.stringify(payload)), { merge: true })
         .then(() => {
           lastSyncedRef.current = json;
           setDirty(false);
@@ -1609,7 +1632,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return;
     }
     setDirty(true);
-  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, loaded, role, retryTick]);
+  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, loaded, role, retryTick]);
 
   /* نسخة احتياطية يومية تلقائية (بيانات النظام + حسابات الدخول معًا) — لو انحذف أو اتغيّر شيء بالغلط
      (من داخل النظام أو حتى من Firestore Console مباشرة) يقدر الأدمن يسترجعها من تبويب "الإعدادات" */
@@ -1720,18 +1743,20 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const cleanupLegacyBase64Photos = () => {
     const isBase64 = (s) => typeof s === "string" && s.startsWith("data:");
     let removedCount = 0;
-    setAttendance((prev) =>
-      prev.map((a) => {
-        const clean = { ...a };
-        ["checkInPhoto", "checkOutPhoto", "checkInPhoto2", "checkOutPhoto2"].forEach((k) => {
-          if (isBase64(clean[k])) {
-            clean[k] = "";
-            removedCount++;
-          }
-        });
-        return clean;
-      })
-    );
+    const cleanedAttendance = attendance.map((a) => {
+      const clean = { ...a };
+      ["checkInPhoto", "checkOutPhoto", "checkInPhoto2", "checkOutPhoto2"].forEach((k) => {
+        if (isBase64(clean[k])) {
+          clean[k] = "";
+          removedCount++;
+        }
+      });
+      return clean;
+    });
+    setAttendance(cleanedAttendance);
+    /* عملية تنظيف نادرة ومتعمَّدة (مش جزء من الحفظ الدوري المستبعد منه attendance) — كتابة صريحة
+       واحدة هنا مقبولة لأنها مش في مسار تسجيل حضور/انصراف متزامن مع موظفين تانيين */
+    DATA_DOC.update({ attendance: cleanedAttendance }).catch(() => {});
     setTasks((prev) =>
       prev.map((ts) => {
         const before = (ts.completionPhotos || []).length;
@@ -1745,7 +1770,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
   const saveNow = () => {
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
+    /* attendance مستبعد هنا لنفس السبب (يُحفظ ذرّيًا بشكل منفصل) — merge:true يضمن عدم مسحه */
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1753,7 +1779,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     }
     setSaving(true);
     setSyncError("");
-    DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
+    DATA_DOC.set(JSON.parse(JSON.stringify(payload)), { merge: true })
       .then(() => {
         lastSyncedRef.current = json;
         setDirty(false);
@@ -2338,18 +2364,17 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           checkInPhoto: uploadedPhotoUrl,
         };
         setAttendance((prev) => [...prev, rec]);
+        /* كتابة ذرّية فورية لسجل الحضور الجديد على Firestore (بدل الاعتماد على الحفظ الدوري الشامل) —
+           عشان ما يضيعش لو موظفين تانيين سجّلوا حضورهم في نفس اللحظات تقريبًا */
+        atomicAddAttendanceRecord(rec);
         logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
       } else {
         const shiftStart2 = myEmployee.workShift2?.start || "17:00";
         const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart2);
         const lateMinutes2 = diff > ATTENDANCE_GRACE_MINUTES ? diff : 0;
-        setAttendance((prev) =>
-          prev.map((a) =>
-            a.id === already.id
-              ? { ...a, checkInTime2: timeStr, lateMinutes2, checkInLocation2: sanitizeLocation(check), checkInPhoto2: uploadedPhotoUrl }
-              : a
-          )
-        );
+        const updatedRec2 = { ...already, checkInTime2: timeStr, lateMinutes2, checkInLocation2: sanitizeLocation(check), checkInPhoto2: uploadedPhotoUrl };
+        setAttendance((prev) => prev.map((a) => (a.id === already.id ? updatedRec2 : a)));
+        atomicUpdateAttendanceRecord(already, updatedRec2);
         logActivity && logActivity("تسجيل حضور - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
       }
     };
@@ -2410,21 +2435,17 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
              السقف الأقصى هو عدد ساعات دوامه الفعلية اليومية، مش 8 ساعات ثابتة للجميع */
           earlyLeaveMinutes = diff < -ATTENDANCE_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff) : 0;
         }
-        setAttendance((prev) =>
-          prev.map((a) =>
-            a.id === rec.id
-              ? {
-                  ...a,
-                  checkOutTime: timeStr,
-                  overtimeHours,
-                  earlyLeaveMinutes,
-                  ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
-                  checkOutLocation: sanitizeLocation(check),
-                  checkOutPhoto: uploadedPhotoUrl,
-                }
-              : a
-          )
-        );
+        const updatedRec = {
+          ...rec,
+          checkOutTime: timeStr,
+          overtimeHours,
+          earlyLeaveMinutes,
+          ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
+          checkOutLocation: sanitizeLocation(check),
+          checkOutPhoto: uploadedPhotoUrl,
+        };
+        setAttendance((prev) => prev.map((a) => (a.id === rec.id ? updatedRec : a)));
+        atomicUpdateAttendanceRecord(rec, updatedRec);
         logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
       } else {
         const workDayName2 = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO) + "T00:00:00").getDay()];
@@ -2444,13 +2465,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           overtimeHours2 = diff2 > 0 ? Math.min(12, Math.round((diff2 / 60) * 2) / 2) : 0;
           earlyLeaveMinutes2 = diff2 < -ATTENDANCE_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff2) : 0;
         }
-        setAttendance((prev) =>
-          prev.map((a) =>
-            a.id === rec.id
-              ? { ...a, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: sanitizeLocation(check), checkOutPhoto2: uploadedPhotoUrl }
-              : a
-          )
-        );
+        const updatedRec2 = { ...rec, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: sanitizeLocation(check), checkOutPhoto2: uploadedPhotoUrl };
+        setAttendance((prev) => prev.map((a) => (a.id === rec.id ? updatedRec2 : a)));
+        atomicUpdateAttendanceRecord(rec, updatedRec2);
         logActivity && logActivity("تسجيل انصراف - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
       }
     };
@@ -6349,11 +6366,17 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
       lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0,
       overtimeHours: Number(attForm.overtimeHours || 0),
     };
-    setAttendance((prev) => [...prev, { ...record, id: uid() }]);
+    const newAttRecord = { ...record, id: uid() };
+    setAttendance((prev) => [...prev, newAttRecord]);
+    atomicAddAttendanceRecord(newAttRecord);
     logActivity && logActivity("تسجيل حضور", "attendance", empName(attForm.employeeId));
     setAttForm({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   };
-  const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
+  const removeAtt = (id) => {
+    const rec = attendance.find((a) => a.id === id);
+    setAttendance((prev) => prev.filter((a) => a.id !== id));
+    if (rec) atomicRemoveAttendanceRecord(rec);
+  };
 
   const startEditAtt = (a) => {
     setEditAttId(a.id);
@@ -6376,27 +6399,24 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   };
   const saveEditAtt = () => {
     if (!editAttId || !editAttForm) return;
-    setAttendance((prev) =>
-      prev.map((a) =>
-        a.id === editAttId
-          ? {
-              ...a,
-              checkInTime: editAttForm.checkInTime.trim(),
-              checkOutTime: editAttForm.checkOutTime.trim(),
-              checkInTime2: editAttForm.checkInTime2.trim(),
-              checkOutTime2: editAttForm.checkOutTime2.trim(),
-              status: editAttForm.status,
-              lateMinutes: editAttForm.status === "متأخر" ? Number(editAttForm.lateMinutes || 0) : 0,
-              earlyLeaveMinutes: Number(editAttForm.earlyLeaveMinutes || 0),
-              shortfallMinutes: Number(editAttForm.shortfallMinutes || 0),
-              overtimeHours: Number(editAttForm.overtimeHours || 0),
-              overtimeHours2: Number(editAttForm.overtimeHours2 || 0),
-            }
-          : a
-      )
-    );
-    const a = attendance.find((x) => x.id === editAttId);
-    logActivity && logActivity("تعديل سجل حضور", "attendance", `${empName(a?.employeeId)} — ${a?.date || ""}`);
+    const oldRec = attendance.find((a) => a.id === editAttId);
+    if (!oldRec) return;
+    const updatedRec = {
+      ...oldRec,
+      checkInTime: editAttForm.checkInTime.trim(),
+      checkOutTime: editAttForm.checkOutTime.trim(),
+      checkInTime2: editAttForm.checkInTime2.trim(),
+      checkOutTime2: editAttForm.checkOutTime2.trim(),
+      status: editAttForm.status,
+      lateMinutes: editAttForm.status === "متأخر" ? Number(editAttForm.lateMinutes || 0) : 0,
+      earlyLeaveMinutes: Number(editAttForm.earlyLeaveMinutes || 0),
+      shortfallMinutes: Number(editAttForm.shortfallMinutes || 0),
+      overtimeHours: Number(editAttForm.overtimeHours || 0),
+      overtimeHours2: Number(editAttForm.overtimeHours2 || 0),
+    };
+    setAttendance((prev) => prev.map((a) => (a.id === editAttId ? updatedRec : a)));
+    atomicUpdateAttendanceRecord(oldRec, updatedRec);
+    logActivity && logActivity("تعديل سجل حضور", "attendance", `${empName(oldRec.employeeId)} — ${oldRec.date || ""}`);
     cancelEditAtt();
   };
 
@@ -6792,16 +6812,17 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   /* تحديث أو إنشاء سجل حضور ليوم معيّن — تُستخدم لتصحيح غياب مسجَّل يدويًا، أو لإضافة سجل ليوم
      احتُسب غيابًا تلقائيًا لعدم وجود أي بصمة له (مثلاً لو تبيّن إنه كان حاضر فعليًا) */
   const upsertAttendanceForDate = (employeeId, date, updates) => {
-    setAttendance((prev) => {
-      const idx = prev.findIndex((a) => a.employeeId === employeeId && a.date === date);
-      if (idx >= 0) {
-        const next = prev.slice();
-        next[idx] = { ...next[idx], ...updates };
-        return next;
-      }
+    const existing = attendance.find((a) => a.employeeId === employeeId && a.date === date);
+    if (existing) {
+      const updatedRec = { ...existing, ...updates };
+      setAttendance((prev) => prev.map((a) => (a === existing ? updatedRec : a)));
+      atomicUpdateAttendanceRecord(existing, updatedRec);
+    } else {
       const emp = employees.find((e) => e.id === employeeId);
-      return [...prev, { id: uid(), employeeId, date, branchId: emp?.branchId || "", ...updates }];
-    });
+      const newRec = { id: uid(), employeeId, date, branchId: emp?.branchId || "", ...updates };
+      setAttendance((prev) => [...prev, newRec]);
+      atomicAddAttendanceRecord(newRec);
+    }
     logActivity && logActivity("تعديل سجل غياب", "payroll", `${employees.find((e) => e.id === employeeId)?.name || ""} — ${date}`);
   };
 
