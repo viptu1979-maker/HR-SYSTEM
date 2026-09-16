@@ -6941,7 +6941,21 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [searchQuery, setSearchQuery] = useState("");
-  const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", date: new Date().toISOString().slice(0, 10), month: new Date().toISOString().slice(0, 7), note: "", repayment: "دفعة واحدة", installments: 2 });
+  const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", date: new Date().toISOString().slice(0, 10), month: new Date().toISOString().slice(0, 7), note: "", photo: "", repayment: "دفعة واحدة", installments: 2 });
+  const [itemPhotoBusy, setItemPhotoBusy] = useState(false);
+  const [itemLightbox, setItemLightbox] = useState(null);
+  const handleItemPhotoUpload = async (files) => {
+    if (!files || files.length === 0) return;
+    setItemPhotoBusy(true);
+    try {
+      const compressed = await compressImage(files[0], 900, 0.7);
+      const url = await uploadPhotoToStorage(compressed, `payrollItemPhotos/${uid()}`);
+      setItemForm((f) => ({ ...f, photo: url }));
+    } catch (err) {
+      /* تجاهل فشل رفع الصورة — الحقل اختياري */
+    }
+    setItemPhotoBusy(false);
+  };
   const [payslip, setPayslip] = useState(null);
   const [printItem, setPrintItem] = useState(null);
   /* تفاصيل أيام غياب موظف معيّن (لعرضها وتعديلها) — نخزّن id الموظف اللي فاتح تفاصيله حاليًا */
@@ -6997,6 +7011,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         date: itemForm.date,
         month: addMonthsToStr(itemForm.month, i),
         note: `${itemForm.note ? itemForm.note + " — " : ""}قسط ${i + 1} من ${n}`,
+        photo: itemForm.photo,
         loanGroupId,
         id: uid(),
       }));
@@ -7008,7 +7023,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       logActivity && logActivity(`تسجيل ${itemForm.type}`, "payroll", `${empName(itemForm.employeeId)} — ${fmt(totalAmount)} ﷼`);
       notifyDeductionItem(itemForm.type, totalAmount, itemForm.note, itemForm.type !== "حافز");
     }
-    setItemForm({ employeeId: "", type: itemForm.type, amount: "", date: new Date().toISOString().slice(0, 10), month: itemForm.month, note: "", repayment: "دفعة واحدة", installments: 2 });
+    setItemForm({ employeeId: "", type: itemForm.type, amount: "", date: new Date().toISOString().slice(0, 10), month: itemForm.month, note: "", photo: "", repayment: "دفعة واحدة", installments: 2 });
   };
   const removeItem = (id) => setPayrollItems((prev) => prev.filter((p) => p.id !== id));
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
@@ -7201,6 +7216,17 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
           <Field label={t("ملاحظة / السبب", "Note / Reason")}>
             <input type="text" style={inputStyle} value={itemForm.note} onChange={(e) => setItemForm({ ...itemForm, note: e.target.value })} />
           </Field>
+          <Field label={t("صورة إثبات (اختياري)", "Evidence Photo (optional)")}>
+            {itemForm.photo ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <img src={itemForm.photo} alt="" onClick={() => setItemLightbox(itemForm.photo)} style={{ width: 38, height: 38, objectFit: "cover", borderRadius: 6, border: `1px solid ${COLORS.line}`, cursor: "pointer" }} />
+                <button onClick={() => setItemForm({ ...itemForm, photo: "" })} style={{ border: "none", background: "transparent", color: COLORS.brick, cursor: "pointer", fontSize: 12 }}>✕ {t("إزالة", "Remove")}</button>
+              </div>
+            ) : (
+              <input type="file" accept="image/*" disabled={itemPhotoBusy} style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5 }} onChange={(e) => { handleItemPhotoUpload(e.target.files); e.target.value = ""; }} />
+            )}
+            {itemPhotoBusy && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصورة...", "Uploading photo...")}</div>}
+          </Field>
           <div style={{ display: "flex", alignItems: "flex-end" }}>
             <Btn onClick={addItem}>{t("تسجيل", "Register")}</Btn>
           </div>
@@ -7221,6 +7247,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
               <span style={{ color: "#a3927a", fontFamily: "Consolas, monospace" }}> · {p.date || p.month}</span>
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              {p.photo && (
+                <img src={p.photo} alt="" onClick={() => setItemLightbox(p.photo)} style={{ width: 30, height: 30, objectFit: "cover", borderRadius: 5, border: `1px solid ${COLORS.line}`, cursor: "pointer" }} />
+              )}
               <Stamp tone={p.type === "حافز" ? "green" : "brick"}>
                 {trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, p.type)}
               </Stamp>
@@ -7231,6 +7260,12 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
           </div>
         ))}
       </div>
+
+      {itemLightbox && (
+        <div onClick={() => setItemLightbox(null)} style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.75)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }} className="no-print">
+          <img src={itemLightbox} alt="" style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }} />
+        </div>
+      )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("كشف الرواتب", "Payroll Sheet")}</SectionTitle>
