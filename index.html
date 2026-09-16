@@ -6310,6 +6310,55 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   const [editAttForm, setEditAttForm] = useState(null);
   const [notifyResult, setNotifyResult] = useState("");
 
+  /* كشف حضور وانصراف شهري مطبوع لموظف واحد — نفس تنسيق الكشف الرسمي (بيانات المؤسسة والفرع، جدول
+     يومي بالحالة ووقتَي الحضور والانصراف مع خانة توقيع لكل منهما، وتوقيعان في الأسفل) */
+  const [showMonthSheet, setShowMonthSheet] = useState(false);
+  const [sheetEmployeeId, setSheetEmployeeId] = useState("");
+  const [sheetMonth, setSheetMonth] = useState(new Date().toISOString().slice(0, 7));
+
+  const buildMonthSheetRows = (emp, monthStr) => {
+    if (!emp || !monthStr) return [];
+    const [y, m] = monthStr.split("-").map(Number);
+    const monthStart = new Date(y, m - 1, 1);
+    const monthEnd = new Date(y, m, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const join = emp.joinDate ? new Date(emp.joinDate + "T00:00:00") : null;
+    const offDays = getOffDays(emp);
+    const empLeaves = leaves.filter((l) => l.employeeId === emp.id);
+    const empAttendance = attendance.filter((a) => a.employeeId === emp.id);
+    const rowsOut = [];
+    for (let d = new Date(monthStart); d <= monthEnd; d.setDate(d.getDate() + 1)) {
+      const dateObj = new Date(d);
+      const iso = fmtISODate(dateObj);
+      const dayName = JS_DAY_INDEX_TO_AR[dateObj.getDay()];
+      const rec = empAttendance.find((a) => a.date === iso);
+      const onLeave = empLeaves.find((l) => l.from && l.to && iso >= l.from && iso <= l.to);
+      let status = "";
+      let checkIn = "";
+      let checkOut = "";
+      if (offDays.includes(dayName)) {
+        status = t("إجازة أسبوعية", "Weekly Off");
+      } else if (onLeave) {
+        status = onLeave.type ? `${t("إجازة", "Leave")} (${onLeave.type})` : t("إجازة", "Leave");
+      } else if (rec) {
+        status = rec.status === "غائب" ? t("غياب", "Absent") : rec.status === "متأخر" ? t("متأخر", "Late") : t("حاضر", "Present");
+        checkIn = rec.checkInTime || "";
+        checkOut = rec.checkOutTime || "";
+      } else if (join && dateObj < join) {
+        status = "—";
+      } else if (dateObj > today) {
+        status = "—";
+      } else if (emp.flexibleSchedule) {
+        status = t("دوام حر", "Flexible");
+      } else {
+        status = t("غياب", "Absent");
+      }
+      rowsOut.push({ date: iso, dayName, status, checkIn, checkOut });
+    }
+    return rowsOut;
+  };
+
   /* تنبيه الموظفين اللي لسه ما سجّلوش حضور النهاردة رغم إن وقت دوامهم بدأ (بهامش سماح نص ساعة) —
      يستثني: يوم إجازته الأسبوعية، إجازة معتمدة، قبل تاريخ تعيينه، أو دوام حر (مالوش وقت دخول ثابت) */
   const notifyAbsentees = () => {
@@ -6520,7 +6569,94 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
           {t("🔔 تنبيه من لم يسجّل حضور اليوم", "🔔 Notify Today's Absentees")}
         </Btn>
         {notifyResult && <span style={{ fontSize: 12, color: COLORS.espresso, fontWeight: 700 }}>{notifyResult}</span>}
+        <Btn tone="secondary" onClick={() => setShowMonthSheet((s) => !s)}>
+          {t("🖶 كشف حضور وانصراف شهري", "🖶 Monthly Attendance Sheet")}
+        </Btn>
       </div>
+
+      {showMonthSheet && (() => {
+        const sheetEmployee = employees.find((e) => e.id === sheetEmployeeId);
+        const branch = branches.find((b) => b.id === sheetEmployee?.branchId);
+        const entity = entities.find((en) => en.id === branch?.entityId);
+        const sheetRows = sheetEmployee ? buildMonthSheetRows(sheetEmployee, sheetMonth) : [];
+        const shiftLabel = sheetEmployee
+          ? sheetEmployee.flexibleSchedule
+            ? t("دوام حر", "Flexible")
+            : `${sheetEmployee.workShift?.start || "—"} — ${sheetEmployee.workShift?.end || "—"}`
+          : "";
+        return (
+          <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 16 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 14 }} className="no-print">
+              <Field label={t("الموظف", "Employee")}>
+                <EmployeeSelect employees={employees} value={sheetEmployeeId} onChange={setSheetEmployeeId} />
+              </Field>
+              <Field label={t("الشهر", "Month")}>
+                <input type="month" style={inputStyle} value={sheetMonth} onChange={(e) => setSheetMonth(e.target.value)} />
+              </Field>
+              {sheetEmployee && <Btn onClick={() => window.print()}>{t("🖶 طباعة الكشف", "🖶 Print Sheet")}</Btn>}
+            </div>
+
+            {!sheetEmployee && <Empty text={t("اختر موظفًا لعرض كشفه", "Select an employee to view their sheet")} />}
+
+            {sheetEmployee && (
+              <div className="print-section">
+                <div style={{ textAlign: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: COLORS.espresso }}>{entity?.name || t("المؤسسة", "The Company")}</div>
+                  <div style={{ fontSize: 12.5, color: "#8a7a63" }}>{branch ? `${t("فرع", "Branch")} ${branch.name}` : ""}</div>
+                </div>
+                <div style={{ textAlign: "center", borderBottom: `1px solid ${COLORS.line}`, paddingBottom: 10, marginBottom: 14 }}>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso }}>{t("كشف حضور وانصراف", "Attendance Sheet")}</div>
+                </div>
+                <div style={{ fontSize: 12.5, lineHeight: 2 }}>
+                  <div><b>{t("اسم الموظف", "Employee Name")}:</b> {sheetEmployee.name}</div>
+                  <div><b>{t("الفرع", "Branch")}:</b> {branch?.name || "—"}</div>
+                  <div><b>{t("أوقات الدوام", "Shift Hours")}:</b> {shiftLabel}</div>
+                  <div><b>{t("الشهر", "Month")}:</b> {sheetMonth}</div>
+                </div>
+                <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 14, fontSize: 11.5 }}>
+                  <thead>
+                    <tr style={{ background: COLORS.espresso, color: "#fff" }}>
+                      {[
+                        t("م", "#"), t("التاريخ", "Date"), t("اليوم", "Day"), t("الحالة", "Status"),
+                        t("وقت الحضور", "Check-in"), t("توقيع عند الحضور", "Sign (in)"),
+                        t("وقت الانصراف", "Check-out"), t("توقيع عند الانصراف", "Sign (out)"),
+                      ].map((h) => (
+                        <th key={h} style={{ padding: "6px 8px", border: `1px solid ${COLORS.line}` }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sheetRows.map((r, i) => (
+                      <tr key={r.date} style={{ background: i % 2 ? "#FAF6EE" : "#fff" }}>
+                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{i + 1}</td>
+                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{r.date}</td>
+                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{r.dayName}</td>
+                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center", fontWeight: r.status !== t("حاضر", "Present") ? 700 : 400 }}>{r.status}</td>
+                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{r.checkIn}</td>
+                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}` }}></td>
+                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{r.checkOut}</td>
+                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}` }}></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
+                  <div style={{ width: "45%" }}>
+                    <div style={{ fontWeight: 700, fontSize: 12.5 }}>{t("توقيع الموظف", "Employee Signature")}: {sheetEmployee.name}</div>
+                    <div style={{ borderBottom: `1px solid ${COLORS.espresso}`, marginTop: 30 }}></div>
+                    <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 4 }}>{t("التاريخ", "Date")}: ____ / ____ / ____</div>
+                  </div>
+                  <div style={{ width: "45%" }}>
+                    <div style={{ fontWeight: 700, fontSize: 12.5 }}>{t("توقيع المدير", "Manager Signature")}</div>
+                    <div style={{ borderBottom: `1px solid ${COLORS.espresso}`, marginTop: 30 }}></div>
+                    <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 4 }}>{t("التاريخ", "Date")}: ____ / ____ / ____</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
         {attendance.length === 0 && <Empty text={t("لا توجد سجلات حضور", "No attendance records")} />}
         {attendance.length > 0 && filteredAttendance.length === 0 && <Empty text={t("لا توجد نتائج مطابقة للبحث", "No matching results")} />}
