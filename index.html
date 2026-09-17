@@ -2954,6 +2954,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             branches={scopedBranches}
             leaves={scopedLeaves}
             onSendMessage={sendMessage}
+            dirty={role !== "employee" ? dirty : false}
+            onSaveNow={saveNow}
           />
         )}
         {hasTab("compliance") && tab === "compliance" && (
@@ -6050,7 +6052,7 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
 }
 
 /* ============ سجل الحضور اليومي (قسم مستقل تحت الحضور والإجازات) ============ */
-function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage }) {
+function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage, dirty, onSaveNow }) {
   const { t } = useLang();
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   const [viewingPhoto, setViewingPhoto] = useState(null);
@@ -6189,6 +6191,37 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   return (
     <div>
       <Header title={t("سجل حضور يومي", "Daily Attendance Log")} subtitle={t("تسجيل حضور الموظفين اليومي ومتابعة التأخير والعمل الإضافي", "Register daily employee attendance and track lateness and overtime")} />
+
+      {dirty && (
+        <div
+          className="no-print"
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 10,
+            background: COLORS.brickBg,
+            border: `1px solid ${COLORS.brick}55`,
+            color: COLORS.brick,
+            borderRadius: 10,
+            padding: "10px 14px",
+            marginBottom: 14,
+            fontSize: 12.5,
+            fontWeight: 600,
+          }}
+        >
+          <span>
+            {t(
+              "⚠ لديك تعديلات غير محفوظة — طالما لم تُحفظ، لن تظهر لك تسجيلات حضور/انصراف جديدة من الموظفين تلقائيًا (لتفادي فقدان تعديلك). احفظ الآن لتظهر أحدث البيانات.",
+              "⚠ You have unsaved changes — until you save, new employee check-ins/check-outs won't appear automatically (to avoid losing your edit). Save now to see the latest data."
+            )}
+          </span>
+          {onSaveNow && (
+            <Btn small onClick={onSaveNow}>{t("💾 حفظ الآن", "💾 Save Now")}</Btn>
+          )}
+        </div>
+      )}
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 10 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
           <Field label={t("الكيان", "Entity")}>
