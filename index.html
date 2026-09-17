@@ -6056,6 +6056,57 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [logSearch, setLogSearch] = useState("");
   const [notifyResult, setNotifyResult] = useState("");
+  /* تعديل سجل حضور موجود بالفعل (تصحيح وقت حضور/انصراف خاطئ، تعديل الحالة أو دقائق التأخير/الإضافي...)
+     بدل ما يضطر الأدمن يحذف السجل بالكامل (ويضيع الصور المرفوعة معه) ويسجّله يدويًا من جديد */
+  const [editingId, setEditingId] = useState(null);
+  const [editForm, setEditForm] = useState(null);
+  const startEdit = (a) => {
+    setEditingId(a.id);
+    setEditForm({
+      date: a.date || "",
+      status: a.status || "حاضر",
+      lateMinutes: a.lateMinutes || "",
+      checkInTime: a.checkInTime || "",
+      checkOutTime: a.checkOutTime || "",
+      checkInTime2: a.checkInTime2 || "",
+      checkOutTime2: a.checkOutTime2 || "",
+      overtimeHours: a.overtimeHours || "",
+      overtimeHours2: a.overtimeHours2 || "",
+      earlyLeaveMinutes: a.earlyLeaveMinutes || "",
+      earlyLeaveMinutes2: a.earlyLeaveMinutes2 || "",
+    });
+  };
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditForm(null);
+  };
+  const saveEdit = () => {
+    if (!editingId || !editForm) return;
+    setAttendance((prev) =>
+      prev.map((a) =>
+        a.id === editingId
+          ? {
+              ...a,
+              date: editForm.date || a.date,
+              status: editForm.status,
+              lateMinutes: editForm.status === "متأخر" ? Number(editForm.lateMinutes || 0) : 0,
+              checkInTime: editForm.checkInTime,
+              checkOutTime: editForm.checkOutTime,
+              checkInTime2: editForm.checkInTime2,
+              checkOutTime2: editForm.checkOutTime2,
+              overtimeHours: Number(editForm.overtimeHours || 0),
+              overtimeHours2: Number(editForm.overtimeHours2 || 0),
+              earlyLeaveMinutes: Number(editForm.earlyLeaveMinutes || 0),
+              earlyLeaveMinutes2: Number(editForm.earlyLeaveMinutes2 || 0),
+            }
+          : a
+      )
+    );
+    const edited = attendance.find((a) => a.id === editingId);
+    logActivity && logActivity("تعديل سجل حضور", "attendance", `${empName(edited?.employeeId)} — ${editForm.date}`);
+    setEditingId(null);
+    setEditForm(null);
+  };
 
   /* تنبيه الموظفين اللي لسه ما سجّلوش حضور النهاردة رغم إن وقت دوامهم بدأ (بهامش سماح نص ساعة) —
      يستثني: يوم إجازته الأسبوعية، إجازة معتمدة، قبل تاريخ تعيينه، أو دوام حر (مالوش وقت دخول ثابت) */
@@ -6217,7 +6268,8 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
         {attendance.length === 0 && <Empty text={t("لا توجد سجلات حضور", "No attendance records")} />}
         {attendance.length > 0 && filteredAttendance.length === 0 && <Empty text={t("لا توجد نتائج مطابقة للبحث", "No matching results")} />}
         {filteredAttendance.slice().reverse().map((a, i) => (
-          <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5, flexWrap: "wrap", gap: 8 }}>
+          <React.Fragment key={a.id}>
+          <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5, flexWrap: "wrap", gap: 8 }}>
             <div>
               <b>{empName(a.employeeId)}</b> — {a.date}
               {branchNameOf(a.branchId) && (
@@ -6270,9 +6322,67 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
               {Number(a.earlyLeaveMinutes2 || 0) > 0 && (
                 <Stamp tone="brick">{t(`خروج مبكر ف2 ${a.earlyLeaveMinutes2} د`, `Left early S2 ${a.earlyLeaveMinutes2}m`)}</Stamp>
               )}
+              <Btn small tone="secondary" onClick={() => (editingId === a.id ? cancelEdit() : startEdit(a))}>
+                {editingId === a.id ? t("إلغاء", "Cancel") : t("✏️ تعديل", "✏️ Edit")}
+              </Btn>
               <Btn small tone="danger" onClick={() => removeAtt(a.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
+
+          {editingId === a.id && editForm && (
+            <div style={{ padding: "12px 14px", background: COLORS.paper, borderTop: `1px dashed ${COLORS.line}` }} className="no-print">
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                <Field label={t("التاريخ", "Date")}>
+                  <DateField style={inputStyle} value={editForm.date} onChange={(v) => setEditForm({ ...editForm, date: v })} />
+                </Field>
+                <Field label={t("الحالة", "Status")}>
+                  <select style={inputStyle} value={editForm.status} onChange={(e) => setEditForm({ ...editForm, status: e.target.value })}>
+                    <option value="حاضر">{t("حاضر", "Present")}</option>
+                    <option value="غائب">{t("غائب", "Absent")}</option>
+                    <option value="متأخر">{t("متأخر", "Late")}</option>
+                  </select>
+                </Field>
+                {editForm.status === "متأخر" && (
+                  <Field label={t("عدد دقائق التأخير", "Minutes Late")}>
+                    <input type="number" style={inputStyle} value={editForm.lateMinutes} onChange={(e) => setEditForm({ ...editForm, lateMinutes: e.target.value })} />
+                  </Field>
+                )}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
+                <Field label={t("وقت الحضور (صباحي)", "Check-in (AM)")}>
+                  <input type="time" style={inputStyle} value={editForm.checkInTime} onChange={(e) => setEditForm({ ...editForm, checkInTime: e.target.value })} />
+                </Field>
+                <Field label={t("وقت الانصراف (صباحي)", "Check-out (AM)")}>
+                  <input type="time" style={inputStyle} value={editForm.checkOutTime} onChange={(e) => setEditForm({ ...editForm, checkOutTime: e.target.value })} />
+                </Field>
+                <Field label={t("وقت الحضور (مسائي)", "Check-in (PM)")}>
+                  <input type="time" style={inputStyle} value={editForm.checkInTime2} onChange={(e) => setEditForm({ ...editForm, checkInTime2: e.target.value })} />
+                </Field>
+                <Field label={t("وقت الانصراف (مسائي)", "Check-out (PM)")}>
+                  <input type="time" style={inputStyle} value={editForm.checkOutTime2} onChange={(e) => setEditForm({ ...editForm, checkOutTime2: e.target.value })} />
+                </Field>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10 }}>
+                <Field label={t("ساعات العمل الإضافي (صباحي)", "Overtime (AM), hours")}>
+                  <input type="number" step="0.5" style={inputStyle} value={editForm.overtimeHours} onChange={(e) => setEditForm({ ...editForm, overtimeHours: e.target.value })} />
+                </Field>
+                <Field label={t("ساعات العمل الإضافي (مسائي)", "Overtime (PM), hours")}>
+                  <input type="number" step="0.5" style={inputStyle} value={editForm.overtimeHours2} onChange={(e) => setEditForm({ ...editForm, overtimeHours2: e.target.value })} />
+                </Field>
+                <Field label={t("دقائق الخروج المبكر (صباحي)", "Early leave (AM), minutes")}>
+                  <input type="number" style={inputStyle} value={editForm.earlyLeaveMinutes} onChange={(e) => setEditForm({ ...editForm, earlyLeaveMinutes: e.target.value })} />
+                </Field>
+                <Field label={t("دقائق الخروج المبكر (مسائي)", "Early leave (PM), minutes")}>
+                  <input type="number" style={inputStyle} value={editForm.earlyLeaveMinutes2} onChange={(e) => setEditForm({ ...editForm, earlyLeaveMinutes2: e.target.value })} />
+                </Field>
+              </div>
+              <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                <Btn small onClick={saveEdit}>{t("✔ حفظ التعديل", "✔ Save Changes")}</Btn>
+                <Btn small tone="secondary" onClick={cancelEdit}>{t("إلغاء", "Cancel")}</Btn>
+              </div>
+            </div>
+          )}
+          </React.Fragment>
         ))}
       </div>
 
