@@ -9367,12 +9367,12 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, margin: "14px 0" }} className="no-print">
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
             <Field label={t("الموظف", "Employee")} required>
-              <select style={inputStyle} value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })}>
-                <option value="">{t("اختر الموظف", "Select employee")}</option>
-                {activeEmployees.map((e) => (
-                  <option key={e.id} value={e.id}>{e.name} — {branchNameOf(e.branchId)}</option>
-                ))}
-              </select>
+              <EmployeeSelect
+                employees={activeEmployees}
+                value={form.employeeId}
+                onChange={(id) => setForm({ ...form, employeeId: id })}
+                placeholder={t("اكتب اسم الموظف أو رقم هويته...", "Type the employee's name or ID number...")}
+              />
             </Field>
             <Field label={t("نوع المخالفة", "Violation Type")}>
               <select style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
@@ -9456,10 +9456,19 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
             ))}
           </select>
         </Field>
-        <Field label={t("بحث باسم الموظف", "Search by employee name")}>
+        <Field label={t("تصفية السجل باسم الموظف", "Filter the log by employee name")}>
           <input style={inputStyle} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder={t("اسم الموظف...", "Employee name...")} />
         </Field>
       </div>
+
+      {warnings.length === 0 && (
+        <div style={{ fontSize: 11.5, color: "#a3927a", marginBottom: 10 }}>
+          {t(
+            "هذا الحقل يبحث داخل الإنذارات المسجّلة فعليًا (فارغة حاليًا) — وليس لاختيار موظف. لتسجيل أول إنذار، اضغط \"⚠ تسجيل إنذار جديد\" أعلاه، وسيظهر لك هناك حقل لاختيار الموظف مباشرة.",
+            "This box searches warnings already on record (currently empty) — it doesn't pick an employee. To register your first warning, click \"⚠ Issue New Warning\" above; a separate employee field will appear there."
+          )}
+        </div>
+      )}
 
       {filtered.length === 0 && <Empty text={t("لا توجد إنذارات مسجّلة", "No warnings recorded")} />}
 
