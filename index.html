@@ -374,101 +374,6 @@ const COLORS = {
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
-/* تحديث سجل حضور موجود على Firestore بشكل ذرّي (إزالة النسخة القديمة بالظبط ثم إضافة النسخة
-   الجديدة) بدل الاعتماد على الحفظ الدوري الشامل للمستند — يمنع ضياع تسجيلات حضور/انصراف زميل
-   تاني لو حصلت في نفس اللحظات تقريبًا. لو الإزالة فشلت لأن النسخة المحلية مو مطابقة تمامًا لنسخة
-   السيرفر (تعديل متزامن من جهاز تاني)، السجل الجديد لسه بينضاف، فأسوأ احتمال نسخة مكرّرة قابلة
-   للتصحيح يدويًا، مش ضياع كامل للبيانات */
-function atomicUpdateAttendanceRecord(oldRecord, newRecord) {
-  DATA_DOC.update({ attendance: firebase.firestore.FieldValue.arrayRemove(oldRecord) })
-    .catch(() => {})
-    .then(() => DATA_DOC.update({ attendance: firebase.firestore.FieldValue.arrayUnion(newRecord) }))
-    .catch(() => {});
-}
-function atomicAddAttendanceRecord(record) {
-  DATA_DOC.update({ attendance: firebase.firestore.FieldValue.arrayUnion(record) }).catch(() => {});
-}
-function atomicRemoveAttendanceRecord(record) {
-  DATA_DOC.update({ attendance: firebase.firestore.FieldValue.arrayRemove(record) }).catch(() => {});
-}
-
-/* نغمة تنبيه قصيرة (نغمتين متتاليتين) للإشعارات — تُولَّد مباشرة بمكتبة Web Audio بدون ملف صوتي خارجي،
-   عشان تشتغل فورًا على الجوال والمتصفح حتى بدون اتصال إنترنت لحظة التشغيل */
-let __notifAudioCtx = null;
-function playNotificationSound() {
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    if (!__notifAudioCtx) __notifAudioCtx = new Ctx();
-    const ctx = __notifAudioCtx;
-    if (ctx.state === "suspended") ctx.resume().catch(() => {});
-    const playTone = (freq, startAt, duration) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(0, startAt);
-      gain.gain.linearRampToValueAtTime(0.18, startAt + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.001, startAt + duration);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(startAt);
-      osc.stop(startAt + duration);
-    };
-    const now = ctx.currentTime;
-    playTone(880, now, 0.16);
-    playTone(1174.66, now + 0.14, 0.22);
-  } catch (err) {
-    /* تجاهل أي فشل في تشغيل الصوت (مثلاً قبل أول تفاعل من المستخدم مع الصفحة) */
-  }
-}
-
-/* اكتشاف آيفون/آيباد (سفاري) — الإشعارات على iOS Safari لا تشتغل إطلاقًا إلا بشرطين معًا:
-   1) iOS 16.4 أو أحدث
-   2) الموقع مُضاف لشاشة الجوال الرئيسية (Add to Home Screen) ومفتوح من أيقونته، مش من تبويب سفاري عادي
-   لو الموقع مفتوح من سفاري مباشرة (مش مثبّت)، لازم نوجّه المستخدم لتثبيته أولًا وإلا الإشعارات صامتة. */
-function isIOSDevice() {
-  const ua = window.navigator.userAgent || "";
-  const isIOS = /iPad|iPhone|iPod/.test(ua) || (ua.includes("Macintosh") && "ontouchend" in document);
-  return isIOS;
-}
-function isRunningStandalone() {
-  return window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
-}
-
-/* طلب إذن إشعارات الجوال (مركز الإشعارات/الشاشة المقفلة) من المتصفح — لازم يُستدعى نتيجة ضغطة
-   فعلية من الموظف (زر)، وإلا بعض المتصفحات (خصوصًا على الآيفون) بترفض الطلب صامتة */
-async function requestNotifPermission() {
-  try {
-    if (!("Notification" in window)) return "unsupported";
-    if (Notification.permission === "granted" || Notification.permission === "denied") return Notification.permission;
-    return await Notification.requestPermission();
-  } catch (err) {
-    return "unsupported";
-  }
-}
-
-/* إظهار إشعار حقيقي في مركز إشعارات الجوال (وليس مجرد نغمة داخل الصفحة) — عبر الـ Service Worker
-   المسجَّل أصلًا لو متاح (يشتغل حتى لو المتصفح في الخلفية)، وإلا عبر Notification API مباشرة.
-   يعمل طالما المتصفح/التطبيق شغّال (ولو في الخلفية أو الجوال مقفول) — إشعارات push حقيقية بعد
-   إغلاق التطبيق تمامًا تحتاج خادم إشعارات (FCM) منفصل، وده خارج نطاق هذا الملف. */
-async function showOSNotification(title, body) {
-  try {
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
-    const options = { body, icon: "icon-192.png", badge: "icon-192.png", silent: true, tag: "hr-notif-" + Date.now() };
-    if ("serviceWorker" in navigator) {
-      const reg = await navigator.serviceWorker.ready.catch(() => null);
-      if (reg && reg.showNotification) {
-        reg.showNotification(title, options);
-        return;
-      }
-    }
-    new Notification(title, options);
-  } catch (err) {
-    /* تجاهل أي فشل في إظهار الإشعار */
-  }
-}
-
 /* ضغط وتصغير صورة قبل تحويلها لـ base64 وتخزينها في Firestore — لتفادي تضخّم حجم المستند */
 function compressImage(file, maxDim = 900, quality = 0.72) {
   return new Promise((resolve, reject) => {
@@ -774,6 +679,7 @@ const NAV = [
   { key: "attendance", label: "الحضور والإجازات", labelEn: "Attendance & Leave", icon: "◔" },
   { key: "attendanceLog", label: "سجل الحضور اليومي", labelEn: "Daily Attendance Log", icon: "🕒" },
   { key: "compliance", label: "مراقبة الالتزام", labelEn: "Compliance Monitor", icon: "◑" },
+  { key: "warnings", label: "الإنذارات والمخالفات", labelEn: "Warnings & Violations", icon: "⚠" },
   { key: "leaveRequests", label: "طلبات الإجازات", labelEn: "Leave Requests", icon: "✉" },
   { key: "advanceRequests", label: "طلبات السلف", labelEn: "Advance Requests", icon: "❖" },
   { key: "tasks", label: "مهام الموظفين", labelEn: "Employee Tasks", icon: "☑" },
@@ -811,7 +717,7 @@ const NAV_GROUPS = [
     label: "الحضور والإجازات",
     labelEn: "Attendance & Leave",
     icon: "◔",
-    items: ["attendance", "attendanceLog", "compliance", "leaveRequests", "advanceRequests"],
+    items: ["attendance", "attendanceLog", "compliance", "warnings", "leaveRequests", "advanceRequests"],
   },
   { key: "branches", standalone: true },
   {
@@ -877,14 +783,41 @@ const ADVANCE_REQUEST_STATUS_LABELS_EN = {
 };
 const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late" };
 const PAYROLL_ITEM_TYPE_LABELS_EN = { "سلفة": "Advance", "خصم": "Deduction", "حافز": "Incentive" };
+/* أنواع مخالفات الموظفين ودرجات الإنذار — تُستخدم في تبويب "الإنذارات والمخالفات" */
+const WARNING_CATEGORIES = ["غياب بدون عذر", "تأخر متكرر عن الدوام", "خروج مبكر بدون إذن", "مخالفة سلوكية", "مخالفة بزي العمل والمظهر", "إهمال في العمل", "أخرى"];
+const WARNING_CATEGORIES_EN = {
+  "غياب بدون عذر": "Unauthorized Absence",
+  "تأخر متكرر عن الدوام": "Repeated Lateness",
+  "خروج مبكر بدون إذن": "Unauthorized Early Leave",
+  "مخالفة سلوكية": "Behavioral Violation",
+  "مخالفة بزي العمل والمظهر": "Uniform/Appearance Violation",
+  "إهمال في العمل": "Work Negligence",
+  "أخرى": "Other",
+};
+const WARNING_SEVERITY_LEVELS = ["لفت نظر شفهي", "إنذار كتابي أول", "إنذار كتابي ثاني", "إنذار نهائي"];
+const WARNING_SEVERITY_LEVELS_EN = {
+  "لفت نظر شفهي": "Verbal Notice",
+  "إنذار كتابي أول": "First Written Warning",
+  "إنذار كتابي ثاني": "Second Written Warning",
+  "إنذار نهائي": "Final Warning",
+};
+const EMPTY_WARNING = { employeeId: "", branchId: "", category: WARNING_CATEGORIES[0], severity: WARNING_SEVERITY_LEVELS[1], date: new Date().toISOString().slice(0, 10), description: "", descriptionEn: "", deductionAmount: "" };
 const TASK_STATUS_LABELS_EN = { "قيد التنفيذ": "In Progress", "مكتملة": "Completed", "متأخرة": "Overdue" };
 const EOS_REASON_LABELS_EN = { "استقالة": "Resignation", "فصل من صاحب العمل": "Termination by Employer", "انتهاء عقد محدد المدة": "Fixed-term Contract End" };
 function trLabel(t, dict, v) {
   return t(v, dict[v] || v);
 }
+/* نص حر ثنائي اللغة أدخله المستخدم بنفسه (مثل وصف مخالفة أو عنوان/وصف مهمة) — بعكس trLabel، ما فيش قاموس
+   ترجمة جاهز، فالأدمن بيكتب النسخة العربية والإنجليزية بنفسه في نفس النموذج، والواجهة بس بتختار
+   المناسبة حسب لغة العرض الحالية (lang)، وترجع للنسخة التانية تلقائيًا لو النسخة المطلوبة فاضية */
+function biText(lang, ar, en) {
+  const a = (ar || "").trim();
+  const e = (en || "").trim();
+  return lang === "en" ? e || a : a || e;
+}
 
 const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "", mustChangePassword: false, qualityAccess: false, maintenanceAccess: false };
-const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "attendanceLog", "compliance", "leaveRequests", "advanceRequests", "tasks", "messages", "payroll", "eos", "quality", "maintenance", "settings"];
+const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "attendanceLog", "compliance", "warnings", "leaveRequests", "advanceRequests", "tasks", "messages", "payroll", "eos", "quality", "maintenance", "settings"];
 
 /* التبويبات الافتراضية المقترحة لكل دور — تظهر مُفعّلة تلقائيًا عند اختيار الدور، وتقدر تعدّلها يدويًا بعد كده */
 const ROLE_DEFAULT_TABS = {
@@ -906,7 +839,7 @@ function navForRole(role) {
     return NAV.filter((n) => n.key !== "reports"); // محاسب/أمين صندوق/دور مخصص: وصول لكل الكيانات والفروع (بدون تقييد بكيان واحد)، فيما عدا التقارير وتبويب المستخدمين
   if (role === "entity_manager") return NAV.filter((n) => n.key !== "reports"); // كل التبويبات عدا التقارير (سجل الدخول حصري للأدمن العام) وبدون تبويب المستخدمين
   if (role === "branch_manager")
-    return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "attendanceLog", "compliance", "tasks", "payroll", "eos"].includes(n.key));
+    return NAV.filter((n) => ["dash", "employees", "iqamas", "licenses", "attendance", "attendanceLog", "compliance", "warnings", "tasks", "payroll", "eos"].includes(n.key));
   if (role === "quality") return NAV.filter((n) => ["dash", "quality"].includes(n.key));
   if (role === "maintenance") return NAV.filter((n) => ["dash", "maintenance"].includes(n.key));
   return [];
@@ -1435,21 +1368,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       : navForRole(role);
   const hasTab = (key) => navItems.some((n) => n.key === key);
   const [tab, setTab] = useState(navItems[0]?.key || "dash");
-  /* حساب إداري (أدمن/مسؤول/...) مرتبط أيضًا بسجل موظف: يقدر يتنقّل بين لوحة التحكم الكاملة
-     وشاشته الشخصية (حضور/انصراف، إجازات، سلف) بنفس الحساب دون تسجيل خروج */
-  const [selfView, setSelfView] = useState(false);
-  /* لوحة إشعارات صغيرة تظهر لأي دور (مش بس شاشة الموظف الذاتية) — عشان أي رسالة موجّهة للمستخدم
-     الحالي (زي إشعار طلب صيانة/جودة من موظف) توصله فعليًا حتى لو حسابه أدمن/مسؤول ومايفتحش
-     "بياناتي" أبدًا */
-  const [showNotifPanel, setShowNotifPanel] = useState(false);
-  /* حالة إذن إشعارات الجوال — يطلبها الموظف بنفسه بضغطة زر (المتصفحات ما بتسمح بطلبها تلقائيًا) */
-  const [notifPermission, setNotifPermission] = useState(
-    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
-  );
-  const enableNotifications = async () => {
-    const result = await requestNotifPermission();
-    setNotifPermission(result);
-  };
   /* أي قسم فرعي معروض حاليًا داخل تبويب "تراخيص الفروع" (السجل التجاري / باقي الرخص / الشهادات الصحية والتأمين الطبي / السيارات) */
   const [licenseSubTab, setLicenseSubTab] = useState("cr");
   /* أي الأقسام الرئيسية في القائمة الجانبية مفتوحة حاليًا — يُفتح تلقائيًا القسم الذي يحوي البند النشط */
@@ -1473,15 +1391,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [workOrders, setWorkOrders] = useState([]);
   const [qualityTemplates, setQualityTemplates] = useState([]);
   const [qualitySubmissions, setQualitySubmissions] = useState([]);
+  const [warnings, setWarnings] = useState([]);
   const [gosiRates, setGosiRates] = useState({
     saudiEmployee: 9.75,
     saudiEmployer: 11.75,
     nonSaudiEmployer: 2,
   });
-  /* مسؤول الصيانة العام ومسؤول الجودة العام: شخص واحد لكل الفروع، يحدده الأدمن من تبويب الإعدادات.
-     أي طلب صيانة أو فحص جودة من أي موظف يُرسل له تلقائيًا كرسالة داخل النظام */
-  const [maintenanceManagerId, setMaintenanceManagerId] = useState("");
-  const [qualityManagerId, setQualityManagerId] = useState("");
   const [loaded, setLoaded] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1532,8 +1447,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             advanceRequests: d.advanceRequests || [],
             attendance: d.attendance || [],
             gosiRates: d.gosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
-            maintenanceManagerId: d.maintenanceManagerId || "",
-            qualityManagerId: d.qualityManagerId || "",
             vehicles: d.vehicles || [],
             payrollItems: d.payrollItems || [],
             tasks: d.tasks || [],
@@ -1542,6 +1455,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             workOrders: d.workOrders || [],
             qualityTemplates: d.qualityTemplates || [],
             qualitySubmissions: d.qualitySubmissions || [],
+            warnings: d.warnings || [],
           };
           setEntities(next.entities);
           setBranches(next.branches);
@@ -1552,8 +1466,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setAttendance(next.attendance);
           setVehicles(next.vehicles);
           setGosiRates(next.gosiRates);
-          setMaintenanceManagerId(next.maintenanceManagerId);
-          setQualityManagerId(next.qualityManagerId);
           setPayrollItems(next.payrollItems);
           setTasks(next.tasks);
           setMessages(next.messages);
@@ -1561,14 +1473,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setWorkOrders(next.workOrders);
           setQualityTemplates(next.qualityTemplates);
           setQualitySubmissions(next.qualitySubmissions);
-          /* لازم نفس شكل الـ payload المُستخدم في الحفظ بالظبط (بدون attendance، المستبعد لأنه بقى
-             يُحفظ ذرّيًا بشكل منفصل) — وإلا المقارنة هتفشل دايمًا وتظهر "تغيرات غير محفوظة" فورًا بعد
-             كل تحديث للصفحة حتى لو ماحصلش أي تغيير فعلي */
-          const { attendance: _omitAttendance, ...syncedShape } = next;
-          lastSyncedRef.current = JSON.stringify(syncedShape);
+          setWarnings(next.warnings);
+          lastSyncedRef.current = JSON.stringify(next);
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, maintenanceManagerId: "", qualityManagerId: "", payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [] }).catch(() => {});
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [], warnings: [] }).catch(() => {});
         }
         setSyncError("");
         setLoaded(true);
@@ -1597,12 +1506,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   useEffect(() => {
     if (!loaded) return;
-    /* تنبيه: حقل attendance اتشال من هنا عمدًا — بيُحفظ بعملية Firestore ذرّية (arrayUnion/arrayRemove)
-       مباشرة لحظة كل حضور/انصراف بدل ما يكون جزء من هذا الحفظ الدوري الشامل. السبب: هذا الحفظ يكتب
-       نسخة الجهاز المحلية الكاملة فوق المستند، فلو موظفين كتير سجّلوا حضور في نفس الدقايق (زي وقت
-       الذروة صباحًا)، جلسة متأخرة شوية بنسخة قديمة من attendance كانت بتمسح حضور موظف سجّله زميله
-       لحظات قبلها. استخدام merge:true هنا يضمن إن حذف الحقل من هذا الـ payload ما يمسحوش من المستند. */
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1617,7 +1521,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
          الحركة بالكامل دون أي إشعار بالفشل */
       /* شبكة أمان: أي قيمة "undefined" في أي مكان بالبيانات (حتى لو ما انتبهناش لها) هترفض الحفظ
          بالكامل من Firestore — تحويلها لـ JSON وإرجاعها يشيلها تلقائيًا قبل الحفظ */
-      DATA_DOC.set(JSON.parse(JSON.stringify(payload)), { merge: true })
+      DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
         .then(() => {
           lastSyncedRef.current = json;
           setDirty(false);
@@ -1636,7 +1540,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return;
     }
     setDirty(true);
-  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, loaded, role, retryTick]);
+  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, loaded, role, retryTick]);
 
   /* نسخة احتياطية يومية تلقائية (بيانات النظام + حسابات الدخول معًا) — لو انحذف أو اتغيّر شيء بالغلط
      (من داخل النظام أو حتى من Firestore Console مباشرة) يقدر الأدمن يسترجعها من تبويب "الإعدادات" */
@@ -1652,7 +1556,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           date: today,
           savedAt: firebase.firestore.FieldValue.serverTimestamp(),
           entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance,
-          gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, users,
+          gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, users,
         });
       })
       .then(() => {
@@ -1699,10 +1603,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     const {
       entities: bEntities, branches: bBranches, employees: bEmployees, leaves: bLeaves,
       leaveRequests: bLeaveRequests, advanceRequests: bAdvanceRequests, attendance: bAttendance,
-      gosiRates: bGosiRates, maintenanceManagerId: bMaintenanceManagerId, qualityManagerId: bQualityManagerId,
-      vehicles: bVehicles, payrollItems: bPayrollItems, tasks: bTasks,
+      gosiRates: bGosiRates, vehicles: bVehicles, payrollItems: bPayrollItems, tasks: bTasks,
       messages: bMessages, equipment: bEquipment, workOrders: bWorkOrders, qualityTemplates: bQualityTemplates,
-      qualitySubmissions: bQualitySubmissions, users: bUsers,
+      qualitySubmissions: bQualitySubmissions, warnings: bWarnings, users: bUsers,
     } = backupData;
     setEntities(bEntities || []);
     setBranches(bBranches || []);
@@ -1712,8 +1615,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     setAdvanceRequests(bAdvanceRequests || []);
     setAttendance(bAttendance || []);
     setGosiRates(bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 });
-    setMaintenanceManagerId(bMaintenanceManagerId || "");
-    setQualityManagerId(bQualityManagerId || "");
     setVehicles(bVehicles || []);
     setPayrollItems(bPayrollItems || []);
     setTasks(bTasks || []);
@@ -1722,13 +1623,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     setWorkOrders(bWorkOrders || []);
     setQualityTemplates(bQualityTemplates || []);
     setQualitySubmissions(bQualitySubmissions || []);
+    setWarnings(bWarnings || []);
     const payload = {
       entities: bEntities || [], branches: bBranches || [], employees: bEmployees || [], leaves: bLeaves || [],
       leaveRequests: bLeaveRequests || [], advanceRequests: bAdvanceRequests || [], attendance: bAttendance || [],
       gosiRates: bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
-      maintenanceManagerId: bMaintenanceManagerId || "", qualityManagerId: bQualityManagerId || "",
       vehicles: bVehicles || [], payrollItems: bPayrollItems || [], tasks: bTasks || [], messages: bMessages || [],
       equipment: bEquipment || [], workOrders: bWorkOrders || [], qualityTemplates: bQualityTemplates || [], qualitySubmissions: bQualitySubmissions || [],
+      warnings: bWarnings || [],
     };
     DATA_DOC.set(payload).then(() => {
       lastSyncedRef.current = JSON.stringify(payload);
@@ -1747,20 +1649,18 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const cleanupLegacyBase64Photos = () => {
     const isBase64 = (s) => typeof s === "string" && s.startsWith("data:");
     let removedCount = 0;
-    const cleanedAttendance = attendance.map((a) => {
-      const clean = { ...a };
-      ["checkInPhoto", "checkOutPhoto", "checkInPhoto2", "checkOutPhoto2"].forEach((k) => {
-        if (isBase64(clean[k])) {
-          clean[k] = "";
-          removedCount++;
-        }
-      });
-      return clean;
-    });
-    setAttendance(cleanedAttendance);
-    /* عملية تنظيف نادرة ومتعمَّدة (مش جزء من الحفظ الدوري المستبعد منه attendance) — كتابة صريحة
-       واحدة هنا مقبولة لأنها مش في مسار تسجيل حضور/انصراف متزامن مع موظفين تانيين */
-    DATA_DOC.update({ attendance: cleanedAttendance }).catch(() => {});
+    setAttendance((prev) =>
+      prev.map((a) => {
+        const clean = { ...a };
+        ["checkInPhoto", "checkOutPhoto", "checkInPhoto2", "checkOutPhoto2"].forEach((k) => {
+          if (isBase64(clean[k])) {
+            clean[k] = "";
+            removedCount++;
+          }
+        });
+        return clean;
+      })
+    );
     setTasks((prev) =>
       prev.map((ts) => {
         const before = (ts.completionPhotos || []).length;
@@ -1774,8 +1674,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
   const saveNow = () => {
-    /* attendance مستبعد هنا لنفس السبب (يُحفظ ذرّيًا بشكل منفصل) — merge:true يضمن عدم مسحه */
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, gosiRates, maintenanceManagerId, qualityManagerId, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1783,7 +1682,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     }
     setSaving(true);
     setSyncError("");
-    DATA_DOC.set(JSON.parse(JSON.stringify(payload)), { merge: true })
+    DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
       .then(() => {
         lastSyncedRef.current = json;
         setDirty(false);
@@ -1880,35 +1779,38 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           (m.scope === "all" && !isBranchManager)
       )
     : messages;
+  const scopedWarnings = isBranchManager || isEntityManager
+    ? warnings.filter((w) => scopedEmployees.some((e) => e.id === w.employeeId))
+    : warnings;
 
   /* إدارة مهام الموظفين: تسجيل مهمة جديدة، تحديث حالتها، حذفها */
   const addTask = (task) => {
     const newTask = { ...task, id: uid(), status: "قيد التنفيذ", assignedBy: currentUser.name, assignedAt: new Date().toISOString() };
     setTasks((prev) => [newTask, ...prev]);
-    logActivity && logActivity("تسجيل مهمة جديدة", "tasks", `${employees.find((e) => e.id === task.employeeId)?.name || ""} — ${task.title}`);
+    logActivity && logActivity("تسجيل مهمة جديدة", "tasks", `${employees.find((e) => e.id === task.employeeId)?.name || ""} — ${task.title || task.titleEn || ""}`);
   };
   const updateTaskStatus = (taskId, status) => {
     setTasks((prev) => prev.map((ts) => (ts.id === taskId ? { ...ts, status } : ts)));
     const ts = tasks.find((x) => x.id === taskId);
-    logActivity && logActivity(status === "مكتملة" ? "إنهاء مهمة" : "إعادة فتح مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+    logActivity && logActivity(status === "مكتملة" ? "إنهاء مهمة" : "إعادة فتح مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ts?.titleEn || ""}`);
   };
   const removeTask = (taskId) => {
     const ts = tasks.find((x) => x.id === taskId);
     setTasks((prev) => prev.filter((x) => x.id !== taskId));
-    logActivity && logActivity("حذف مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+    logActivity && logActivity("حذف مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ts?.titleEn || ""}`);
   };
   const addTaskComment = (taskId, text) => {
     if (!text || !text.trim()) return;
     const comment = { id: uid(), text: text.trim(), author: currentUser.name, at: new Date().toISOString() };
     setTasks((prev) => prev.map((ts) => (ts.id === taskId ? { ...ts, comments: [...(ts.comments || []), comment] } : ts)));
     const ts = tasks.find((x) => x.id === taskId);
-    logActivity && logActivity("تعليق على مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+    logActivity && logActivity("تعليق على مهمة", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ts?.titleEn || ""}`);
   };
   /* توثيق إتمام المهمة بالصور */
   const addTaskPhotos = (taskId, dataUrls) => {
     setTasks((prev) => prev.map((ts) => (ts.id === taskId ? { ...ts, completionPhotos: [...(ts.completionPhotos || []), ...dataUrls] } : ts)));
     const ts = tasks.find((x) => x.id === taskId);
-    logActivity && logActivity("توثيق مهمة بصور", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+    logActivity && logActivity("توثيق مهمة بصور", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ts?.titleEn || ""}`);
   };
   const removeTaskPhoto = (taskId, photoIndex) => {
     setTasks((prev) => {
@@ -1922,7 +1824,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const addTaskVideos = (taskId, videoUrls) => {
     setTasks((prev) => prev.map((ts) => (ts.id === taskId ? { ...ts, completionVideos: [...(ts.completionVideos || []), ...videoUrls] } : ts)));
     const ts = tasks.find((x) => x.id === taskId);
-    logActivity && logActivity("توثيق مهمة بفيديو", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ""}`);
+    logActivity && logActivity("توثيق مهمة بفيديو", "tasks", `${employees.find((e) => e.id === ts?.employeeId)?.name || ""} — ${ts?.title || ts?.titleEn || ""}`);
   };
   const removeTaskVideo = (taskId, videoIndex) => {
     setTasks((prev) => {
@@ -1970,30 +1872,13 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   };
 
   const addWorkOrder = (wo) => {
-    const newWo = { ...wo, id: uid(), branchId: wo.branchId || defaultQmBranchId, status: "مفتوح", costStatus: wo.cost ? "قيد المراجعة" : "", photos: wo.photos || [], videoUrl: wo.videoUrl || "", createdBy: currentUser.name, createdAt: new Date().toISOString() };
+    const newWo = { ...wo, id: uid(), branchId: wo.branchId || defaultQmBranchId, status: "مفتوح", photos: [], videoUrl: "", createdBy: currentUser.name, createdAt: new Date().toISOString() };
     setWorkOrders((prev) => [newWo, ...prev]);
     logActivity && logActivity("طلب صيانة جديد", "maintenance", wo.title || "");
-    /* أي موظف يرسل طلب صيانة يوصل تلقائيًا كرسالة لمسؤول الصيانة العام المحدد من الإعدادات
-       (إلا لو هو نفسه مسؤول الصيانة، فما فيه داعي يراسل نفسه) */
-    if (maintenanceManagerId && maintenanceManagerId !== currentUser.employeeId) {
-      sendMessage({
-        scope: "employee",
-        employeeId: maintenanceManagerId,
-        text: t(
-          `طلب صيانة جديد من ${currentUser.name}: "${newWo.title}" — الفرع: ${branchName(newWo.branchId)} (الأولوية: ${newWo.priority || "—"})`,
-          `New maintenance request from ${currentUser.name}: "${newWo.title}" — Branch: ${branchName(newWo.branchId)} (Priority: ${newWo.priority || "—"})`
-        ),
-      });
-    }
   };
   const updateWorkOrderStatus = (id, status) => {
     setWorkOrders((prev) => prev.map((x) => (x.id === id ? { ...x, status, completedAt: status === "مكتمل" ? new Date().toISOString() : x.completedAt } : x)));
     logActivity && logActivity("تحديث حالة طلب صيانة", "maintenance", workOrders.find((x) => x.id === id)?.title || "");
-  };
-  /* قبول أو رفض سعر التكلفة المُدخَل لطلب الصيانة — قرار منفصل عن حالة تنفيذ الطلب نفسه */
-  const updateWorkOrderCostStatus = (id, costStatus) => {
-    setWorkOrders((prev) => prev.map((x) => (x.id === id ? { ...x, costStatus, costDecidedBy: currentUser.name, costDecidedAt: new Date().toISOString() } : x)));
-    logActivity && logActivity(costStatus === "مقبول" ? "قبول سعر تكلفة صيانة" : "رفض سعر تكلفة صيانة", "maintenance", workOrders.find((x) => x.id === id)?.title || "");
   };
   const removeWorkOrder = (id) => {
     const wo = workOrders.find((x) => x.id === id);
@@ -2037,17 +1922,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     const newSub = { ...sub, id: uid(), branchId: sub.branchId || defaultQmBranchId, submittedBy: currentUser.name, submittedAt: new Date().toISOString(), photos: sub.photos || [] };
     setQualitySubmissions((prev) => [newSub, ...prev]);
     logActivity && logActivity("تعبئة فحص جودة", "quality", sub.templateName || "");
-    /* أي موظف يعبّي فحص جودة يوصل تلقائيًا كرسالة لمسؤول الجودة العام المحدد من الإعدادات */
-    if (qualityManagerId && qualityManagerId !== currentUser.employeeId) {
-      sendMessage({
-        scope: "employee",
-        employeeId: qualityManagerId,
-        text: t(
-          `فحص جودة جديد من ${currentUser.name}: "${newSub.templateName || ""}" — الفرع: ${branchName(newSub.branchId)} — النتيجة: ${newSub.overallPass ? "مطابق" : "يوجد ملاحظات"}`,
-          `New quality check from ${currentUser.name}: "${newSub.templateName || ""}" — Branch: ${branchName(newSub.branchId)} — Result: ${newSub.overallPass ? "Pass" : "Has Issues"}`
-        ),
-      });
-    }
   };
   const removeQualitySubmission = (id) => {
     const sub = qualitySubmissions.find((x) => x.id === id);
@@ -2104,6 +1978,52 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     );
   };
 
+  /* إدارة إنذارات ومخالفات الموظفين (غياب بدون عذر، تأخر متكرر، مخالفة دوام...) — تسجيل الإنذار يُشعر
+     الموظف تلقائيًا في صفحته الذاتية ويُطلب منه "الاطلاع والموافقة" الصريحة زي رسائل الخصم تمامًا،
+     ولو مرتبط بخصم مالي من الراتب يُسجَّل تلقائيًا كقيد "خصم" في كشف الرواتب مع إشعار منفصل بذلك */
+  const addWarning = (w) => {
+    const emp = employees.find((e) => e.id === w.employeeId);
+    const newWarning = {
+      ...w,
+      branchId: w.branchId || emp?.branchId || "",
+      id: uid(),
+      issuedBy: currentUser.name,
+      createdAt: new Date().toISOString(),
+    };
+    setWarnings((prev) => [newWarning, ...prev]);
+    logActivity && logActivity("تسجيل إنذار", "warnings", `${emp?.name || ""} — ${w.severity}`);
+
+    const categoryLabel = trLabel(t, WARNING_CATEGORIES_EN, w.category);
+    const severityLabel = trLabel(t, WARNING_SEVERITY_LEVELS_EN, w.severity);
+    /* نص المخالفة الحر أدخله الأدمن بنفسه بالعربي و/أو الإنجليزي — نستخدم النسخة المناسبة لكل جزء
+       من الرسالة (عربي/إنجليزي)، مع الرجوع للنسخة التانية لو واحدة منهم فاضية */
+    const descAr = (w.description || w.descriptionEn || "").trim();
+    const descEn = (w.descriptionEn || w.description || "").trim();
+    const warningText = t(
+      `تم تسجيل "${severityLabel}" بحقك بتاريخ ${w.date || "—"} — السبب: ${categoryLabel}${descAr ? ` (${descAr})` : ""}. برجاء الاطلاع والموافقة.`,
+      `A "${severityLabel}" has been recorded against you on ${w.date || "—"} — reason: ${categoryLabel}${descEn ? ` (${descEn})` : ""}. Please review and acknowledge.`
+    );
+    sendMessage({ scope: "employee", employeeId: w.employeeId, text: warningText, requiresAck: true, relatedWarningId: newWarning.id });
+
+    if (Number(w.deductionAmount) > 0) {
+      const amount = Number(w.deductionAmount);
+      const month = (w.date || new Date().toISOString()).slice(0, 7);
+      const note = `${t(`خصم مرتبط بـ`, `Deduction linked to`)} ${severityLabel}${descAr ? ` — ${t(descAr, descEn)}` : ""}`;
+      setPayrollItems((prev) => [...prev, { id: uid(), employeeId: w.employeeId, type: "خصم", amount, date: w.date, month, note, relatedWarningId: newWarning.id }]);
+      logActivity && logActivity("تسجيل خصم", "payroll", `${emp?.name || ""} — ${fmt(amount)} ﷼ (${severityLabel})`);
+      const deductionText = t(
+        `تم تسجيل خصم بمبلغ ${fmt(amount)} ﷼ على راتبك مرتبط بـ "${severityLabel}" بتاريخ ${w.date || "—"}. برجاء مراجعته والموافقة عليه.`,
+        `A deduction of ${fmt(amount)} SAR has been recorded on your salary linked to "${severityLabel}" dated ${w.date || "—"}. Please review and approve it.`
+      );
+      sendMessage({ scope: "employee", employeeId: w.employeeId, text: deductionText, requiresAck: true });
+    }
+  };
+  const removeWarning = (id) => {
+    const w = warnings.find((x) => x.id === id);
+    setWarnings((prev) => prev.filter((x) => x.id !== id));
+    logActivity && logActivity("حذف إنذار", "warnings", `${employees.find((e) => e.id === w?.employeeId)?.name || ""}`);
+  };
+
   /* دورة اعتماد طلبات الإجازة: موافقة مبدئية من مدير الكيان، ثم موافقة نهائية من الأدمن/المسؤول العام */
   const preliminaryApproveLeaveRequest = (reqId) => {
     setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة مبدئية", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
@@ -2147,64 +2067,15 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     logActivity && logActivity("رفض طلب سلفة", "advanceRequests", employees.find((e) => e.id === advanceRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
   };
 
-  /* تنبيه صوتي عند وصول رسالة جديدة تخص المستخدم الحالي (طلب صيانة/جودة جديد، أو أي رسالة إدارية) —
-     يقارن الرسائل الجديدة الواردة من المزامنة اللحظية بآخر رسائل معروفة، ويشغّل نغمة فقط للرسائل
-     الجديدة فعليًا بعد أول تحميل للصفحة (عشان ما يرن على كل الرسائل القديمة أول ما يفتح النظام) */
-  const myEmployeeForNotif = currentUser.employeeId ? employees.find((e) => e.id === currentUser.employeeId) : null;
-  /* كل الرسائل الموجّهة فعليًا للمستخدم الحالي (عامة، أو لموظفه المرتبط، أو لفرعه) — تُعرض في جرس
-     الإشعارات بالشريط الجانبي بغض النظر عن دوره أو تبويبه الحالي */
-  const myRelevantMessages = messages
-    .filter((m) => {
-      if (m.scope === "all") return true;
-      if (m.scope === "employee") return myEmployeeForNotif && m.employeeId === myEmployeeForNotif.id;
-      if (m.scope === "branch") return myEmployeeForNotif && m.branchId === myEmployeeForNotif.branchId;
-      return false;
-    })
-    .slice()
-    .sort((a, b) => (a.sentAt < b.sentAt ? 1 : -1));
-  const myUnreadCount = myEmployeeForNotif
-    ? myRelevantMessages.filter((m) => !(m.readBy || []).includes(myEmployeeForNotif.id)).length
-    : 0;
-  const notifSeenIdsRef = useRef(null);
-  useEffect(() => {
-    if (!loaded) return;
-    const relevantMsgs = messages.filter((m) => {
-      if (m.scope === "all") return true;
-      if (m.scope === "employee") return myEmployeeForNotif && m.employeeId === myEmployeeForNotif.id;
-      if (m.scope === "branch") return myEmployeeForNotif && m.branchId === myEmployeeForNotif.branchId;
-      return false;
-    });
-    const currentIds = new Set(relevantMsgs.map((m) => m.id));
-    if (notifSeenIdsRef.current === null) {
-      /* أول مرة بعد تحميل البيانات: نسجّل الرسائل الموجودة كمعروفة بدون تنبيه صوتي */
-      notifSeenIdsRef.current = currentIds;
-      return;
-    }
-    const hasNew = relevantMsgs.some((m) => m.sentBy !== currentUser.name && !notifSeenIdsRef.current.has(m.id));
-    if (hasNew) {
-      playNotificationSound();
-      const newOnes = relevantMsgs.filter((m) => m.sentBy !== currentUser.name && !notifSeenIdsRef.current.has(m.id));
-      newOnes.slice(0, 3).forEach((m) => {
-        showOSNotification(t("نظام الموارد البشرية", "HR System"), m.text || "");
-      });
-    }
-    notifSeenIdsRef.current = currentIds;
-  }, [messages, loaded]);
-
-  /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل — وكذلك أي حساب إداري مرتبط بسجل
-     موظف وفعّل "بياناتي" مؤقتًا (selfView) عشان يسجّل حضوره/إجازاته بنفسه */
-  if (role === "employee" || selfView) {
+  /* حساب موظف عادي: يشوف بياناته الشخصية فقط، بدون قائمة تنقّل */
+  if (role === "employee") {
     const myEmployee = employees.find((e) => e.id === currentUser.employeeId);
-    /* موظف عنده صلاحية جودة و/أو صيانة إضافية: يشوف بيانات فرعه فقط من المعدات وطلبات الصيانة وقوالب/سجلات الجودة —
-       إلا لو هو نفسه "مسؤول الصيانة العام" أو "مسؤول الجودة العام" المحدَّد من الإعدادات، فوقتها يشوف
-       طلبات/فحوصات كل الفروع مجتمعة (مو بس فرعه)، لأن دوره أصلًا يغطي كل الفروع */
+    /* موظف عنده صلاحية جودة و/أو صيانة إضافية: يشوف بيانات فرعه فقط من المعدات وطلبات الصيانة وقوالب/سجلات الجودة */
     const myBranchIdForQm = myEmployee?.branchId || "";
-    const isGlobalMaintenanceManager = myEmployee && myEmployee.id === maintenanceManagerId;
-    const isGlobalQualityManager = myEmployee && myEmployee.id === qualityManagerId;
-    const myQmEquipment = isGlobalMaintenanceManager ? equipment : equipment.filter((x) => x.branchId === myBranchIdForQm);
-    const myQmWorkOrders = isGlobalMaintenanceManager ? workOrders : workOrders.filter((x) => x.branchId === myBranchIdForQm);
-    const myQmTemplates = isGlobalQualityManager ? qualityTemplates : qualityTemplates.filter((x) => x.branchId === myBranchIdForQm);
-    const myQmSubmissions = isGlobalQualityManager ? qualitySubmissions : qualitySubmissions.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmEquipment = equipment.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmWorkOrders = workOrders.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmTemplates = qualityTemplates.filter((x) => x.branchId === myBranchIdForQm);
+    const myQmSubmissions = qualitySubmissions.filter((x) => x.branchId === myBranchIdForQm);
     const submitLeaveRequest = (req) => {
       const newReq = {
         ...req,
@@ -2351,7 +2222,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         const isOffDayToday = getOffDays(myEmployee).includes(todayDayName);
         const shiftStart = effectiveShift(myEmployee, todayDayName).start;
         const diff = (myEmployee.flexibleSchedule || isOffDayToday) ? 0 : minutesOf(timeStr) - minutesOf(shiftStart);
-        const lateMinutes = diff > ATTENDANCE_GRACE_MINUTES ? diff : 0;
+        const lateMinutes = diff > 0 ? diff : 0;
         const rec = {
           id: uid(),
           employeeId: myEmployee.id,
@@ -2368,17 +2239,18 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           checkInPhoto: uploadedPhotoUrl,
         };
         setAttendance((prev) => [...prev, rec]);
-        /* كتابة ذرّية فورية لسجل الحضور الجديد على Firestore (بدل الاعتماد على الحفظ الدوري الشامل) —
-           عشان ما يضيعش لو موظفين تانيين سجّلوا حضورهم في نفس اللحظات تقريبًا */
-        atomicAddAttendanceRecord(rec);
         logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
       } else {
         const shiftStart2 = myEmployee.workShift2?.start || "17:00";
         const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart2);
-        const lateMinutes2 = diff > ATTENDANCE_GRACE_MINUTES ? diff : 0;
-        const updatedRec2 = { ...already, checkInTime2: timeStr, lateMinutes2, checkInLocation2: sanitizeLocation(check), checkInPhoto2: uploadedPhotoUrl };
-        setAttendance((prev) => prev.map((a) => (a.id === already.id ? updatedRec2 : a)));
-        atomicUpdateAttendanceRecord(already, updatedRec2);
+        const lateMinutes2 = diff > 0 ? diff : 0;
+        setAttendance((prev) =>
+          prev.map((a) =>
+            a.id === already.id
+              ? { ...a, checkInTime2: timeStr, lateMinutes2, checkInLocation2: sanitizeLocation(check), checkInPhoto2: uploadedPhotoUrl }
+              : a
+          )
+        );
         logActivity && logActivity("تسجيل حضور - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
       }
     };
@@ -2437,19 +2309,23 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           overtimeHours = diff > 0 ? Math.min(12, Math.round((diff / 60) * 2) / 2) : 0;
           /* لو انصرف قبل نهاية دوامه، نسجّل عدد دقائق الخروج المبكر (يُستخدم في خصم الراتب لاحقًا) —
              السقف الأقصى هو عدد ساعات دوامه الفعلية اليومية، مش 8 ساعات ثابتة للجميع */
-          earlyLeaveMinutes = diff < -ATTENDANCE_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff) : 0;
+          earlyLeaveMinutes = diff < 0 ? Math.min(dailyWorkHours(myEmployee) * 60, -diff) : 0;
         }
-        const updatedRec = {
-          ...rec,
-          checkOutTime: timeStr,
-          overtimeHours,
-          earlyLeaveMinutes,
-          ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
-          checkOutLocation: sanitizeLocation(check),
-          checkOutPhoto: uploadedPhotoUrl,
-        };
-        setAttendance((prev) => prev.map((a) => (a.id === rec.id ? updatedRec : a)));
-        atomicUpdateAttendanceRecord(rec, updatedRec);
+        setAttendance((prev) =>
+          prev.map((a) =>
+            a.id === rec.id
+              ? {
+                  ...a,
+                  checkOutTime: timeStr,
+                  overtimeHours,
+                  earlyLeaveMinutes,
+                  ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
+                  checkOutLocation: sanitizeLocation(check),
+                  checkOutPhoto: uploadedPhotoUrl,
+                }
+              : a
+          )
+        );
         logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
       } else {
         const workDayName2 = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO) + "T00:00:00").getDay()];
@@ -2467,11 +2343,15 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           if (shiftEnd2Minutes <= minutesOf(shiftStart2Raw)) shiftEnd2Minutes += 24 * 60;
           const diff2 = checkoutMinutesAdj2 - shiftEnd2Minutes;
           overtimeHours2 = diff2 > 0 ? Math.min(12, Math.round((diff2 / 60) * 2) / 2) : 0;
-          earlyLeaveMinutes2 = diff2 < -ATTENDANCE_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff2) : 0;
+          earlyLeaveMinutes2 = diff2 < 0 ? Math.min(dailyWorkHours(myEmployee) * 60, -diff2) : 0;
         }
-        const updatedRec2 = { ...rec, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: sanitizeLocation(check), checkOutPhoto2: uploadedPhotoUrl };
-        setAttendance((prev) => prev.map((a) => (a.id === rec.id ? updatedRec2 : a)));
-        atomicUpdateAttendanceRecord(rec, updatedRec2);
+        setAttendance((prev) =>
+          prev.map((a) =>
+            a.id === rec.id
+              ? { ...a, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: sanitizeLocation(check), checkOutPhoto2: uploadedPhotoUrl }
+              : a
+          )
+        );
         logActivity && logActivity("تسجيل انصراف - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
       }
     };
@@ -2537,7 +2417,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         geoError={geoError}
         branchName={branchName}
         onLogout={onLogout}
-        onBackToDashboard={role !== "employee" ? () => setSelfView(false) : undefined}
         setUsers={setUsers}
         logActivity={logActivity}
         tasks={tasks.filter((ts) => ts.employeeId === myEmployee?.id)}
@@ -2563,8 +2442,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         workOrders={myQmWorkOrders}
         qualityTemplates={myQmTemplates}
         qualitySubmissions={myQmSubmissions}
-        maintenanceManagerId={maintenanceManagerId}
-        qualityManagerId={qualityManagerId}
         onAddEquipment={addEquipment}
         onUpdateEquipment={updateEquipment}
         onRemoveEquipment={removeEquipment}
@@ -2572,7 +2449,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         onRemoveEquipmentPhoto={removeEquipmentPhoto}
         onAddWorkOrder={addWorkOrder}
         onUpdateWorkOrderStatus={updateWorkOrderStatus}
-        onUpdateWorkOrderCostStatus={updateWorkOrderCostStatus}
         onRemoveWorkOrder={removeWorkOrder}
         onAddWorkOrderPhotos={addWorkOrderPhotos}
         onRemoveWorkOrderPhoto={removeWorkOrderPhoto}
@@ -2907,76 +2783,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             {isEntityManager && ` · ${entityName(currentUser.entityId)}`}
           </div>
           <button
-            onClick={() => setShowNotifPanel(true)}
-            style={{
-              width: "100%",
-              background: myUnreadCount > 0 ? "rgba(166,75,63,0.25)" : "transparent",
-              border: `1px solid ${myUnreadCount > 0 ? COLORS.brick : "rgba(216,168,90,0.4)"}`,
-              color: "#fff",
-              borderRadius: 6,
-              padding: "7px 10px",
-              fontSize: 12,
-              cursor: "pointer",
-              marginBottom: 8,
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <span>🔔 {t("الرسائل والإشعارات", "Messages & Notifications")}</span>
-            {myUnreadCount > 0 && (
-              <span style={{ background: COLORS.brick, color: "#fff", borderRadius: 999, minWidth: 18, height: 18, fontSize: 10.5, fontWeight: 800, display: "inline-flex", alignItems: "center", justifyContent: "center", padding: "0 5px" }}>
-                {myUnreadCount}
-              </span>
-            )}
-          </button>
-          {currentUser.employeeId && (
-            <button
-              onClick={() => setSelfView(true)}
-              style={{
-                width: "100%",
-                background: "transparent",
-                border: "1px solid rgba(216,168,90,0.4)",
-                color: "#D9CBB2",
-                borderRadius: 6,
-                padding: "7px 10px",
-                fontSize: 12,
-                cursor: "pointer",
-                marginBottom: 8,
-              }}
-            >
-              {t("🧑‍💼 بياناتي (حضور وإجازات)", "🧑‍💼 My Profile (Attendance & Leave)")}
-            </button>
-          )}
-          {notifPermission !== "unsupported" && notifPermission !== "granted" && (
-            <button
-              onClick={enableNotifications}
-              style={{
-                width: "100%",
-                background: "transparent",
-                border: "1px solid rgba(216,168,90,0.4)",
-                color: "#D9CBB2",
-                borderRadius: 6,
-                padding: "7px 10px",
-                fontSize: 12,
-                cursor: "pointer",
-                marginBottom: 8,
-              }}
-            >
-              {notifPermission === "denied"
-                ? t("🔕 الإشعارات محظورة (فعّلها من إعدادات المتصفح)", "🔕 Notifications blocked (enable from browser settings)")
-                : t("🔔 تفعيل إشعارات الجوال", "🔔 Enable Mobile Notifications")}
-            </button>
-          )}
-          {isIOSDevice() && !isRunningStandalone() && (
-            <div style={{ fontSize: 10.5, color: COLORS.goldLight, background: "rgba(216,168,90,0.12)", border: "1px solid rgba(216,168,90,0.3)", borderRadius: 6, padding: "7px 9px", marginBottom: 8, lineHeight: 1.6 }}>
-              {t(
-                "📱 على الآيفون: الإشعارات ما تشتغل إلا لو ضفت الموقع لشاشتك الرئيسية أولًا (زر المشاركة ← \"إضافة إلى الشاشة الرئيسية\") وفتحته من الأيقونة، مش من سفاري مباشرة — ويلزم iOS 16.4 فأحدث.",
-                "📱 On iPhone: notifications only work if you first add this site to your Home Screen (Share button → \"Add to Home Screen\") and open it from that icon, not directly in Safari — requires iOS 16.4+."
-              )}
-            </div>
-          )}
-          <button
             onClick={() => setShowChangePassword(true)}
             style={{
               width: "100%",
@@ -3009,37 +2815,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           </button>
         </div>
       </aside>
-
-      {showNotifPanel && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(20,14,8,0.72)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
-          <div style={{ background: "#fff", borderRadius: 14, padding: 20, width: "100%", maxWidth: 460, maxHeight: "82vh", overflowY: "auto" }}>
-            <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>{t("الرسائل والإشعارات", "Messages & Notifications")}</div>
-            <div style={{ fontSize: 11.5, color: "#a3927a", marginBottom: 14 }}>
-              {myEmployeeForNotif
-                ? t("رسائل موجّهة لك، لفرعك، أو لكل الموظفين", "Messages sent to you, your branch, or all employees")
-                : t("رسائل عامة لكل الموظفين — حسابك غير مرتبط بسجل موظف فما توصلك رسائل موجَّهة لك تحديدًا", "General broadcasts to all employees — your account isn't linked to an employee record, so messages targeted specifically at you won't reach you here")}
-            </div>
-            {myRelevantMessages.length === 0 && <Empty text={t("لا توجد رسائل", "No messages")} />}
-            {myRelevantMessages.map((m) => {
-              const isRead = myEmployeeForNotif && (m.readBy || []).includes(myEmployeeForNotif.id);
-              return (
-                <div key={m.id} style={{ padding: "10px 0", borderBottom: `1px dashed ${COLORS.line}` }}>
-                  <div style={{ fontSize: 12.5, lineHeight: 1.6, fontWeight: isRead ? 400 : 700 }}>{m.text}</div>
-                  <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 4, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                    <span>{m.sentBy} — {new Date(m.sentAt).toLocaleString()}</span>
-                    {myEmployeeForNotif && !isRead && (
-                      <Btn small tone="secondary" onClick={() => markMessageRead(m.id, myEmployeeForNotif.id)}>{t("✔ تعليم كمقروءة", "✔ Mark Read")}</Btn>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-              <Btn tone="secondary" onClick={() => setShowNotifPanel(false)}>{t("إغلاق", "Close")}</Btn>
-            </div>
-          </div>
-        </div>
-      )}
 
       {showChangePassword && (
         <ChangePasswordModal
@@ -3179,7 +2954,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             branches={scopedBranches}
             leaves={scopedLeaves}
             onSendMessage={sendMessage}
-            onGoToEmployee={goToEmployee}
           />
         )}
         {hasTab("compliance") && tab === "compliance" && (
@@ -3189,6 +2963,18 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             leaves={scopedLeaves}
             branches={scopedBranches}
             entities={scopedEntities}
+          />
+        )}
+        {hasTab("warnings") && tab === "warnings" && (
+          <WarningsTab
+            employees={scopedEmployees}
+            branches={scopedBranches}
+            entities={scopedEntities}
+            entityOfBranch={entityOfBranch}
+            warnings={scopedWarnings}
+            messages={scopedMessages}
+            onAddWarning={addWarning}
+            onRemoveWarning={removeWarning}
           />
         )}
         {tab === "leaveRequests" && (
@@ -3248,7 +3034,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             entityOfBranch={entityOfBranch}
             gosiRates={gosiRates}
             attendance={scopedAttendance}
-            setAttendance={setAttendance}
             leaves={scopedLeaves}
             payrollItems={scopedPayrollItems}
             setPayrollItems={setPayrollItems}
@@ -3270,7 +3055,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             onRemoveEquipmentPhoto={removeEquipmentPhoto}
             onAddWorkOrder={addWorkOrder}
             onUpdateWorkOrderStatus={updateWorkOrderStatus}
-            onUpdateWorkOrderCostStatus={updateWorkOrderCostStatus}
             onRemoveWorkOrder={removeWorkOrder}
             onAddWorkOrderPhotos={addWorkOrderPhotos}
             onRemoveWorkOrderPhoto={removeWorkOrderPhoto}
@@ -3296,19 +3080,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           <ReportsTab activityLog={activityLog} users={users} />
         )}
         {hasTab("settings") && tab === "settings" && (
-          <SettingsTab
-            gosiRates={gosiRates}
-            setGosiRates={setGosiRates}
-            isAdmin={isAdmin}
-            onRestoreBackup={restoreBackup}
-            onCleanupLegacyPhotos={cleanupLegacyBase64Photos}
-            logActivity={logActivity}
-            employees={employees}
-            maintenanceManagerId={maintenanceManagerId}
-            setMaintenanceManagerId={setMaintenanceManagerId}
-            qualityManagerId={qualityManagerId}
-            setQualityManagerId={setQualityManagerId}
-          />
+          <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} isAdmin={isAdmin} onRestoreBackup={restoreBackup} onCleanupLegacyPhotos={cleanupLegacyBase64Photos} logActivity={logActivity} />
         )}
         {isAdmin && tab === "users" && (
           <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} logActivity={logActivity} />
@@ -3625,21 +3397,7 @@ function formatOffDays(days, t) {
 }
 
 /* ترتيب أيام الأسبوع كما يرجعه Date.getDay() في JS (0=الأحد...6=السبت) — لمطابقتها بأسماء الأيام العربية */
-/* سماحية التأخير والخروج المبكر: 10 دقائق — أي تأخير أو خروج مبكر خلالها ما يُحتسب عليه أي خصم إطلاقًا،
-   وأي تجاوز لها يُحتسب كاملًا من وقت الدوام المقرَّر (مش بس الفرق الزائد عن الـ10 دقائق) */
-const ATTENDANCE_GRACE_MINUTES = 10;
-
 const JS_DAY_INDEX_TO_AR = ["الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة", "السبت"];
-
-/* اسم اليوم (بالعربي أو الإنجليزي) من تاريخ بصيغة YYYY-MM-DD — تُستخدم لعرض اليوم جنب التاريخ
-   في سجلات الحضور والانصراف وغيرها */
-function dayNameOfDate(dateStr, t) {
-  if (!dateStr) return "";
-  const d = new Date(`${dateStr}T00:00:00`);
-  if (isNaN(d.getTime())) return "";
-  const ar = JS_DAY_INDEX_TO_AR[d.getDay()];
-  return t ? t(ar, WEEK_DAYS_EN[ar] || ar) : ar;
-}
 
 /* يرجّع وقت بداية/نهاية دوام الموظف الفعلي ليوم معيّن (باسمه العربي، مثل "السبت") — لو مفعّل عنده
    "أوقات مختلفة لكل يوم" ومضبوط ليوم بعينه، يرجع وقته الخاص، وإلا يرجع دوامه العام الموحّد */
@@ -3656,36 +3414,29 @@ function effectiveShift(emp, dayName, shiftKey = "workShift", defaults = { start
    ومو ضمن إجازة معتمدة، ومو قبل تاريخ تعيينه، ومو يوم مستقبلي) ومالوش أي سجل حضور مسجَّل إطلاقًا (لا حضور
    ولا غياب يدوي) يُحتسب غيابًا تلقائيًا. لا يكرّر أيام الغياب المسجَّلة يدويًا أصلاً (بيتجاهلها لأنها بالفعل "لها سجل") */
 function countMissingAttendanceDays(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd) {
-  return getMissingAttendanceDates(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd).length;
-}
-
-/* نفس منطق countMissingAttendanceDays لكن بترجع قائمة التواريخ الفعلية (مش مجرد عدد) — تُستخدم
-   لعرض أيام الغياب بالتفصيل للموظف بدل رقم مجرّد فقط */
-function getMissingAttendanceDates(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd) {
-  if (!emp?.joinDate) return [];
+  if (!emp?.joinDate) return 0;
   const start = new Date(rangeStart + "T00:00:00");
   const end = new Date(rangeEnd + "T00:00:00");
-  if (isNaN(start) || isNaN(end)) return [];
+  if (isNaN(start) || isNaN(end)) return 0;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const join = new Date(emp.joinDate + "T00:00:00");
-  if (isNaN(join)) return [];
+  if (isNaN(join)) return 0;
   const offDays = getOffDays(emp);
   const recordedDates = new Set((periodAttendanceRecords || []).map((a) => a.date));
-  const missingDates = [];
+  let missing = 0;
   for (let dateObj = new Date(start); dateObj <= end; dateObj.setDate(dateObj.getDate() + 1)) {
-    /* اليوم الحالي نفسه ما يُحتسب غيابًا تلقائيًا إطلاقًا — الموظف ممكن يكون لسه ما جاله وقت دوامه
-       أو دوامه لسه شغال؛ الحكم على "غياب بدون بصمة" يبدأ من الأمس فما قبل فقط */
-    if (dateObj >= today) break;
+    if (dateObj > today) break; /* يوم مستقبلي — ما نحكم عليه */
     if (dateObj < join) continue; /* قبل تاريخ التعيين */
     const dateStr = fmtISODate(dateObj);
     if (recordedDates.has(dateStr)) continue; /* له سجل حضور بالفعل (حاضر/متأخر/غائب يدوي...) */
     if (offDays.includes(JS_DAY_INDEX_TO_AR[dateObj.getDay()])) continue; /* يوم إجازته الأسبوعية */
     const onApprovedLeave = (employeeApprovedLeaves || []).some((l) => l.from && l.to && dateStr >= l.from && dateStr <= l.to);
     if (onApprovedLeave) continue; /* ضمن إجازة معتمدة */
-    missingDates.push(dateStr);
+    missing++;
   }
-  return missingDates;
+  return missing;
+
 }
 
 /* تحويل تاريخ ميلادي إلى هجري للعرض جنب حقل التاريخ (بدون اتصال إنترنت، عبر Intl المدمجة في المتصفح) */
@@ -6299,65 +6050,12 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
 }
 
 /* ============ سجل الحضور اليومي (قسم مستقل تحت الحضور والإجازات) ============ */
-function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage, onGoToEmployee }) {
+function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage }) {
   const { t } = useLang();
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [logSearch, setLogSearch] = useState("");
-  const [logBranchFilter, setLogBranchFilter] = useState("");
-  /* تعديل سجل حضور/انصراف قائم — لتصحيح خطأ الموظف في وقت البصمة أو حالة اليوم */
-  const [editAttId, setEditAttId] = useState(null);
-  const [editAttForm, setEditAttForm] = useState(null);
   const [notifyResult, setNotifyResult] = useState("");
-
-  /* كشف حضور وانصراف شهري مطبوع لموظف واحد — نفس تنسيق الكشف الرسمي (بيانات المؤسسة والفرع، جدول
-     يومي بالحالة ووقتَي الحضور والانصراف مع خانة توقيع لكل منهما، وتوقيعان في الأسفل) */
-  const [showMonthSheet, setShowMonthSheet] = useState(false);
-  const [sheetEmployeeId, setSheetEmployeeId] = useState("");
-  const [sheetMonth, setSheetMonth] = useState(new Date().toISOString().slice(0, 7));
-
-  const buildMonthSheetRows = (emp, monthStr) => {
-    if (!emp || !monthStr) return [];
-    const [y, m] = monthStr.split("-").map(Number);
-    const monthStart = new Date(y, m - 1, 1);
-    const monthEnd = new Date(y, m, 0);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const join = emp.joinDate ? new Date(emp.joinDate + "T00:00:00") : null;
-    const offDays = getOffDays(emp);
-    const empLeaves = leaves.filter((l) => l.employeeId === emp.id);
-    const empAttendance = attendance.filter((a) => a.employeeId === emp.id);
-    const rowsOut = [];
-    for (let d = new Date(monthStart); d <= monthEnd; d.setDate(d.getDate() + 1)) {
-      const dateObj = new Date(d);
-      const iso = fmtISODate(dateObj);
-      const dayName = JS_DAY_INDEX_TO_AR[dateObj.getDay()];
-      const rec = empAttendance.find((a) => a.date === iso);
-      const onLeave = empLeaves.find((l) => l.from && l.to && iso >= l.from && iso <= l.to);
-      let status = "";
-      let checkIn = "";
-      let checkOut = "";
-      if (offDays.includes(dayName)) {
-        status = t("إجازة أسبوعية", "Weekly Off");
-      } else if (onLeave) {
-        status = onLeave.type ? `${t("إجازة", "Leave")} (${onLeave.type})` : t("إجازة", "Leave");
-      } else if (rec) {
-        status = rec.status === "غائب" ? t("غياب", "Absent") : rec.status === "متأخر" ? t("متأخر", "Late") : t("حاضر", "Present");
-        checkIn = rec.checkInTime || "";
-        checkOut = rec.checkOutTime || "";
-      } else if (join && dateObj < join) {
-        status = "—";
-      } else if (dateObj > today) {
-        status = "—";
-      } else if (emp.flexibleSchedule) {
-        status = t("دوام حر", "Flexible");
-      } else {
-        status = t("غياب", "Absent");
-      }
-      rowsOut.push({ date: iso, dayName, status, checkIn, checkOut });
-    }
-    return rowsOut;
-  };
 
   /* تنبيه الموظفين اللي لسه ما سجّلوش حضور النهاردة رغم إن وقت دوامهم بدأ (بهامش سماح نص ساعة) —
      يستثني: يوم إجازته الأسبوعية، إجازة معتمدة، قبل تاريخ تعيينه، أو دوام حر (مالوش وقت دخول ثابت) */
@@ -6419,63 +6117,14 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
       lateMinutes: attForm.status === "متأخر" ? Number(attForm.lateMinutes || 0) : 0,
       overtimeHours: Number(attForm.overtimeHours || 0),
     };
-    const newAttRecord = { ...record, id: uid() };
-    setAttendance((prev) => [...prev, newAttRecord]);
-    atomicAddAttendanceRecord(newAttRecord);
+    setAttendance((prev) => [...prev, { ...record, id: uid() }]);
     logActivity && logActivity("تسجيل حضور", "attendance", empName(attForm.employeeId));
     setAttForm({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   };
-  const removeAtt = (id) => {
-    const rec = attendance.find((a) => a.id === id);
-    setAttendance((prev) => prev.filter((a) => a.id !== id));
-    if (rec) atomicRemoveAttendanceRecord(rec);
-  };
+  const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
 
-  const startEditAtt = (a) => {
-    setEditAttId(a.id);
-    setEditAttForm({
-      checkInTime: a.checkInTime || "",
-      checkOutTime: a.checkOutTime || "",
-      checkInTime2: a.checkInTime2 || "",
-      checkOutTime2: a.checkOutTime2 || "",
-      status: a.status || "حاضر",
-      lateMinutes: a.lateMinutes || "",
-      earlyLeaveMinutes: a.earlyLeaveMinutes || "",
-      shortfallMinutes: a.shortfallMinutes || "",
-      overtimeHours: a.overtimeHours || "",
-      overtimeHours2: a.overtimeHours2 || "",
-    });
-  };
-  const cancelEditAtt = () => {
-    setEditAttId(null);
-    setEditAttForm(null);
-  };
-  const saveEditAtt = () => {
-    if (!editAttId || !editAttForm) return;
-    const oldRec = attendance.find((a) => a.id === editAttId);
-    if (!oldRec) return;
-    const updatedRec = {
-      ...oldRec,
-      checkInTime: editAttForm.checkInTime.trim(),
-      checkOutTime: editAttForm.checkOutTime.trim(),
-      checkInTime2: editAttForm.checkInTime2.trim(),
-      checkOutTime2: editAttForm.checkOutTime2.trim(),
-      status: editAttForm.status,
-      lateMinutes: editAttForm.status === "متأخر" ? Number(editAttForm.lateMinutes || 0) : 0,
-      earlyLeaveMinutes: Number(editAttForm.earlyLeaveMinutes || 0),
-      shortfallMinutes: Number(editAttForm.shortfallMinutes || 0),
-      overtimeHours: Number(editAttForm.overtimeHours || 0),
-      overtimeHours2: Number(editAttForm.overtimeHours2 || 0),
-    };
-    setAttendance((prev) => prev.map((a) => (a.id === editAttId ? updatedRec : a)));
-    atomicUpdateAttendanceRecord(oldRec, updatedRec);
-    logActivity && logActivity("تعديل سجل حضور", "attendance", `${empName(oldRec.employeeId)} — ${oldRec.date || ""}`);
-    cancelEditAtt();
-  };
-
-  /* بحث في سجل الحضور اليومي: بالاسم، رقم الهوية/الإقامة، أو التاريخ — بالإضافة لتصفية بالفرع */
+  /* بحث في سجل الحضور اليومي: بالاسم، رقم الهوية/الإقامة، أو التاريخ */
   const filteredAttendance = attendance.filter((a) => {
-    if (logBranchFilter && a.branchId !== logBranchFilter) return false;
     if (!logSearch.trim()) return true;
     const q = logSearch.trim().toLowerCase();
     const emp = employees.find((e) => e.id === a.employeeId);
@@ -6559,117 +6208,18 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
           value={logSearch}
           onChange={(e) => setLogSearch(e.target.value)}
         />
-        <select style={{ ...inputStyle, maxWidth: 200 }} value={logBranchFilter} onChange={(e) => setLogBranchFilter(e.target.value)}>
-          <option value="">{t("كل الفروع", "All Branches")}</option>
-          {branches.map((b) => (
-            <option key={b.id} value={b.id}>{b.name}</option>
-          ))}
-        </select>
         <Btn tone="secondary" onClick={notifyAbsentees}>
           {t("🔔 تنبيه من لم يسجّل حضور اليوم", "🔔 Notify Today's Absentees")}
         </Btn>
         {notifyResult && <span style={{ fontSize: 12, color: COLORS.espresso, fontWeight: 700 }}>{notifyResult}</span>}
-        <Btn tone="secondary" onClick={() => setShowMonthSheet((s) => !s)}>
-          {t("🖶 كشف حضور وانصراف شهري", "🖶 Monthly Attendance Sheet")}
-        </Btn>
       </div>
-
-      {showMonthSheet && (() => {
-        const sheetEmployee = employees.find((e) => e.id === sheetEmployeeId);
-        const branch = branches.find((b) => b.id === sheetEmployee?.branchId);
-        const entity = entities.find((en) => en.id === branch?.entityId);
-        const sheetRows = sheetEmployee ? buildMonthSheetRows(sheetEmployee, sheetMonth) : [];
-        const shiftLabel = sheetEmployee
-          ? sheetEmployee.flexibleSchedule
-            ? t("دوام حر", "Flexible")
-            : `${sheetEmployee.workShift?.start || "—"} — ${sheetEmployee.workShift?.end || "—"}`
-          : "";
-        return (
-          <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 16 }}>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end", marginBottom: 14 }} className="no-print">
-              <Field label={t("الموظف", "Employee")}>
-                <EmployeeSelect employees={employees} value={sheetEmployeeId} onChange={setSheetEmployeeId} />
-              </Field>
-              <Field label={t("الشهر", "Month")}>
-                <input type="month" style={inputStyle} value={sheetMonth} onChange={(e) => setSheetMonth(e.target.value)} />
-              </Field>
-              {sheetEmployee && <Btn onClick={() => window.print()}>{t("🖶 طباعة الكشف", "🖶 Print Sheet")}</Btn>}
-            </div>
-
-            {!sheetEmployee && <Empty text={t("اختر موظفًا لعرض كشفه", "Select an employee to view their sheet")} />}
-
-            {sheetEmployee && (
-              <div className="print-section">
-                <div style={{ textAlign: "center", marginBottom: 6 }}>
-                  <div style={{ fontSize: 17, fontWeight: 800, color: COLORS.espresso }}>{entity?.name || t("المؤسسة", "The Company")}</div>
-                  <div style={{ fontSize: 12.5, color: "#8a7a63" }}>{branch ? `${t("فرع", "Branch")} ${branch.name}` : ""}</div>
-                </div>
-                <div style={{ textAlign: "center", borderBottom: `1px solid ${COLORS.line}`, paddingBottom: 10, marginBottom: 14 }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso }}>{t("كشف حضور وانصراف", "Attendance Sheet")}</div>
-                </div>
-                <div style={{ fontSize: 12.5, lineHeight: 2 }}>
-                  <div><b>{t("اسم الموظف", "Employee Name")}:</b> {sheetEmployee.name}</div>
-                  <div><b>{t("الفرع", "Branch")}:</b> {branch?.name || "—"}</div>
-                  <div><b>{t("أوقات الدوام", "Shift Hours")}:</b> {shiftLabel}</div>
-                  <div><b>{t("الشهر", "Month")}:</b> {sheetMonth}</div>
-                </div>
-                <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 14, fontSize: 11.5 }}>
-                  <thead>
-                    <tr style={{ background: COLORS.espresso, color: "#fff" }}>
-                      {[
-                        t("م", "#"), t("التاريخ", "Date"), t("اليوم", "Day"), t("الحالة", "Status"),
-                        t("وقت الحضور", "Check-in"), t("توقيع عند الحضور", "Sign (in)"),
-                        t("وقت الانصراف", "Check-out"), t("توقيع عند الانصراف", "Sign (out)"),
-                      ].map((h) => (
-                        <th key={h} style={{ padding: "6px 8px", border: `1px solid ${COLORS.line}` }}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sheetRows.map((r, i) => (
-                      <tr key={r.date} style={{ background: i % 2 ? "#FAF6EE" : "#fff" }}>
-                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{i + 1}</td>
-                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{r.date}</td>
-                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{r.dayName}</td>
-                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center", fontWeight: r.status !== t("حاضر", "Present") ? 700 : 400 }}>{r.status}</td>
-                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{r.checkIn}</td>
-                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}` }}></td>
-                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}`, textAlign: "center" }}>{r.checkOut}</td>
-                        <td style={{ padding: "5px 8px", border: `1px solid ${COLORS.line}` }}></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
-                  <div style={{ width: "45%" }}>
-                    <div style={{ fontWeight: 700, fontSize: 12.5 }}>{t("توقيع الموظف", "Employee Signature")}: {sheetEmployee.name}</div>
-                    <div style={{ borderBottom: `1px solid ${COLORS.espresso}`, marginTop: 30 }}></div>
-                    <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 4 }}>{t("التاريخ", "Date")}: ____ / ____ / ____</div>
-                  </div>
-                  <div style={{ width: "45%" }}>
-                    <div style={{ fontWeight: 700, fontSize: 12.5 }}>{t("توقيع المدير", "Manager Signature")}</div>
-                    <div style={{ borderBottom: `1px solid ${COLORS.espresso}`, marginTop: 30 }}></div>
-                    <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 4 }}>{t("التاريخ", "Date")}: ____ / ____ / ____</div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        );
-      })()}
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
         {attendance.length === 0 && <Empty text={t("لا توجد سجلات حضور", "No attendance records")} />}
         {attendance.length > 0 && filteredAttendance.length === 0 && <Empty text={t("لا توجد نتائج مطابقة للبحث", "No matching results")} />}
         {filteredAttendance.slice().reverse().map((a, i) => (
           <div key={a.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5, flexWrap: "wrap", gap: 8 }}>
             <div>
-              <b
-                style={onGoToEmployee ? { cursor: "pointer", textDecoration: "underline", textDecorationStyle: "dotted" } : undefined}
-                onClick={onGoToEmployee ? () => onGoToEmployee(a.employeeId) : undefined}
-                title={onGoToEmployee ? t("فتح ملف الموظف", "Open employee profile") : undefined}
-              >
-                {empName(a.employeeId)}
-              </b> — {a.date}{dayNameOfDate(a.date, t) && ` (${dayNameOfDate(a.date, t)})`}
+              <b>{empName(a.employeeId)}</b> — {a.date}
               {branchNameOf(a.branchId) && (
                 <span style={{ color: "#8a7a63", fontWeight: 400 }}> · {branchNameOf(a.branchId)}</span>
               )}
@@ -6720,71 +6270,11 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
               {Number(a.earlyLeaveMinutes2 || 0) > 0 && (
                 <Stamp tone="brick">{t(`خروج مبكر ف2 ${a.earlyLeaveMinutes2} د`, `Left early S2 ${a.earlyLeaveMinutes2}m`)}</Stamp>
               )}
-              <Btn small onClick={() => startEditAtt(a)}>{t("✎ تعديل", "✎ Edit")}</Btn>
               <Btn small tone="danger" onClick={() => removeAtt(a.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
         ))}
       </div>
-
-      {editAttId && editAttForm && (() => {
-        const editingRecord = attendance.find((x) => x.id === editAttId);
-        return (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(20,14,8,0.72)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} className="no-print">
-            <div style={{ background: "#fff", borderRadius: 14, padding: 20, width: "100%", maxWidth: 460, maxHeight: "88vh", overflowY: "auto" }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>{t("تعديل سجل حضور", "Edit Attendance Record")}</div>
-              <div style={{ fontSize: 12, color: "#8a7a63", marginBottom: 14 }}>
-                {empName(editingRecord?.employeeId)} — {editingRecord?.date}
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                <Field label={t("وقت الحضور (صباحي)", "Check-in (AM)")}>
-                  <input type="time" style={inputStyle} value={editAttForm.checkInTime} onChange={(e) => setEditAttForm({ ...editAttForm, checkInTime: e.target.value })} />
-                </Field>
-                <Field label={t("وقت الانصراف (صباحي)", "Check-out (AM)")}>
-                  <input type="time" style={inputStyle} value={editAttForm.checkOutTime} onChange={(e) => setEditAttForm({ ...editAttForm, checkOutTime: e.target.value })} />
-                </Field>
-                <Field label={t("وقت الحضور (مسائي)", "Check-in (PM)")}>
-                  <input type="time" style={inputStyle} value={editAttForm.checkInTime2} onChange={(e) => setEditAttForm({ ...editAttForm, checkInTime2: e.target.value })} />
-                </Field>
-                <Field label={t("وقت الانصراف (مسائي)", "Check-out (PM)")}>
-                  <input type="time" style={inputStyle} value={editAttForm.checkOutTime2} onChange={(e) => setEditAttForm({ ...editAttForm, checkOutTime2: e.target.value })} />
-                </Field>
-                <Field label={t("الحالة", "Status")}>
-                  <select style={inputStyle} value={editAttForm.status} onChange={(e) => setEditAttForm({ ...editAttForm, status: e.target.value })}>
-                    <option value="حاضر">{t("حاضر", "Present")}</option>
-                    <option value="غائب">{t("غائب", "Absent")}</option>
-                    <option value="متأخر">{t("متأخر", "Late")}</option>
-                  </select>
-                </Field>
-                {editAttForm.status === "متأخر" && (
-                  <Field label={t("عدد دقائق التأخير", "Minutes Late")}>
-                    <input type="number" style={inputStyle} value={editAttForm.lateMinutes} onChange={(e) => setEditAttForm({ ...editAttForm, lateMinutes: e.target.value })} />
-                  </Field>
-                )}
-                <Field label={t("دقائق الخروج المبكر", "Early Leave Minutes")}>
-                  <input type="number" style={inputStyle} value={editAttForm.earlyLeaveMinutes} onChange={(e) => setEditAttForm({ ...editAttForm, earlyLeaveMinutes: e.target.value })} />
-                </Field>
-                <Field label={t("دقائق نقص الساعات (دوام حر)", "Hours Shortfall Minutes (flexible)")}>
-                  <input type="number" style={inputStyle} value={editAttForm.shortfallMinutes} onChange={(e) => setEditAttForm({ ...editAttForm, shortfallMinutes: e.target.value })} />
-                </Field>
-                <Field label={t("ساعات العمل الإضافي", "Overtime Hours")}>
-                  <input type="number" step="0.5" style={inputStyle} value={editAttForm.overtimeHours} onChange={(e) => setEditAttForm({ ...editAttForm, overtimeHours: e.target.value })} />
-                </Field>
-              </div>
-              <div style={{ marginTop: 14, fontSize: 11, color: "#a3927a" }}>
-                {t(
-                  "اترك أي وقت فارغًا لو ما ينطبق (مثلاً موظف بدوام واحد ما يحتاج وقت مسائي).",
-                  "Leave a time blank if it doesn't apply (e.g. a single-shift employee doesn't need PM times)."
-                )}
-              </div>
-              <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-                <Btn tone="secondary" onClick={cancelEditAtt}>{t("إلغاء", "Cancel")}</Btn>
-                <Btn onClick={saveEditAtt}>{t("💾 حفظ التعديل", "💾 Save Changes")}</Btn>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {viewingPhoto && (
         <div
@@ -6936,49 +6426,14 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
 }
 
 
-function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, setAttendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
+function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [searchQuery, setSearchQuery] = useState("");
-  const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", date: new Date().toISOString().slice(0, 10), month: new Date().toISOString().slice(0, 7), note: "", photo: "", repayment: "دفعة واحدة", installments: 2 });
-  const [itemPhotoBusy, setItemPhotoBusy] = useState(false);
-  const [itemLightbox, setItemLightbox] = useState(null);
-  const handleItemPhotoUpload = async (files) => {
-    if (!files || files.length === 0) return;
-    setItemPhotoBusy(true);
-    try {
-      const compressed = await compressImage(files[0], 900, 0.7);
-      const url = await uploadPhotoToStorage(compressed, `payrollItemPhotos/${uid()}`);
-      setItemForm((f) => ({ ...f, photo: url }));
-    } catch (err) {
-      /* تجاهل فشل رفع الصورة — الحقل اختياري */
-    }
-    setItemPhotoBusy(false);
-  };
+  const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", date: new Date().toISOString().slice(0, 10), month: new Date().toISOString().slice(0, 7), note: "", repayment: "دفعة واحدة", installments: 2 });
   const [payslip, setPayslip] = useState(null);
   const [printItem, setPrintItem] = useState(null);
-  /* تفاصيل أيام غياب موظف معيّن (لعرضها وتعديلها) — نخزّن id الموظف اللي فاتح تفاصيله حاليًا */
-  const [detailsFor, setDetailsFor] = useState(null); // { rowId, kind: 'absence' | 'late' | 'overtime' }
-  const [editingDate, setEditingDate] = useState(null);
-  const [editDayForm, setEditDayForm] = useState(null);
-
-  /* تحديث أو إنشاء سجل حضور ليوم معيّن — تُستخدم لتصحيح غياب مسجَّل يدويًا، أو لإضافة سجل ليوم
-     احتُسب غيابًا تلقائيًا لعدم وجود أي بصمة له (مثلاً لو تبيّن إنه كان حاضر فعليًا) */
-  const upsertAttendanceForDate = (employeeId, date, updates) => {
-    const existing = attendance.find((a) => a.employeeId === employeeId && a.date === date);
-    if (existing) {
-      const updatedRec = { ...existing, ...updates };
-      setAttendance((prev) => prev.map((a) => (a === existing ? updatedRec : a)));
-      atomicUpdateAttendanceRecord(existing, updatedRec);
-    } else {
-      const emp = employees.find((e) => e.id === employeeId);
-      const newRec = { id: uid(), employeeId, date, branchId: emp?.branchId || "", ...updates };
-      setAttendance((prev) => [...prev, newRec]);
-      atomicAddAttendanceRecord(newRec);
-    }
-    logActivity && logActivity("تعديل سجل غياب", "payroll", `${employees.find((e) => e.id === employeeId)?.name || ""} — ${date}`);
-  };
 
   const addItem = () => {
     if (!itemForm.employeeId || !itemForm.amount || Number(itemForm.amount) <= 0) return;
@@ -7011,7 +6466,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         date: itemForm.date,
         month: addMonthsToStr(itemForm.month, i),
         note: `${itemForm.note ? itemForm.note + " — " : ""}قسط ${i + 1} من ${n}`,
-        photo: itemForm.photo,
         loanGroupId,
         id: uid(),
       }));
@@ -7023,7 +6477,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       logActivity && logActivity(`تسجيل ${itemForm.type}`, "payroll", `${empName(itemForm.employeeId)} — ${fmt(totalAmount)} ﷼`);
       notifyDeductionItem(itemForm.type, totalAmount, itemForm.note, itemForm.type !== "حافز");
     }
-    setItemForm({ employeeId: "", type: itemForm.type, amount: "", date: new Date().toISOString().slice(0, 10), month: itemForm.month, note: "", photo: "", repayment: "دفعة واحدة", installments: 2 });
+    setItemForm({ employeeId: "", type: itemForm.type, amount: "", date: new Date().toISOString().slice(0, 10), month: itemForm.month, note: "", repayment: "دفعة واحدة", installments: 2 });
   };
   const removeItem = (id) => setPayrollItems((prev) => prev.filter((p) => p.id !== id));
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
@@ -7045,16 +6499,14 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const perMinuteRate = dailyRate / (dailyHours * 60); /* على أساس ساعات عمله الفعلية اليومية */
 
       const monthAttendance = attendance.filter((a) => a.employeeId === e.id && (a.date || "").startsWith(month));
-      const manualAbsentRecords = monthAttendance.filter((a) => a.status === "غائب");
-      const manualAbsentDays = manualAbsentRecords.length;
+      const manualAbsentDays = monthAttendance.filter((a) => a.status === "غائب").length;
       const employeeApprovedLeaves = leaves.filter((l) => l.employeeId === e.id);
       /* أيام مالها سجل حضور إطلاقًا (مو إجازته الأسبوعية ومو ضمن إجازة معتمدة) تُحتسب غيابًا تلقائيًا،
          بالإضافة لأيام الغياب المسجَّلة يدويًا */
       const [__pmY, __pmM] = month.split("-").map(Number);
       const monthStart = `${month}-01`;
       const monthEnd = fmtISODate(new Date(__pmY, __pmM, 0));
-      const autoAbsentDates = getMissingAttendanceDates(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
-      const autoAbsentDays = autoAbsentDates.length;
+      const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
       const absentDays = manualAbsentDays + autoAbsentDays;
       const lateMinutesTotal = monthAttendance
         .filter((a) => a.status === "متأخر")
@@ -7067,21 +6519,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         0
       );
       const totalDeductibleMinutes = lateMinutesTotal + flexibleShortfallMinutes + earlyLeaveMinutesTotal;
-      /* تفاصيل كل يوم ساهم في دقائق التأخير/الخصم (تأخير صريح، نقص ساعات دوام حر، أو خروج مبكر) —
-         لعرضها وتعديلها بدل ما تكون رقمًا مجمَّعًا فقط */
-      const lateDetailRecords = [];
-      monthAttendance.forEach((a) => {
-        const early = Number(a.earlyLeaveMinutes || 0) + Number(a.earlyLeaveMinutes2 || 0);
-        if (a.status === "متأخر" && Number(a.lateMinutes || 0) > 0) {
-          lateDetailRecords.push({ date: a.date, minutes: Number(a.lateMinutes), kindLabel: t("تأخير", "Late") });
-        }
-        if (Number(a.shortfallMinutes || 0) > 0) {
-          lateDetailRecords.push({ date: a.date, minutes: Number(a.shortfallMinutes), kindLabel: t("نقص ساعات (دوام حر)", "Hours shortfall (flexible)") });
-        }
-        if (early > 0) {
-          lateDetailRecords.push({ date: a.date, minutes: early, kindLabel: t("خروج مبكر", "Early leave") });
-        }
-      });
 
       const unpaidLeaveDays = leaves
         .filter((l) => l.employeeId === e.id && l.type === "بدون راتب")
@@ -7096,9 +6533,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const hourlyRate = dailyRate / dailyHours;
       const overtimeHours = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0), 0);
       const overtimePay = overtimeHours * hourlyRate * 1.5;
-      const overtimeDetailRecords = monthAttendance
-        .filter((a) => Number(a.overtimeHours || 0) > 0)
-        .map((a) => ({ date: a.date, hours: Number(a.overtimeHours) }));
 
       /* السلف والخصومات والحوافز المسجّلة لهذا الموظف في الشهر المختار */
       const monthItems = payrollItems.filter((p) => p.employeeId === e.id && p.month === month);
@@ -7114,17 +6548,13 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         employerShare,
         dailyRate,
         absentDays,
-        absentManualDates: manualAbsentRecords.map((a) => a.date),
-        absentAutoDates: autoAbsentDates,
         absentDeduction,
         lateMinutesTotal: totalDeductibleMinutes,
-        lateDetailRecords,
         lateDeduction,
         unpaidLeaveDays,
         unpaidLeaveDeduction,
         attendanceDeduction,
         overtimeHours,
-        overtimeDetailRecords,
         overtimePay,
         advances,
         extraDeductions,
@@ -7216,17 +6646,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
           <Field label={t("ملاحظة / السبب", "Note / Reason")}>
             <input type="text" style={inputStyle} value={itemForm.note} onChange={(e) => setItemForm({ ...itemForm, note: e.target.value })} />
           </Field>
-          <Field label={t("صورة إثبات (اختياري)", "Evidence Photo (optional)")}>
-            {itemForm.photo ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <img src={itemForm.photo} alt="" onClick={() => setItemLightbox(itemForm.photo)} style={{ width: 38, height: 38, objectFit: "cover", borderRadius: 6, border: `1px solid ${COLORS.line}`, cursor: "pointer" }} />
-                <button onClick={() => setItemForm({ ...itemForm, photo: "" })} style={{ border: "none", background: "transparent", color: COLORS.brick, cursor: "pointer", fontSize: 12 }}>✕ {t("إزالة", "Remove")}</button>
-              </div>
-            ) : (
-              <input type="file" accept="image/*" disabled={itemPhotoBusy} style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5 }} onChange={(e) => { handleItemPhotoUpload(e.target.files); e.target.value = ""; }} />
-            )}
-            {itemPhotoBusy && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصورة...", "Uploading photo...")}</div>}
-          </Field>
           <div style={{ display: "flex", alignItems: "flex-end" }}>
             <Btn onClick={addItem}>{t("تسجيل", "Register")}</Btn>
           </div>
@@ -7247,9 +6666,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
               <span style={{ color: "#a3927a", fontFamily: "Consolas, monospace" }}> · {p.date || p.month}</span>
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              {p.photo && (
-                <img src={p.photo} alt="" onClick={() => setItemLightbox(p.photo)} style={{ width: 30, height: 30, objectFit: "cover", borderRadius: 5, border: `1px solid ${COLORS.line}`, cursor: "pointer" }} />
-              )}
               <Stamp tone={p.type === "حافز" ? "green" : "brick"}>
                 {trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, p.type)}
               </Stamp>
@@ -7260,12 +6676,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
           </div>
         ))}
       </div>
-
-      {itemLightbox && (
-        <div onClick={() => setItemLightbox(null)} style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.75)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }} className="no-print">
-          <img src={itemLightbox} alt="" style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }} />
-        </div>
-      )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("كشف الرواتب", "Payroll Sheet")}</SectionTitle>
@@ -7364,53 +6774,14 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td data-label={t("الراتب الأساسي", "Basic Salary")} style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
                   <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} className="no-print" style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
-                  <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
-                    {r.absentDays > 0 ? (
-                      <button
-                        className="no-print"
-                        onClick={() => setDetailsFor({ rowId: r.id, kind: "absence" })}
-                        style={{ background: "transparent", border: "none", padding: 0, color: COLORS.brick, fontWeight: 700, textDecoration: "underline", textDecorationStyle: "dotted", cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
-                        title={t("عرض أيام الغياب بالتفصيل", "View absence details")}
-                      >
-                        {fmt(r.absentDays)}
-                      </button>
-                    ) : (
-                      fmt(r.absentDays)
-                    )}
-                  </td>
+                  <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.absentDays)}</td>
                   <td data-label={t("خصم الغياب", "Absence Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
-                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
-                    {r.lateMinutesTotal > 0 ? (
-                      <button
-                        className="no-print"
-                        onClick={() => setDetailsFor({ rowId: r.id, kind: "late" })}
-                        style={{ background: "transparent", border: "none", padding: 0, color: COLORS.brick, fontWeight: 700, textDecoration: "underline", textDecorationStyle: "dotted", cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
-                        title={t("عرض تفاصيل التأخير", "View late details")}
-                      >
-                        {fmt(r.lateMinutesTotal)}
-                      </button>
-                    ) : (
-                      fmt(r.lateMinutesTotal)
-                    )}
-                  </td>
+                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.lateMinutesTotal)}</td>
                   <td data-label={t("خصم التأخير", "Lateness Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
                   <td data-label={t("أيام إجازة بدون راتب", "Unpaid Leave Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
-                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
-                    {r.overtimeHours > 0 ? (
-                      <button
-                        className="no-print"
-                        onClick={() => setDetailsFor({ rowId: r.id, kind: "overtime" })}
-                        style={{ background: "transparent", border: "none", padding: 0, color: COLORS.green, fontWeight: 700, textDecoration: "underline", textDecorationStyle: "dotted", cursor: "pointer", fontFamily: "inherit", fontSize: "inherit" }}
-                        title={t("عرض تفاصيل الوقت الإضافي", "View overtime details")}
-                      >
-                        {fmt(r.overtimeHours)}
-                      </button>
-                    ) : (
-                      fmt(r.overtimeHours)
-                    )}
-                  </td>
+                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.overtimeHours)}</td>
                   <td data-label={t("قيمة الإضافي", "Overtime Pay")} style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.overtimePay)}</td>
                   <td data-label={t("السلف", "Advances")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
                   <td data-label={t("خصومات أخرى", "Other Deductions")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
@@ -7429,128 +6800,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       </div>
       </div>
       )}
-
-      {detailsFor && (() => {
-        const detailRow = rows.find((r) => r.id === detailsFor.rowId);
-        if (!detailRow) return null;
-        let entries = [];
-        let title = "";
-        if (detailsFor.kind === "absence") {
-          title = t("أيام الغياب", "Absence Days");
-          entries = [
-            ...(detailRow.absentManualDates || []).map((d) => ({ date: d, subtitle: t("غياب مسجَّل يدويًا", "Manually recorded absence") })),
-            ...(detailRow.absentAutoDates || []).map((d) => ({ date: d, subtitle: t("بدون بصمة حضور/انصراف", "No clock-in/out record") })),
-          ];
-        } else if (detailsFor.kind === "late") {
-          title = t("تفاصيل التأخير والخصومات بالدقائق", "Late & Per-Minute Deduction Details");
-          entries = (detailRow.lateDetailRecords || []).map((r) => ({ date: r.date, subtitle: `${r.kindLabel} — ${fmt(r.minutes)} ${t("د", "min")}` }));
-        } else if (detailsFor.kind === "overtime") {
-          title = t("تفاصيل الوقت الإضافي", "Overtime Details");
-          entries = (detailRow.overtimeDetailRecords || []).map((r) => ({ date: r.date, subtitle: `${fmt(r.hours)} ${t("ساعة", "hours")}` }));
-        }
-        entries = entries.slice().sort((a, b) => (a.date < b.date ? 1 : -1));
-        const closeModal = () => { setDetailsFor(null); setEditingDate(null); setEditDayForm(null); };
-        return (
-          <div style={{ position: "fixed", inset: 0, background: "rgba(20,14,8,0.72)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} className="no-print">
-            <div style={{ background: "#fff", borderRadius: 14, padding: 20, width: "100%", maxWidth: 480, maxHeight: "88vh", overflowY: "auto" }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>{title}</div>
-              <div style={{ fontSize: 12, color: "#8a7a63", marginBottom: 14 }}>{detailRow.name} — {month}</div>
-
-              {entries.length === 0 && <Empty text={t("لا توجد سجلات", "No records")} />}
-
-              {entries.map(({ date, subtitle }, i) => (
-                <div key={date + i} style={{ padding: "10px 0", borderBottom: `1px dashed ${COLORS.line}` }}>
-                  {editingDate === date && editDayForm ? (
-                    <div>
-                      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8 }}>{date} {dayNameOfDate(date, t) && `(${dayNameOfDate(date, t)})`}</div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                        <Field label={t("الحالة", "Status")}>
-                          <select style={inputStyle} value={editDayForm.status} onChange={(e) => setEditDayForm({ ...editDayForm, status: e.target.value })}>
-                            <option value="حاضر">{t("حاضر", "Present")}</option>
-                            <option value="متأخر">{t("متأخر", "Late")}</option>
-                            <option value="غائب">{t("غائب", "Absent")}</option>
-                          </select>
-                        </Field>
-                        <Field label={t("وقت الحضور", "Check-in")}>
-                          <input type="time" style={inputStyle} value={editDayForm.checkInTime} onChange={(e) => setEditDayForm({ ...editDayForm, checkInTime: e.target.value })} />
-                        </Field>
-                        <Field label={t("وقت الانصراف", "Check-out")}>
-                          <input type="time" style={inputStyle} value={editDayForm.checkOutTime} onChange={(e) => setEditDayForm({ ...editDayForm, checkOutTime: e.target.value })} />
-                        </Field>
-                        {editDayForm.status === "متأخر" && (
-                          <Field label={t("دقائق التأخير", "Late Minutes")}>
-                            <input type="number" style={inputStyle} value={editDayForm.lateMinutes} onChange={(e) => setEditDayForm({ ...editDayForm, lateMinutes: e.target.value })} />
-                          </Field>
-                        )}
-                        <Field label={t("دقائق الخروج المبكر", "Early Leave Minutes")}>
-                          <input type="number" style={inputStyle} value={editDayForm.earlyLeaveMinutes} onChange={(e) => setEditDayForm({ ...editDayForm, earlyLeaveMinutes: e.target.value })} />
-                        </Field>
-                        <Field label={t("دقائق نقص الساعات (دوام حر)", "Hours Shortfall Minutes (flexible)")}>
-                          <input type="number" style={inputStyle} value={editDayForm.shortfallMinutes} onChange={(e) => setEditDayForm({ ...editDayForm, shortfallMinutes: e.target.value })} />
-                        </Field>
-                        <Field label={t("ساعات العمل الإضافي", "Overtime Hours")}>
-                          <input type="number" step="0.5" style={inputStyle} value={editDayForm.overtimeHours} onChange={(e) => setEditDayForm({ ...editDayForm, overtimeHours: e.target.value })} />
-                        </Field>
-                      </div>
-                      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                        <Btn small tone="secondary" onClick={() => { setEditingDate(null); setEditDayForm(null); }}>{t("إلغاء", "Cancel")}</Btn>
-                        <Btn
-                          small
-                          onClick={() => {
-                            upsertAttendanceForDate(detailRow.id, date, {
-                              status: editDayForm.status,
-                              checkInTime: editDayForm.checkInTime.trim(),
-                              checkOutTime: editDayForm.checkOutTime.trim(),
-                              lateMinutes: editDayForm.status === "متأخر" ? Number(editDayForm.lateMinutes || 0) : 0,
-                              earlyLeaveMinutes: Number(editDayForm.earlyLeaveMinutes || 0),
-                              shortfallMinutes: Number(editDayForm.shortfallMinutes || 0),
-                              overtimeHours: Number(editDayForm.overtimeHours || 0),
-                            });
-                            setEditingDate(null);
-                            setEditDayForm(null);
-                          }}
-                        >
-                          {t("💾 حفظ", "💾 Save")}
-                        </Btn>
-                      </div>
-                    </div>
-                  ) : (
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                      <div>
-                        <div style={{ fontSize: 12.5, fontWeight: 600 }}>{date} {dayNameOfDate(date, t) && `(${dayNameOfDate(date, t)})`}</div>
-                        <div style={{ fontSize: 10.5, color: "#a3927a" }}>{subtitle}</div>
-                      </div>
-                      <Btn
-                        small
-                        tone="secondary"
-                        onClick={() => {
-                          const existing = attendance.find((a) => a.employeeId === detailRow.id && a.date === date);
-                          setEditingDate(date);
-                          setEditDayForm({
-                            status: existing?.status || "حاضر",
-                            checkInTime: existing?.checkInTime || "",
-                            checkOutTime: existing?.checkOutTime || "",
-                            lateMinutes: existing?.lateMinutes || "",
-                            earlyLeaveMinutes: existing?.earlyLeaveMinutes || "",
-                            shortfallMinutes: existing?.shortfallMinutes || "",
-                            overtimeHours: existing?.overtimeHours || "",
-                          });
-                        }}
-                      >
-                        {t("✎ تعديل", "✎ Edit")}
-                      </Btn>
-                    </div>
-                  )}
-                </div>
-              ))}
-
-              <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
-                <Btn tone="secondary" onClick={closeModal}>{t("إغلاق", "Close")}</Btn>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
 
       {printItem && (
         <div
@@ -7952,7 +7201,7 @@ function EOSTab({ employees }) {
 }
 
 /* ============ الإعدادات ============ */
-function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onCleanupLegacyPhotos, logActivity, employees = [], maintenanceManagerId, setMaintenanceManagerId, qualityManagerId, setQualityManagerId }) {
+function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onCleanupLegacyPhotos, logActivity }) {
   const { t } = useLang();
   const [backups, setBackups] = useState([]);
   const [backupsLoaded, setBackupsLoaded] = useState(false);
@@ -8027,28 +7276,6 @@ function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onClea
           "All data is stored and synced via the shared Firestore database and is not shared with any third party."
         )}
       </div>
-
-      {isAdmin && (
-        <div style={{ marginTop: 26, background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, maxWidth: 480 }}>
-          <div style={{ fontSize: 14, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>
-            {t("مسؤولا الصيانة والجودة العامَّان", "General Maintenance & Quality Managers")}
-          </div>
-          <div style={{ fontSize: 11.5, color: "#a3927a", marginBottom: 14 }}>
-            {t(
-              "كل الموظفين يقدرون يرسلوا طلبات صيانة وفحوصات جودة من صفحتهم الذاتية. حدّد هنا شخصًا واحدًا يستلم كل طلبات الصيانة من كل الفروع، وشخصًا آخر (أو نفس الشخص) يستلم كل فحوصات الجودة — تصله كرسالة داخل النظام فور الإرسال.",
-              "All employees can send maintenance requests and quality checks from their self-service page. Set one person here to receive all maintenance requests from every branch, and one (or the same) person to receive all quality checks — they get an in-system message as soon as it's sent."
-            )}
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-            <Field label={t("مسؤول الصيانة العام", "General Maintenance Manager")}>
-              <EmployeeSelect employees={employees} value={maintenanceManagerId} onChange={(id) => setMaintenanceManagerId(id)} />
-            </Field>
-            <Field label={t("مسؤول الجودة العام", "General Quality Manager")}>
-              <EmployeeSelect employees={employees} value={qualityManagerId} onChange={(id) => setQualityManagerId(id)} />
-            </Field>
-          </div>
-        </div>
-      )}
 
       {isAdmin && (
         <div style={{ marginTop: 26, background: "#FEF3F0", border: `2px solid ${COLORS.brick}`, borderRadius: 10, padding: 18, maxWidth: 560 }}>
@@ -9011,8 +8238,8 @@ function AdvanceRequestsTab({ employees, advanceRequests, onApprove, onReject, b
 }
 
 function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, onRemoveTask, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto, onAddTaskVideos, onRemoveTaskVideo, branchName }) {
-  const { t } = useLang();
-  const [form, setForm] = useState({ employeeId: "", title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "", recurring: "لا يتكرر" });
+  const { t, lang } = useLang();
+  const [form, setForm] = useState({ employeeId: "", title: "", titleEn: "", description: "", descriptionEn: "", from: new Date().toISOString().slice(0, 10), to: "", recurring: "لا يتكرر" });
   const [statusFilter, setStatusFilter] = useState("");
   const [branchFilter, setBranchFilter] = useState("");
   const [commentDrafts, setCommentDrafts] = useState({});
@@ -9058,9 +8285,16 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
   };
 
   const submit = () => {
-    if (!form.employeeId || !form.title.trim() || !form.to) return;
-    onAddTask && onAddTask({ ...form, title: form.title.trim(), description: form.description.trim() });
-    setForm({ employeeId: form.employeeId, title: "", description: "", from: new Date().toISOString().slice(0, 10), to: "", recurring: form.recurring });
+    if (!form.employeeId || (!form.title.trim() && !form.titleEn.trim()) || !form.to) return;
+    onAddTask &&
+      onAddTask({
+        ...form,
+        title: form.title.trim(),
+        titleEn: form.titleEn.trim(),
+        description: form.description.trim(),
+        descriptionEn: form.descriptionEn.trim(),
+      });
+    setForm({ employeeId: form.employeeId, title: "", titleEn: "", description: "", descriptionEn: "", from: new Date().toISOString().slice(0, 10), to: "", recurring: form.recurring });
   };
 
   const effectiveStatus = (ts) => (ts.status !== "مكتملة" && ts.to && ts.to < todayISO ? "متأخرة" : ts.status);
@@ -9094,8 +8328,11 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
           <Field label={t("الموظف", "Employee")}>
             <EmployeeSelect employees={employees} value={form.employeeId} onChange={(id) => setForm({ ...form, employeeId: id })} />
           </Field>
-          <Field label={t("عنوان المهمة", "Task Title")}>
+          <Field label={t("عنوان المهمة بالعربي", "Task Title in Arabic")}>
             <input type="text" style={inputStyle} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+          </Field>
+          <Field label={t("عنوان المهمة بالإنجليزي (اختياري)", "Task Title in English (optional)")}>
+            <input type="text" dir="ltr" style={inputStyle} value={form.titleEn} onChange={(e) => setForm({ ...form, titleEn: e.target.value })} />
           </Field>
           <Field label={t("من تاريخ", "From")}>
             <DateField style={inputStyle} value={form.from} onChange={(v) => setForm({ ...form, from: v })} />
@@ -9111,14 +8348,28 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
             </select>
           </Field>
         </div>
-        <div style={{ marginTop: 10 }}>
-          <Field label={t("وصف المهمة (اختياري)", "Task Description (optional)")}>
+        <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <Field label={t("وصف المهمة بالعربي (اختياري)", "Task Description in Arabic (optional)")}>
             <textarea
-              style={{ ...inputStyle, width: "100%", minHeight: 60, resize: "vertical", fontFamily: "inherit" }}
+              style={{ ...inputStyle, minWidth: 260, minHeight: 60, resize: "vertical", fontFamily: "inherit" }}
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
             />
           </Field>
+          <Field label={t("وصف المهمة بالإنجليزي (اختياري)", "Task Description in English (optional)")}>
+            <textarea
+              dir="ltr"
+              style={{ ...inputStyle, minWidth: 260, minHeight: 60, resize: "vertical", fontFamily: "inherit" }}
+              value={form.descriptionEn}
+              onChange={(e) => setForm({ ...form, descriptionEn: e.target.value })}
+            />
+          </Field>
+        </div>
+        <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>
+          {t(
+            "اكتب اللغتين ليظهر النص بالإنجليزي تلقائيًا عند تبديل واجهة النظام — يكفي كتابة لغة واحدة وستظهر هي نفسها في اللغتين.",
+            "Fill in both to show the matching language automatically when the interface is switched — one language alone is fine and will show in both views."
+          )}
         </div>
         <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
           <Btn onClick={submit}>{t("📌 إسناد المهمة", "📌 Assign Task")}</Btn>
@@ -9157,10 +8408,10 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
             <div key={ts.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
                 <div>
-                  <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{ts.title}</div>
+                  <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{biText(lang, ts.title, ts.titleEn)}</div>
                   <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{empName(ts.employeeId)} · {branchName(ts.employeeId)}</div>
                   <div style={{ fontSize: 12.5, marginTop: 6, fontFamily: "Consolas, monospace" }}>{ts.from} → {ts.to}</div>
-                  {ts.description && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{ts.description}</div>}
+                  {(ts.description || ts.descriptionEn) && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{biText(lang, ts.description, ts.descriptionEn)}</div>}
                   <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 6 }}>{t("أُسندت بواسطة", "Assigned by")}: {ts.assignedBy || "—"}</div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -9325,7 +8576,7 @@ const EQUIPMENT_CATEGORIES_EN = { "تحضير القهوة": "Coffee Prep", "ط�
 const EQUIPMENT_LOCATIONS = ["منطقة الإسبريسو", "محطة التحضير اليدوي", "الكاونتر", "غرفة تخزين الحبوب", "منطقة التحميص", "الصالة", "المخزن", "أخرى"];
 const EQUIPMENT_LOCATIONS_EN = { "منطقة الإسبريسو": "Espresso Station", "محطة التحضير اليدوي": "Pour-over Station", "الكاونتر": "Counter", "غرفة تخزين الحبوب": "Bean Storage Room", "منطقة التحميص": "Roasting Area", "الصالة": "Dining Area", "المخزن": "Storage", "أخرى": "Other" };
 const EMPTY_EQUIPMENT = { name: "", category: EQUIPMENT_CATEGORIES[0], location: EQUIPMENT_LOCATIONS[0], purchaseDate: "", frequencyDays: 30, notes: "", branchId: "", status: "نشط" };
-const EMPTY_WORK_ORDER = { equipmentId: "", title: "", description: "", priority: "متوسط", cost: "", branchId: "", photos: [], videoUrl: "" };
+const EMPTY_WORK_ORDER = { equipmentId: "", title: "", description: "", priority: "متوسط", cost: "", branchId: "" };
 
 /* قائمة معدات جاهزة لمقهى/كافيه مختص — نقطة بداية جاهزة للتعديل بدل ما يبدأ الفرع من صفر.
    بدون تاريخ آخر صيانة افتراضي (ما نفترض إن صيانة حصلت فعليًا) — يُسجَّل أول تاريخ حقيقي يدويًا. */
@@ -9354,7 +8605,7 @@ function isEquipmentOverdue(eq) {
 function MaintenanceTab({
   equipment, workOrders, branches, defaultBranchId,
   onAddEquipment, onUpdateEquipment, onRemoveEquipment, onAddEquipmentPhotos, onRemoveEquipmentPhoto,
-  onAddWorkOrder, onUpdateWorkOrderStatus, onUpdateWorkOrderCostStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
+  onAddWorkOrder, onUpdateWorkOrderStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
 }) {
   const { t } = useLang();
   const [subView, setSubView] = useState("equipment");
@@ -9429,43 +8680,6 @@ function MaintenanceTab({
     setVideoBusy((v) => ({ ...v, [id]: false }));
   };
 
-  /* رفع صور/فيديو أثناء تعبئة "طلب صيانة جديد" — قبل ما يتولّد معرّف الطلب نفسه، فنستخدم
-     مسار تخزين مؤقت فريد، والملفات تُرفق مباشرة في الطلب لحظة إرساله */
-  const handleNewWoPhotoUpload = async (files) => {
-    if (!files || files.length === 0) return;
-    setPhotoBusy((p) => ({ ...p, wo_new: true }));
-    try {
-      const compressed = await Promise.all(Array.from(files).slice(0, 3).map((f) => compressImage(f, 900, 0.7)));
-      const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `workOrderPhotos/new_${uid()}`)));
-      setWoForm((f) => ({ ...f, photos: [...(f.photos || []), ...urls] }));
-    } catch (err) {
-      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
-    }
-    setPhotoBusy((p) => ({ ...p, wo_new: false }));
-  };
-  const removeNewWoPhoto = (idx) => {
-    setWoForm((f) => ({ ...f, photos: (f.photos || []).filter((_, i) => i !== idx) }));
-  };
-  const handleNewWoVideoUpload = async (files) => {
-    if (!files || files.length === 0) return;
-    const MAX_MB = 100;
-    setVideoError((v) => ({ ...v, new: "" }));
-    const tooLarge = Array.from(files).find((f) => f.size > MAX_MB * 1024 * 1024);
-    if (tooLarge) {
-      setVideoError((v) => ({ ...v, new: t(`الملف أكبر من ${MAX_MB} ميجابايت — قلّل حجمه وحاول تاني`, `File is larger than ${MAX_MB}MB — reduce its size and try again`) }));
-      return;
-    }
-    setVideoBusy((v) => ({ ...v, new: true }));
-    try {
-      const url = await uploadFileToStorage(files[0], `workOrderVideos/new_${uid()}`);
-      setWoForm((f) => ({ ...f, videoUrl: url }));
-    } catch (err) {
-      setVideoError((v) => ({ ...v, new: t("تعذّر رفع الفيديو — تأكد من اتصال الإنترنت وحاول تاني.", "Couldn't upload the video — check your internet connection and try again.") }));
-    }
-    setVideoBusy((v) => ({ ...v, new: false }));
-  };
-  const removeNewWoVideo = () => setWoForm((f) => ({ ...f, videoUrl: "" }));
-
   const activeEquipment = equipment.filter((x) => x.status !== "خارج الخدمة").length;
   const overdueEquipment = equipment.filter(isEquipmentOverdue).length;
   const openOrders = workOrders.filter((x) => x.status !== "مكتمل").length;
@@ -9475,8 +8689,6 @@ function MaintenanceTab({
 
   const priorityTone = (p) => (p === "عالي" ? "brick" : p === "منخفض" ? "green" : "gold");
   const statusTone = (s) => (s === "مكتمل" ? "green" : s === "قيد التنفيذ" ? "gold" : "brick");
-  const costStatusTone = (s) => (s === "مقبول" ? "green" : s === "مرفوض" ? "brick" : "gold");
-  const costStatusLabel = (s) => (s === "مقبول" ? t("السعر مقبول", "Cost Accepted") : s === "مرفوض" ? t("السعر مرفوض", "Cost Rejected") : t("السعر قيد المراجعة", "Cost Pending Review"));
 
   return (
     <div>
@@ -9627,12 +8839,14 @@ function MaintenanceTab({
                   <option value="منخفض">{t("منخفض", "Low")}</option>
                 </select>
               </Field>
-              <Field label={t("الفرع", "Branch")} required>
-                <select style={inputStyle} value={woForm.branchId} onChange={(e) => setWoForm({ ...woForm, branchId: e.target.value })}>
-                  <option value="">{t("اختر الفرع", "Select branch")}</option>
-                  {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
-              </Field>
+              {!defaultBranchId && (
+                <Field label={t("الفرع", "Branch")} required>
+                  <select style={inputStyle} value={woForm.branchId} onChange={(e) => setWoForm({ ...woForm, branchId: e.target.value })}>
+                    <option value="">{t("اختر الفرع", "Select branch")}</option>
+                    {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                  </select>
+                </Field>
+              )}
               <Field label={t("التكلفة (اختياري)", "Cost (optional)")}>
                 <input type="number" min="0" style={inputStyle} value={woForm.cost} onChange={(e) => setWoForm({ ...woForm, cost: e.target.value })} />
               </Field>
@@ -9641,40 +8855,6 @@ function MaintenanceTab({
               <Field label={t("الوصف (اختياري)", "Description (optional)")}>
                 <textarea style={{ ...inputStyle, width: "100%", minHeight: 60, resize: "vertical", fontFamily: "inherit" }} value={woForm.description} onChange={(e) => setWoForm({ ...woForm, description: e.target.value })} />
               </Field>
-            </div>
-            <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${COLORS.line}`, display: "flex", flexWrap: "wrap", gap: 20 }}>
-              <div style={{ minWidth: 200 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("صور (اختياري)", "Photos (optional)")} {woForm.photos && woForm.photos.length > 0 ? `(${woForm.photos.length})` : ""}</div>
-                {(woForm.photos || []).length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
-                    {woForm.photos.map((photo, idx) => (
-                      <div key={idx} style={{ position: "relative" }}>
-                        <img src={photo} alt="" onClick={() => setLightbox(photo)} style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: `1px solid ${COLORS.line}`, cursor: "pointer" }} />
-                        <button onClick={() => removeNewWoPhoto(idx)} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "18px", cursor: "pointer", padding: 0 }}>✕</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {(!woForm.photos || woForm.photos.length < 3) && (
-                  <input type="file" accept="image/*" multiple disabled={!!photoBusy.wo_new} style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
-                    onChange={(e) => { handleNewWoPhotoUpload(e.target.files); e.target.value = ""; }} />
-                )}
-                {photoBusy.wo_new && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
-              </div>
-              <div style={{ minWidth: 200 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("فيديو توضيحي (اختياري)", "Explanatory Video (optional)")}</div>
-                {woForm.videoUrl ? (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-                    <video src={woForm.videoUrl} controls style={{ width: 140, borderRadius: 8, border: `1px solid ${COLORS.line}` }} />
-                    <button onClick={removeNewWoVideo} style={{ width: 20, height: 20, borderRadius: "50%", background: COLORS.brick, color: "#fff", border: "none", fontSize: 11, lineHeight: "20px", cursor: "pointer", padding: 0 }}>✕</button>
-                  </div>
-                ) : (
-                  <input type="file" accept="video/*" disabled={!!videoBusy.new} style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
-                    onChange={(e) => { handleNewWoVideoUpload(e.target.files); e.target.value = ""; }} />
-                )}
-                {videoBusy.new && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الفيديو...", "Uploading video...")}</div>}
-                {videoError.new && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4 }}>{videoError.new}</div>}
-              </div>
             </div>
             <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
               <Btn onClick={submitWorkOrder}>{t("📌 إرسال الطلب", "📌 Submit Request")}</Btn>
@@ -9705,12 +8885,7 @@ function MaintenanceTab({
                   <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{wo.title}</div>
                   <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{wo.equipmentId ? equipmentName(wo.equipmentId) : t("بدون معدة محددة", "No specific equipment")} · {branchName(wo.branchId)}</div>
                   {wo.description && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{wo.description}</div>}
-                  {wo.cost ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-                      <div style={{ fontSize: 11.5, fontFamily: "Consolas, monospace" }}>{t("التكلفة", "Cost")}: {fmt(wo.cost)} ﷼</div>
-                      {wo.costStatus && <Stamp tone={costStatusTone(wo.costStatus)}>{costStatusLabel(wo.costStatus)}</Stamp>}
-                    </div>
-                  ) : null}
+                  {wo.cost ? <div style={{ fontSize: 11.5, marginTop: 6, fontFamily: "Consolas, monospace" }}>{t("التكلفة", "Cost")}: {fmt(wo.cost)} ﷼</div> : null}
                   <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 6 }}>{t("أُنشئ بواسطة", "Created by")}: {wo.createdBy || "—"}</div>
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -9718,12 +8893,6 @@ function MaintenanceTab({
                   <Stamp tone={priorityTone(wo.priority)}>{wo.priority}</Stamp>
                 </div>
               </div>
-              {wo.cost && wo.costStatus === "قيد المراجعة" && (
-                <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }} className="no-print">
-                  <Btn small onClick={() => onUpdateWorkOrderCostStatus(wo.id, "مقبول")}>{t("✔ قبول السعر", "✔ Accept Cost")}</Btn>
-                  <Btn small tone="danger" onClick={() => onUpdateWorkOrderCostStatus(wo.id, "مرفوض")}>{t("✕ رفض السعر", "✕ Reject Cost")}</Btn>
-                </div>
-              )}
               <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }} className="no-print">
                 {wo.status !== "مكتمل" ? (
                   <React.Fragment>
@@ -9735,11 +8904,6 @@ function MaintenanceTab({
                 )}
                 <Btn small tone="danger" onClick={() => onRemoveWorkOrder(wo.id)}>{t("✕ حذف", "✕ Delete")}</Btn>
               </div>
-              {wo.costStatus === "مرفوض" && (
-                <div style={{ marginTop: 8, fontSize: 11, color: COLORS.brick }}>
-                  {t("تم رفض السعر — يقدر مقدّم الطلب يعدّل التكلفة أو ينتظر مراجعة أخرى.", "Cost was rejected — the requester can adjust the cost or wait for another review.")}
-                </div>
-              )}
 
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
                 <div style={{ fontSize: 11, fontWeight: 700, color: COLORS.coffee, marginBottom: 6 }}>{t("صور", "Photos")} {wo.photos && wo.photos.length > 0 ? `(${wo.photos.length})` : ""}</div>
@@ -9838,7 +9002,6 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
   const [fillPhotos, setFillPhotos] = useState([]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [templateFilter, setTemplateFilter] = useState("");
-  const [branchFilter, setBranchFilter] = useState(defaultBranchId || "");
   const [lightbox, setLightbox] = useState(null);
   const [expandedSub, setExpandedSub] = useState({});
   const [issueMsg, setIssueMsg] = useState({});
@@ -9861,22 +9024,10 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
     setFillResults(tpl.items.map((it) => ({ item: it, pass: true })));
     setFillNote("");
     setFillPhotos([]);
-    setNewFillItemText("");
   };
 
   const toggleResult = (idx, pass) => {
     setFillResults((prev) => prev.map((r, i) => (i === idx ? { ...r, pass } : r)));
-  };
-
-  const [newFillItemText, setNewFillItemText] = useState("");
-  const addFillItem = () => {
-    const text = newFillItemText.trim();
-    if (!text) return;
-    setFillResults((prev) => [...prev, { item: text, pass: true }]);
-    setNewFillItemText("");
-  };
-  const removeFillItem = (idx) => {
-    setFillResults((prev) => prev.filter((_, i) => i !== idx));
   };
 
   const submitFill = () => {
@@ -9921,43 +9072,17 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
     setShowTplForm(false);
   };
 
-  /* تقرير كل فرع منفصل عن الآخر: كل الإحصائيات وسجل الفحوصات تُحسب فقط على فحوصات الفرع المختار
-     (أو كل الفروع مجتمعة لو ما فيه فرع محدد) بدل خلط بيانات كل الفروع مع بعض */
-  const branchScopedSubmissions = branchFilter ? submissions.filter((s) => s.branchId === branchFilter) : submissions;
-  const branchScopedTemplates = branchFilter ? templates.filter((tpl) => tpl.branchId === branchFilter) : templates;
-  const visibleSubmissions = branchScopedSubmissions.filter((s) => !templateFilter || s.templateId === templateFilter).slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
-  const recentSubmissions = branchScopedSubmissions.slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1)).slice(0, 20);
+  const visibleSubmissions = submissions.filter((s) => !templateFilter || s.templateId === templateFilter).slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1));
+  const recentSubmissions = submissions.slice().sort((a, b) => (a.submittedAt < b.submittedAt ? 1 : -1)).slice(0, 20);
   const complianceRate = recentSubmissions.length ? Math.round((recentSubmissions.filter((s) => s.overallPass).length / recentSubmissions.length) * 100) : 0;
   const weekAgo = new Date();
   weekAgo.setDate(weekAgo.getDate() - 7);
-  const thisWeekCount = branchScopedSubmissions.filter((s) => new Date(s.submittedAt) >= weekAgo).length;
-  const issuesCount = branchScopedSubmissions.filter((s) => !s.overallPass).length;
+  const thisWeekCount = submissions.filter((s) => new Date(s.submittedAt) >= weekAgo).length;
+  const issuesCount = submissions.filter((s) => !s.overallPass).length;
 
   return (
     <div>
       <Header title={t("الجودة", "Quality")} subtitle={t("قوالب فحوصات الجودة، تعبئتها، ومتابعة نتائجها", "Quality inspection templates, filling them out, and tracking results")} />
-
-      {!defaultBranchId && branches.length > 1 && (
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 14 }} className="no-print">
-          <Field label={t("تقرير الفرع", "Branch Report")}>
-            <select style={inputStyle} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
-              <option value="">{t("كل الفروع (مجتمعة)", "All Branches (combined)")}</option>
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </Field>
-          <Btn small onClick={() => window.print()}>{t("🖶 طباعة تقرير الفرع", "🖶 Print Branch Report")}</Btn>
-        </div>
-      )}
-
-      <div className="print-section">
-        <div style={{ display: "none" }} className="print-only-title">
-          <div className="print-brand">{t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}</div>
-          {t("تقرير الجودة", "Quality Report")} — {branchFilter ? branchName(branchFilter) : t("كل الفروع", "All Branches")}
-        </div>
-        <div style={{ display: "none" }} className="print-only-meta">
-          <span>{t(`تاريخ الطباعة: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Print Date: ${new Date().toLocaleDateString("en-US")}`)}</span>
-          <span>{visibleSubmissions.length} {t("فحص", "checks")}</span>
-        </div>
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
         <ReceiptCard label={t("نسبة الالتزام (آخر 20 فحص)", "Compliance Rate (last 20 checks)")} value={`${complianceRate}%`} tone={complianceRate >= 80 ? COLORS.green : COLORS.brick} />
@@ -9966,7 +9091,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }} className="no-print">
-        <SectionTitle>{t("قوالب الفحص", "Inspection Templates")} ({branchScopedTemplates.length})</SectionTitle>
+        <SectionTitle>{t("قوالب الفحص", "Inspection Templates")} ({templates.length})</SectionTitle>
         <Btn small onClick={() => setShowTplForm((s) => !s)}>{showTplForm ? t("إلغاء", "Cancel") : t("➕ قالب جديد", "➕ New Template")}</Btn>
       </div>
 
@@ -10008,7 +9133,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
         </div>
       )}
 
-      {branchScopedTemplates.length === 0 && !showTplForm && (
+      {templates.length === 0 && !showTplForm && (
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, marginBottom: 16 }} className="no-print">
           <Empty text={t("لا توجد قوالب فحص بعد", "No inspection templates yet")} />
           <div style={{ padding: "0 20px 20px", display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, justifyContent: "center" }}>
@@ -10028,7 +9153,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
         </div>
       )}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 20 }}>
-        {branchScopedTemplates.map((tpl) => (
+        {templates.map((tpl) => (
           <div key={tpl.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, flex: "1 1 240px", minWidth: 220 }}>
             <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{tpl.name}</div>
             <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{tpl.frequency} · {tpl.items.length} {t("بند", "items")} · {branchName(tpl.branchId)}</div>
@@ -10047,23 +9172,12 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
             {fillResults.map((r, idx) => (
               <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "8px 0", borderBottom: `1px dashed ${COLORS.line}` }}>
                 <div style={{ fontSize: 12.5, flex: 1 }}>{r.item}</div>
-                <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <div style={{ display: "flex", gap: 4 }}>
                   <button type="button" onClick={() => toggleResult(idx, true)} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: r.pass ? COLORS.greenBg : "#f2f2f2", color: r.pass ? COLORS.green : "#999" }}>{t("مطابق", "Pass")}</button>
                   <button type="button" onClick={() => toggleResult(idx, false)} style={{ border: "none", borderRadius: 7, padding: "5px 10px", fontSize: 11.5, fontWeight: 700, cursor: "pointer", background: !r.pass ? COLORS.brickBg : "#f2f2f2", color: !r.pass ? COLORS.brick : "#999" }}>{t("غير مطابق", "Fail")}</button>
-                  <button type="button" onClick={() => removeFillItem(idx)} title={t("حذف البند", "Remove item")} style={{ border: "none", background: "transparent", color: "#c9a98f", fontSize: 13, cursor: "pointer", padding: "4px 2px" }}>✕</button>
                 </div>
               </div>
             ))}
-            <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-              <input
-                style={{ ...inputStyle, flex: 1 }}
-                value={newFillItemText}
-                onChange={(e) => setNewFillItemText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addFillItem(); } }}
-                placeholder={t("بند إضافي لهذا الفحص فقط...", "Extra item for this check only...")}
-              />
-              <Btn small tone="secondary" onClick={addFillItem}>{t("➕ إضافة بند", "➕ Add Item")}</Btn>
-            </div>
             <div style={{ marginTop: 12 }}>
               <Field label={t("ملاحظات عامة (اختياري)", "General Notes (optional)")}>
                 <textarea style={{ ...inputStyle, width: "100%", minHeight: 50, resize: "vertical", fontFamily: "inherit" }} value={fillNote} onChange={(e) => setFillNote(e.target.value)} />
@@ -10162,11 +9276,338 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
           </div>
         );
       })}
-      </div>
 
       {lightbox && (
         <div onClick={() => setLightbox(null)} style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.75)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, cursor: "zoom-out" }}>
           <img src={lightbox} alt="" style={{ maxWidth: "92vw", maxHeight: "92vh", borderRadius: 8, boxShadow: "0 20px 60px rgba(0,0,0,0.4)" }} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============ الإنذارات والمخالفات ============
+   تسجيل إنذار/مخالفة على موظف (غياب بدون عذر، تأخر متكرر، مخالفة دوام...) — بمجرد التسجيل يصل
+   للموظف تلقائيًا إشعار في صفحته الذاتية عبر نظام الرسائل الموجود، ويُطلب منه "الاطلاع والموافقة"
+   الصريحة (زي التوقيع الورقي، بس رقمي) — بالضبط نفس آلية إشعارات الخصم/السلفة الموجودة في الرواتب.
+   ولو الإنذار مرتبط بخصم مالي، يُسجَّل تلقائيًا قيد خصم في كشف الرواتب مع إشعار منفصل بذلك */
+function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, messages, onAddWarning, onRemoveWarning }) {
+  const { t, lang } = useLang();
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ ...EMPTY_WARNING });
+  const [applyDeduction, setApplyDeduction] = useState(false);
+  const [branchFilter, setBranchFilter] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [printItem, setPrintItem] = useState(null);
+
+  const empName = (id) => employees.find((e) => e.id === id)?.name || t("موظف محذوف", "Deleted employee");
+  const branchNameOf = (id) => branches.find((b) => b.id === id)?.name || "—";
+  const severityTone = (sev) => (sev === "لفت نظر شفهي" || sev === "إنذار كتابي أول" ? "gold" : "brick");
+  const activeEmployees = employees.filter((e) => e.status === "نشط");
+
+  const q = searchQuery.trim().toLowerCase();
+  const filtered = warnings
+    .filter((w) => !branchFilter || w.branchId === branchFilter)
+    .filter((w) => !q || empName(w.employeeId).toLowerCase().includes(q))
+    .slice()
+    .sort((a, b) => ((a.createdAt || a.date || "") < (b.createdAt || b.date || "") ? 1 : -1));
+
+  const submitWarning = () => {
+    if (!form.employeeId || !form.date) return;
+    onAddWarning({ ...form, deductionAmount: applyDeduction ? form.deductionAmount : "" });
+    setForm({ ...EMPTY_WARNING });
+    setApplyDeduction(false);
+    setShowForm(false);
+  };
+
+  /* أكثر الموظفين حصولًا على إنذارات — نظرة إدارية سريعة تساعد على رصد الحالات المتكررة */
+  const topOffenders = Object.values(
+    warnings.reduce((acc, w) => {
+      acc[w.employeeId] = acc[w.employeeId] || { employeeId: w.employeeId, count: 0 };
+      acc[w.employeeId].count += 1;
+      return acc;
+    }, {})
+  )
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+
+  const thisMonth = new Date().toISOString().slice(0, 7);
+  const thisMonthCount = warnings.filter((w) => (w.date || "").startsWith(thisMonth)).length;
+  const finalCount = warnings.filter((w) => w.severity === "إنذار نهائي").length;
+
+  /* حالة موافقة الموظف على الإنذار — نقرأها من الرسالة المرتبطة به (نفس آلية موافقة الخصم/السلفة) */
+  const ackStatusOf = (w) => {
+    const msg = messages.find((m) => m.relatedWarningId === w.id);
+    if (!msg) return null;
+    return (msg.ackBy || []).includes(w.employeeId);
+  };
+
+  return (
+    <div>
+      <Header
+        title={t("الإنذارات والمخالفات", "Warnings & Violations")}
+        subtitle={t(
+          "تسجيل إنذار على موظف (غياب بدون عذر، تأخر متكرر، مخالفة دوام...) — يصله تلقائيًا في صفحته الذاتية ويُطلب منه الاطلاع والموافقة",
+          "Issue a warning to an employee (unauthorized absence, repeated lateness, attendance violation...) — delivered automatically to their self-service page requiring review and acknowledgment"
+        )}
+      />
+
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
+        <ReceiptCard label={t("إجمالي الإنذارات", "Total Warnings")} value={fmt(warnings.length)} tone={COLORS.gold} />
+        <ReceiptCard label={t("هذا الشهر", "This Month")} value={fmt(thisMonthCount)} tone={COLORS.gold} />
+        <ReceiptCard label={t("إنذارات نهائية", "Final Warnings")} value={fmt(finalCount)} tone={finalCount ? COLORS.brick : COLORS.green} />
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }} className="no-print">
+        <SectionTitle>{t("سجل الإنذارات", "Warnings Log")} ({filtered.length})</SectionTitle>
+        <Btn small onClick={() => setShowForm((s) => !s)}>{showForm ? t("إلغاء", "Cancel") : t("⚠ تسجيل إنذار جديد", "⚠ Issue New Warning")}</Btn>
+      </div>
+
+      {showForm && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, margin: "14px 0" }} className="no-print">
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            <Field label={t("الموظف", "Employee")} required>
+              <select style={inputStyle} value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })}>
+                <option value="">{t("اختر الموظف", "Select employee")}</option>
+                {activeEmployees.map((e) => (
+                  <option key={e.id} value={e.id}>{e.name} — {branchNameOf(e.branchId)}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label={t("نوع المخالفة", "Violation Type")}>
+              <select style={inputStyle} value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                {WARNING_CATEGORIES.map((c) => (
+                  <option key={c} value={c}>{trLabel(t, WARNING_CATEGORIES_EN, c)}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label={t("درجة الإنذار", "Warning Severity")}>
+              <select style={inputStyle} value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })}>
+                {WARNING_SEVERITY_LEVELS.map((s) => (
+                  <option key={s} value={s}>{trLabel(t, WARNING_SEVERITY_LEVELS_EN, s)}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label={t("التاريخ", "Date")} required>
+              <input type="date" style={inputStyle} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+            </Field>
+          </div>
+          <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 10 }}>
+            <Field label={t("تفاصيل المخالفة بالعربي (اختياري)", "Violation Details in Arabic (optional)")}>
+              <textarea
+                style={{ ...inputStyle, minHeight: 70, minWidth: 260 }}
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                placeholder={t("مثال: تغيّب يوم الخميس بدون إذن مسبق ولا رد على الاتصال", "e.g. Absent on Thursday without prior permission, unreachable by phone")}
+              />
+            </Field>
+            <Field label={t("تفاصيل المخالفة بالإنجليزي (اختياري)", "Violation Details in English (optional)")}>
+              <textarea
+                style={{ ...inputStyle, minHeight: 70, minWidth: 260 }}
+                dir="ltr"
+                value={form.descriptionEn}
+                onChange={(e) => setForm({ ...form, descriptionEn: e.target.value })}
+                placeholder="e.g. Absent on Thursday without prior permission, unreachable by phone"
+              />
+            </Field>
+          </div>
+          <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>
+            {t(
+              "اكتب اللغتين ليظهر النص بالإنجليزي تلقائيًا عند تبديل واجهة النظام — يكفي كتابة لغة واحدة وستظهر هي نفسها في اللغتين.",
+              "Fill in both to show the matching language automatically when the interface is switched — one language alone is fine and will show in both views."
+            )}
+          </div>
+          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
+              <input type="checkbox" checked={applyDeduction} onChange={(e) => setApplyDeduction(e.target.checked)} />
+              {t("ربط الإنذار بخصم مالي من الراتب (اختياري)", "Link this warning to a salary deduction (optional)")}
+            </label>
+            {applyDeduction && (
+              <Field label={t("مبلغ الخصم (﷼)", "Deduction Amount (SAR)")}>
+                <input type="number" style={{ ...inputStyle, maxWidth: 200 }} value={form.deductionAmount} onChange={(e) => setForm({ ...form, deductionAmount: e.target.value })} />
+              </Field>
+            )}
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <Btn onClick={submitWarning} disabled={!form.employeeId || !form.date}>{t("✔ تسجيل الإنذار وإشعار الموظف", "✔ Issue Warning & Notify Employee")}</Btn>
+          </div>
+        </div>
+      )}
+
+      {topOffenders.length > 0 && (
+        <div style={{ marginBottom: 18 }} className="no-print">
+          <SectionTitle>{t("الأكثر حصولًا على إنذارات", "Most Warned Employees")}</SectionTitle>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+            {topOffenders.map((o) => (
+              <Stamp key={o.employeeId} tone={o.count >= 3 ? "brick" : "gold"}>
+                {empName(o.employeeId)} — {t(`${o.count} إنذار`, `${o.count} warning(s)`)}
+              </Stamp>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 14 }} className="no-print">
+        <Field label={t("الفرع", "Branch")}>
+          <select style={inputStyle} value={branchFilter} onChange={(e) => setBranchFilter(e.target.value)}>
+            <option value="">{t("كل الفروع", "All branches")}</option>
+            {branches.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+        </Field>
+        <Field label={t("بحث باسم الموظف", "Search by employee name")}>
+          <input style={inputStyle} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder={t("اسم الموظف...", "Employee name...")} />
+        </Field>
+      </div>
+
+      {filtered.length === 0 && <Empty text={t("لا توجد إنذارات مسجّلة", "No warnings recorded")} />}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {filtered.map((w) => {
+          const acked = ackStatusOf(w);
+          return (
+            <div key={w.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <div>
+                  <b style={{ fontSize: 13.5 }}>{empName(w.employeeId)}</b>
+                  <span style={{ color: "#a3927a", fontSize: 11.5, marginInlineStart: 8 }}>{branchNameOf(w.branchId)}</span>
+                </div>
+                <Stamp tone={severityTone(w.severity)}>{trLabel(t, WARNING_SEVERITY_LEVELS_EN, w.severity)}</Stamp>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginTop: 10, fontSize: 12 }}>
+                <span>{t("النوع", "Type")}: {trLabel(t, WARNING_CATEGORIES_EN, w.category)}</span>
+                <span>{t("التاريخ", "Date")}: {w.date || "—"}</span>
+                <span>{t("صادر عن", "Issued by")}: {w.issuedBy || "—"}</span>
+                {Number(w.deductionAmount) > 0 && (
+                  <span style={{ color: COLORS.brick }}>{t(`خصم مرتبط: ${fmt(Number(w.deductionAmount))} ﷼`, `Linked deduction: ${fmt(Number(w.deductionAmount))} SAR`)}</span>
+                )}
+              </div>
+              {(w.description || w.descriptionEn) && (
+                <div style={{ fontSize: 12.5, color: COLORS.coffee, marginTop: 8, background: COLORS.paper, borderRadius: 8, padding: 10 }}>{biText(lang, w.description, w.descriptionEn)}</div>
+              )}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, flexWrap: "wrap", gap: 8 }}>
+                <div>
+                  {acked === null ? (
+                    <Stamp tone="gold">{t("لم يُشعَر (لا توجد رسالة مرتبطة)", "Not notified (no linked message)")}</Stamp>
+                  ) : acked ? (
+                    <Stamp tone="green">{t("✔ الموظف اطّلع ووافق", "✔ Employee reviewed & acknowledged")}</Stamp>
+                  ) : (
+                    <Stamp tone="gold">{t("بانتظار موافقة الموظف", "Awaiting employee acknowledgment")}</Stamp>
+                  )}
+                </div>
+                <div style={{ display: "flex", gap: 8 }} className="no-print">
+                  <Btn small onClick={() => setPrintItem(w)}>{t("🖶 طباعة", "🖶 Print")}</Btn>
+                  <Btn
+                    small
+                    tone="danger"
+                    onClick={() => {
+                      if (window.confirm(t("حذف هذا الإنذار؟", "Delete this warning?"))) onRemoveWarning(w.id);
+                    }}
+                  >
+                    {t("حذف", "Delete")}
+                  </Btn>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {printItem && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(36,24,17,0.55)",
+            zIndex: 60,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 12,
+              maxWidth: 640,
+              width: "100%",
+              maxHeight: "92vh",
+              overflow: "auto",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+            }}
+          >
+            <div
+              className="no-print"
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "14px 20px",
+                borderBottom: `1px solid ${COLORS.line}`,
+                position: "sticky",
+                top: 0,
+                background: "#fff",
+                zIndex: 2,
+                borderRadius: "12px 12px 0 0",
+              }}
+            >
+              <div style={{ fontWeight: 700, color: COLORS.espresso }}>{t("خطاب إنذار — معاينة", "Warning Letter — Preview")}</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Btn small onClick={() => window.print()}>{t("🖶 طباعة", "🖶 Print")}</Btn>
+                <Btn small tone="secondary" onClick={() => setPrintItem(null)}>{t("إغلاق ✕", "Close ✕")}</Btn>
+              </div>
+            </div>
+
+            <div className="print-section print-section-modal" style={{ padding: 28 }}>
+              {(() => {
+                const emp = employees.find((e) => e.id === printItem.employeeId);
+                const entName = entityOfBranch && emp ? entities.find((en) => en.id === entityOfBranch(emp.branchId))?.name : null;
+                const brName = emp ? branches.find((b) => b.id === emp.branchId)?.name : null;
+                return (
+                  <>
+                    <div style={{ textAlign: "center", marginBottom: 18, borderBottom: `2px solid ${COLORS.gold}`, paddingBottom: 14 }}>
+                      <div style={{ fontSize: 16, fontWeight: 800, color: COLORS.espresso }}>
+                        {entName || t("مؤسسة ديرة فارس للتجارة", "Deerat Fares Trading Est.")}
+                      </div>
+                      <div style={{ fontSize: 13, color: "#8a7a63", marginTop: 4 }}>{brName || "—"}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: COLORS.gold, marginTop: 10 }}>
+                        {trLabel(t, WARNING_SEVERITY_LEVELS_EN, printItem.severity)}
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 20px", fontSize: 13, marginBottom: 24 }}>
+                      <div><b>{t("اسم الموظف", "Employee Name")}:</b> {emp?.name || empName(printItem.employeeId)}</div>
+                      <div><b>{t("رقم الهوية/الإقامة", "National ID/Iqama No.")}:</b> {emp?.nationalId || "—"}</div>
+                      <div><b>{t("نوع المخالفة", "Violation Type")}:</b> {trLabel(t, WARNING_CATEGORIES_EN, printItem.category)}</div>
+                      <div><b>{t("التاريخ", "Date")}:</b> {printItem.date || "—"}</div>
+                      {Number(printItem.deductionAmount) > 0 && (
+                        <div><b>{t("الخصم المرتبط", "Linked Deduction")}:</b> {fmt(Number(printItem.deductionAmount))} {t("﷼", "SAR")}</div>
+                      )}
+                      <div style={{ gridColumn: "1 / -1" }}><b>{t("تفاصيل المخالفة", "Violation Details")}:</b> {biText(lang, printItem.description, printItem.descriptionEn) || "—"}</div>
+                    </div>
+
+                    <div style={{ fontSize: 12.5, color: COLORS.espresso, lineHeight: 1.8, marginBottom: 40, background: COLORS.paper, borderRadius: 8, padding: 14 }}>
+                      {t(
+                        "أقرّ أنا الموقّع أدناه بعلمي بهذا الإنذار الصادر بحقي للمخالفة الموضّحة أعلاه، وبأن تكرار مثل هذه المخالفة قد يعرّضني لإجراءات نظامية أشد وفق نظام العمل ولائحة الجزاءات المعتمدة.",
+                        "I, the undersigned, acknowledge this warning issued against me for the violation stated above, and understand that repeating such a violation may subject me to stricter disciplinary action per labor law and the approved penalty policy."
+                      )}
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 30, fontSize: 12.5, marginTop: 50 }}>
+                      <div>
+                        <div style={{ borderTop: `1px solid ${COLORS.ink}`, paddingTop: 6 }}>{t("توقيع الموظف", "Employee Signature")}</div>
+                      </div>
+                      <div>
+                        <div style={{ borderTop: `1px solid ${COLORS.ink}`, paddingTop: 6 }}>{t("توقيع المدير", "Manager Signature")}</div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -10693,27 +10134,17 @@ function EmployeeSelfView({
   geoBusy, geoError, branchName, onLogout, setUsers, logActivity, tasks, onUpdateTaskStatus, onAddTaskComment, onAddTaskPhotos, onRemoveTaskPhoto,
   onAddTaskVideos, onRemoveTaskVideo, messages = [], onMarkMessageRead, onAcknowledgeMessage, dirty, saving, syncError, onSave, faceModal, onFaceCancel, onFaceVerified,
   qualityAccess = false, maintenanceAccess = false, branches = [], equipment = [], workOrders = [], qualityTemplates = [], qualitySubmissions = [],
-  maintenanceManagerId = "", qualityManagerId = "",
   onAddEquipment, onUpdateEquipment, onRemoveEquipment, onAddEquipmentPhotos, onRemoveEquipmentPhoto,
-  onAddWorkOrder, onUpdateWorkOrderStatus, onUpdateWorkOrderCostStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
+  onAddWorkOrder, onUpdateWorkOrderStatus, onRemoveWorkOrder, onAddWorkOrderPhotos, onRemoveWorkOrderPhoto, onAddWorkOrderVideo, onRemoveWorkOrderVideo,
   onAddQualityTemplate, onRemoveQualityTemplate, onAddQualitySubmission, onRemoveQualitySubmission,
-  onBackToDashboard,
 }) {
-  const { t } = useLang();
+  const { t, lang } = useLang();
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
   const [taskPhotoBusy, setTaskPhotoBusy] = useState({});
   const [taskVideoBusy, setTaskVideoBusy] = useState({});
   const [taskVideoError, setTaskVideoError] = useState({});
   const [taskLightbox, setTaskLightbox] = useState(null);
-  /* حالة إذن إشعارات الجوال — يطلبها الموظف بنفسه بضغطة زر */
-  const [notifPermission, setNotifPermission] = useState(
-    typeof Notification !== "undefined" ? Notification.permission : "unsupported"
-  );
-  const enableNotifications = async () => {
-    const result = await requestNotifPermission();
-    setNotifPermission(result);
-  };
 
   /* تحميل نماذج التعرف على الوجه مبكرًا في الخلفية من أول ما تفتح شاشة الموظف — بدل ما ننتظر لحظة
      الضغط على "تسجيل حضور/انصراف". كده لما يفتح شاشة التحقق تكون النماذج جاهزة فعليًا (أو شارفت)
@@ -10772,8 +10203,7 @@ function EmployeeSelfView({
         <div style={{ fontSize: 14, color: COLORS.ink }}>
           {t("هذا الحساب غير مرتبط بسجل موظف بعد. تواصل مع الإدارة لربط الحساب.", "This account isn't linked to an employee record yet. Contact management to link the account.")}
         </div>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center" }}>
-          {onBackToDashboard && <Btn tone="secondary" onClick={onBackToDashboard}>{t("🏠 الرجوع للوحة التحكم", "🏠 Back to Dashboard")}</Btn>}
+        <div style={{ display: "flex", gap: 8 }}>
           <Btn tone="secondary" onClick={() => setShowChangePassword(true)}>{t("🔑 تغيير كلمة المرور", "🔑 Change Password")}</Btn>
           <Btn onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
         </div>
@@ -10855,26 +10285,10 @@ function EmployeeSelfView({
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <SaveStatusIcon saving={saving} syncError={syncError} dirty={dirty} onSave={onSave} />
             <LangToggle />
-            {notifPermission !== "unsupported" && notifPermission !== "granted" && (
-              <Btn tone="secondary" onClick={enableNotifications}>
-                {notifPermission === "denied"
-                  ? t("🔕 الإشعارات محظورة (من إعدادات المتصفح)", "🔕 Notifications blocked (browser settings)")
-                  : t("🔔 تفعيل إشعارات الجوال", "🔔 Enable Notifications")}
-              </Btn>
-            )}
-            {onBackToDashboard && <Btn tone="secondary" onClick={onBackToDashboard}>{t("🏠 الرجوع للوحة التحكم", "🏠 Back to Dashboard")}</Btn>}
             <Btn tone="secondary" onClick={() => setShowChangePassword(true)}>{t("🔑 تغيير كلمة المرور", "🔑 Change Password")}</Btn>
             <Btn tone="secondary" onClick={onLogout}>{t("تسجيل الخروج", "Sign Out")}</Btn>
           </div>
         </div>
-        {isIOSDevice() && !isRunningStandalone() && (
-          <div style={{ fontSize: 11.5, color: COLORS.coffee, background: "#FBF3E3", border: `1px solid ${COLORS.line}`, borderRadius: 8, padding: "9px 12px", marginTop: -6, marginBottom: 16, lineHeight: 1.7 }}>
-            {t(
-              "📱 على الآيفون: الإشعارات ما تشتغل إلا لو ضفت الموقع لشاشتك الرئيسية أولًا (زر المشاركة ← \"إضافة إلى الشاشة الرئيسية\") وفتحته من الأيقونة، مش من سفاري مباشرة — ويلزم iOS 16.4 فأحدث.",
-              "📱 On iPhone: notifications only work if you first add this site to your Home Screen (Share button → \"Add to Home Screen\") and open it from that icon, not directly in Safari — requires iOS 16.4+."
-            )}
-          </div>
-        )}
 
         {showChangePassword && (
           <ChangePasswordModal
@@ -11114,9 +10528,9 @@ function EmployeeSelfView({
                 <div key={ts.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 14, marginBottom: 10 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 10 }}>
                     <div>
-                      <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{ts.title}</div>
+                      <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{biText(lang, ts.title, ts.titleEn)}</div>
                       <div style={{ fontSize: 12.5, marginTop: 6, fontFamily: "Consolas, monospace" }}>{ts.from} → {ts.to}</div>
-                      {ts.description && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{ts.description}</div>}
+                      {(ts.description || ts.descriptionEn) && <div style={{ fontSize: 12, color: "#5a4c38", marginTop: 6 }}>{biText(lang, ts.description, ts.descriptionEn)}</div>}
                       <div style={{ fontSize: 10.5, color: "#a3927a", marginTop: 6 }}>{t("أُسندت بواسطة", "Assigned by")}: {ts.assignedBy || "—"}</div>
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end" }}>
@@ -11344,7 +10758,7 @@ function EmployeeSelfView({
                 fontSize: 12.5,
               }}
             >
-              <div>{a.date}{dayNameOfDate(a.date, t) && ` (${dayNameOfDate(a.date, t)})`}</div>
+              <div>{a.date}</div>
               <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                 {(a.checkInTime || a.checkOutTime) && (
                   <span style={{ fontFamily: "Consolas, monospace", color: "#8a7a63" }}>
@@ -11357,42 +10771,45 @@ function EmployeeSelfView({
           ))}
         </div>
 
-        <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
-          <QualityTab
-            equipment={equipment}
-            templates={qualityTemplates}
-            submissions={qualitySubmissions}
-            branches={branches}
-            defaultBranchId={employee.id === qualityManagerId ? "" : employee.branchId}
-            onAddTemplate={onAddQualityTemplate}
-            onRemoveTemplate={onRemoveQualityTemplate}
-            onAddSubmission={onAddQualitySubmission}
-            onRemoveSubmission={onRemoveQualitySubmission}
-            onReportIssue={onAddWorkOrder}
-          />
-        </div>
+        {qualityAccess && (
+          <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
+            <QualityTab
+              equipment={equipment}
+              templates={qualityTemplates}
+              submissions={qualitySubmissions}
+              branches={branches}
+              defaultBranchId={employee.branchId}
+              onAddTemplate={onAddQualityTemplate}
+              onRemoveTemplate={onRemoveQualityTemplate}
+              onAddSubmission={onAddQualitySubmission}
+              onRemoveSubmission={onRemoveQualitySubmission}
+              onReportIssue={onAddWorkOrder}
+            />
+          </div>
+        )}
 
-        <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
-          <MaintenanceTab
-            equipment={equipment}
-            workOrders={workOrders}
-            branches={branches}
-            defaultBranchId={employee.id === maintenanceManagerId ? "" : employee.branchId}
-            onAddEquipment={onAddEquipment}
-            onUpdateEquipment={onUpdateEquipment}
-            onRemoveEquipment={onRemoveEquipment}
-            onAddEquipmentPhotos={onAddEquipmentPhotos}
-            onRemoveEquipmentPhoto={onRemoveEquipmentPhoto}
-            onAddWorkOrder={onAddWorkOrder}
-            onUpdateWorkOrderStatus={onUpdateWorkOrderStatus}
-            onUpdateWorkOrderCostStatus={onUpdateWorkOrderCostStatus}
-            onRemoveWorkOrder={onRemoveWorkOrder}
-            onAddWorkOrderPhotos={onAddWorkOrderPhotos}
-            onRemoveWorkOrderPhoto={onRemoveWorkOrderPhoto}
-            onAddWorkOrderVideo={onAddWorkOrderVideo}
-            onRemoveWorkOrderVideo={onRemoveWorkOrderVideo}
-          />
-        </div>
+        {maintenanceAccess && (
+          <div style={{ marginTop: 26, paddingTop: 20, borderTop: `2px dashed ${COLORS.line}` }}>
+            <MaintenanceTab
+              equipment={equipment}
+              workOrders={workOrders}
+              branches={branches}
+              defaultBranchId={employee.branchId}
+              onAddEquipment={onAddEquipment}
+              onUpdateEquipment={onUpdateEquipment}
+              onRemoveEquipment={onRemoveEquipment}
+              onAddEquipmentPhotos={onAddEquipmentPhotos}
+              onRemoveEquipmentPhoto={onRemoveEquipmentPhoto}
+              onAddWorkOrder={onAddWorkOrder}
+              onUpdateWorkOrderStatus={onUpdateWorkOrderStatus}
+              onRemoveWorkOrder={onRemoveWorkOrder}
+              onAddWorkOrderPhotos={onAddWorkOrderPhotos}
+              onRemoveWorkOrderPhoto={onRemoveWorkOrderPhoto}
+              onAddWorkOrderVideo={onAddWorkOrderVideo}
+              onRemoveWorkOrderVideo={onRemoveWorkOrderVideo}
+            />
+          </div>
+        )}
       </div>
     </div>
   );
@@ -11485,9 +10902,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
      اسم المستخدم = رقم الهوية/الإقامة، كلمة المرور الافتراضية = admin@123،
      ومطلوب من الموظف تغييرها إجباريًا أول ما يدخل بيها (mustChangePassword) */
   const generateAccountsForAllEmployees = () => {
-    /* أي حساب مرتبط بموظف (سواء دوره "موظف" أو دور إداري مرتبط بسجل موظف أيضًا) يُستبعد،
-       عشان ما نولّد حساب "موظف" مكرر لموظف عنده أصلًا حساب إداري مرتبط بسجله */
-    const linkedEmployeeIds = new Set(users.filter((u) => u.employeeId).map((u) => u.employeeId));
+    const linkedEmployeeIds = new Set(users.filter((u) => u.role === "employee" && u.employeeId).map((u) => u.employeeId));
     const existingUsernames = new Set(users.map((u) => u.username));
     const created = [];
     const skippedNoId = [];
@@ -11730,10 +11145,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
               onChange={(e) => {
                 const newRole = e.target.value;
                 const defaultTabs = defaultTabsForRole(newRole);
-                /* ما نصفّر employeeId هنا: لو الحساب مرتبط بسجل موظف، الرابط لازم يفضل موجود حتى
-                   بعد تغيير الدور — عشان يقدر يبقى "موظف ومسؤول" في نفس الوقت (دخول لوحة تحكم
-                   إدارية + شاشة شخصية لتسجيل حضوره وإجازاته) */
-                setForm({ ...form, role: newRole, branchId: "", entityId: "", customTabs: defaultTabs });
+                setForm({ ...form, role: newRole, branchId: "", employeeId: "", entityId: "", customTabs: defaultTabs });
               }}
             >
               <option value="admin">{t("أدمن (كل الصلاحيات)", "Admin (full access)")}</option>
@@ -11783,28 +11195,28 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
               <EmployeeSelect employees={employees} value={form.employeeId} onChange={(id) => setForm({ ...form, employeeId: id })} />
             </Field>
           )}
-          {form.role !== "employee" && (
-            <Field label={t("ربط بسجل موظف (اختياري)", "Link to Employee Record (optional)")}>
-              <EmployeeSelect employees={employees} value={form.employeeId} onChange={(id) => setForm({ ...form, employeeId: id })} />
-            </Field>
-          )}
         </div>
-        {form.role !== "employee" && form.employeeId && (
-          <div style={{ fontSize: 11, color: "#a3927a", marginTop: -6, marginBottom: 10 }}>
-            {t(
-              "هذا الحساب سيقدر يدخل لوحة تحكمه الإدارية الكاملة، وكمان يفتح شاشة \"بياناتي\" لتسجيل حضوره/انصرافه وتقديم طلبات إجازة/سلفة بصفته موظف.",
-              "This account will access its full admin dashboard, and can also open a \"My Profile\" screen to clock in/out and submit leave/advance requests as an employee."
-            )}
-          </div>
-        )}
 
         {form.role === "employee" && (
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px dashed ${COLORS.line}` }}>
-            <div style={{ fontSize: 11, color: "#a3927a" }}>
+            <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 8, color: COLORS.espresso }}>
+              {t("صلاحيات إضافية لهذا الموظف", "Additional access for this employee")}
+            </div>
+            <div style={{ fontSize: 11, color: "#a3927a", marginBottom: 8 }}>
               {t(
-                "كل الموظفين الآن يشوفون قسمَي الجودة والصيانة الخاصين بفرعهم تلقائيًا في صفحتهم الذاتية — وطلباتهم تصل مباشرة لمسؤولَي الجودة والصيانة العامَّين المحدَّدين من تبويب \"الإعدادات\".",
-                "All employees now automatically see their branch's Quality and Maintenance sections on their self-service page — their requests go straight to the general Quality and Maintenance managers set from the \"Settings\" tab."
+                "لموظف يجمع بين وظيفته الأساسية ومسؤولية الجودة أو الصيانة — يحتفظ بصفحته الذاتية (حضور، إجازات، مهام) ويُضاف له قسم الجودة/الصيانة الخاص بفرعه في نفس الصفحة.",
+                "For an employee who combines their regular role with quality or maintenance responsibility — they keep their self-service page (attendance, leave, tasks) and get their branch's Quality/Maintenance section added to the same page."
               )}
+            </div>
+            <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!form.qualityAccess} onChange={(e) => setForm({ ...form, qualityAccess: e.target.checked })} />
+                {t("مسؤول عن الجودة في فرعه", "Responsible for Quality at their branch")}
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer" }}>
+                <input type="checkbox" checked={!!form.maintenanceAccess} onChange={(e) => setForm({ ...form, maintenanceAccess: e.target.checked })} />
+                {t("مسؤول عن الصيانة في فرعه", "Responsible for Maintenance at their branch")}
+              </label>
             </div>
           </div>
         )}
@@ -11907,8 +11319,9 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
                       {u.role === "entity_manager" && ` · ${entities.find((en) => en.id === u.entityId)?.name || "—"}`}
                       {(u.role === "branch_manager" || u.role === "quality" || u.role === "maintenance") && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
                       {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
-                      {u.role !== "employee" && u.employeeId && ` · 🧑‍💼 ${t("مرتبط بسجل موظف:", "Linked to employee:")} ${employees.find((e) => e.id === u.employeeId)?.name || "—"}`}
                       {Array.isArray(u.customTabs) && ` · 🔧 ${t(`صلاحيات مخصصة (${u.customTabs.length} تبويب)`, `Custom access (${u.customTabs.length} tabs)`)}`}
+                      {u.qualityAccess && ` · ◒ ${t("الجودة", "Quality")}`}
+                      {u.maintenanceAccess && ` · 🔧 ${t("الصيانة", "Maintenance")}`}
                     </div>
                   </div>
                   <div style={{ display: "flex", gap: 6 }}>
