@@ -3508,6 +3508,9 @@ function getAttendanceIssueDays(emp, periodAttendanceRecords, employeeApprovedLe
     if (rec) {
       if (rec.status === "غائب" || rec.status === "متأخر") {
         issues.push({ date: dateStr, kind: rec.status === "غائب" ? "absent" : "late", record: rec });
+      } else if (Number(rec.overtimeHours || 0) > 0) {
+        /* يوم فيه عمل إضافي مسجَّل بالفعل — نعرضه أيضًا عشان يقدر الأدمن يصحّح عدد ساعاته لو غلط */
+        issues.push({ date: dateStr, kind: "overtime", record: rec });
       }
       continue;
     }
@@ -6678,6 +6681,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       checkInTime: day.record?.checkInTime || "",
       checkOutTime: day.record?.checkOutTime || "",
       lateMinutes: day.record?.lateMinutes || "",
+      overtimeHours: day.record?.overtimeHours || "",
     });
   };
   const cancelEditIssue = () => {
@@ -6691,6 +6695,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       checkInTime: issueForm.checkInTime,
       checkOutTime: issueForm.checkOutTime,
       lateMinutes: issueForm.status === "متأخر" ? Number(issueForm.lateMinutes || 0) : 0,
+      overtimeHours: Number(issueForm.overtimeHours || 0),
     };
     if (day.record) {
       setAttendance((prev) => prev.map((a) => (a.id === day.record.id ? { ...a, ...updated } : a)));
@@ -7070,7 +7075,14 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("أيام إجازة بدون راتب", "Unpaid Leave Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
-                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.overtimeHours)}</td>
+                  <td
+                    data-label={t("ساعات إضافي", "Overtime Hours")}
+                    onClick={() => toggleIssues(r.id)}
+                    title={t("اضغط لعرض/تصحيح أيام الغياب والتأخير والإضافي لهذا الشهر", "Click to view/fix this month's absence, late, and overtime days")}
+                    style={{ padding: "9px 12px", fontFamily: "inherit", cursor: "pointer", borderBottom: `1px dashed ${COLORS.brick}` }}
+                  >
+                    {fmt(r.overtimeHours)}{r.attendanceIssues.some((d) => d.kind === "overtime") && <span className="no-print" title={t("توجد أيام قابلة للتصحيح", "There are correctable days")}> ✎</span>}
+                  </td>
                   <td data-label={t("قيمة الإضافي", "Overtime Pay")} style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.overtimePay)}</td>
                   <td data-label={t("السلف", "Advances")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
                   <td data-label={t("خصومات أخرى", "Other Deductions")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
@@ -7405,7 +7417,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
             >
               <div style={{ fontWeight: 800, color: COLORS.espresso, fontSize: 15 }}>
                 {issuesRow.name}
-                <div style={{ fontSize: 11.5, color: "#a3927a", fontWeight: 400 }}>{t(`أيام الغياب والتأخير — ${month}`, `Absence & late days — ${month}`)}</div>
+                <div style={{ fontSize: 11.5, color: "#a3927a", fontWeight: 400 }}>{t(`أيام الغياب والتأخير والإضافي — ${month}`, `Absence, late & overtime days — ${month}`)}</div>
               </div>
               <Btn small tone="secondary" onClick={() => toggleIssues(issuesRow.id)}>{t("إغلاق ✕", "Close ✕")}</Btn>
             </div>
@@ -7413,12 +7425,12 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
             <div style={{ padding: 20 }}>
               <div style={{ fontSize: 12, color: "#a3927a", marginBottom: 12 }}>
                 {t(
-                  'اضغط "تصحيح" على أي يوم لتثبيت وقت دوامه الفعلي لو ما قدر يسجّل دخوله عن طريق النظام',
-                  'Click "Fix" on any day to record the actual time they worked, if they couldn\'t check in through the system'
+                  'اضغط "تصحيح" على أي يوم لتثبيت وقت دوامه الفعلي أو تعديل عدد ساعات الإضافي يدويًا، لو ما قدر يسجّل دخوله عن طريق النظام أو كان الرقم المسجَّل غير دقيق',
+                  'Click "Fix" on any day to record the actual time they worked or manually adjust overtime hours, if they couldn\'t check in through the system or the recorded number wasn\'t accurate'
                 )}
               </div>
               {issuesRow.attendanceIssues.length === 0 && (
-                <div style={{ fontSize: 12.5, color: "#a3927a" }}>{t("لا توجد أيام غياب أو تأخير هذا الشهر — كل شيء موثّق.", "No absence or late days this month — everything is documented.")}</div>
+                <div style={{ fontSize: 12.5, color: "#a3927a" }}>{t("لا توجد أيام غياب أو تأخير أو إضافي هذا الشهر — كل شيء موثّق.", "No absence, late, or overtime days this month — everything is documented.")}</div>
               )}
               {issuesRow.attendanceIssues.map((day) => (
                 <div key={day.date} style={{ borderTop: `1px dashed ${COLORS.line}`, padding: "10px 0" }}>
@@ -7427,11 +7439,13 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                       <b>{day.date}</b>
                       {dayNameOfDate(day.date, t) && <span style={{ color: "#8a7a63" }}> ({dayNameOfDate(day.date, t)})</span>}
                       {" — "}
-                      <Stamp tone={day.kind === "late" ? "gold" : "brick"}>
+                      <Stamp tone={day.kind === "late" ? "gold" : day.kind === "overtime" ? "green" : "brick"}>
                         {day.kind === "missing"
                           ? t("غياب تلقائي (بدون تسجيل دخول)", "Automatic absence (no check-in)")
                           : day.kind === "absent"
                           ? t("غياب مسجّل يدويًا", "Manually recorded absence")
+                          : day.kind === "overtime"
+                          ? t(`عمل إضافي مسجّل (${day.record?.overtimeHours || 0} س)`, `Recorded overtime (${day.record?.overtimeHours || 0}h)`)
                           : t(`تأخير (${day.record?.lateMinutes || 0} د)`, `Late (${day.record?.lateMinutes || 0} min)`)}
                       </Stamp>
                       {(day.record?.checkInTime || day.record?.checkOutTime) && (
@@ -7463,6 +7477,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                           <input type="number" style={inputStyle} value={issueForm.lateMinutes} onChange={(e) => setIssueForm({ ...issueForm, lateMinutes: e.target.value })} />
                         </Field>
                       )}
+                      <Field label={t("ساعات العمل الإضافي", "Overtime hours")}>
+                        <input type="number" step="0.5" style={{ ...inputStyle, width: 110 }} value={issueForm.overtimeHours} onChange={(e) => setIssueForm({ ...issueForm, overtimeHours: e.target.value })} />
+                      </Field>
                       <Btn small onClick={() => saveEditIssue(issuesRow, day)}>{t("✔ حفظ", "✔ Save")}</Btn>
                       <Btn small tone="secondary" onClick={cancelEditIssue}>{t("إلغاء", "Cancel")}</Btn>
                     </div>
