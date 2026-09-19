@@ -1410,6 +1410,16 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [globalSearchFocused, setGlobalSearchFocused] = useState(false);
   const [jumpToEmployeeId, setJumpToEmployeeId] = useState(null);
   const lastSyncedRef = useRef("");
+  /* نسخة آخر قيمة معروفة من الخادم لكل قسم بيانات على حدة (حضور، مهام، رسائل...) — تُستخدم لدمج
+     التحديثات الواردة بذكاء بدل تجاهلها بالكامل لمجرد وجود تعديل غير محفوظ في قسم مختلف تمامًا */
+  const lastSyncedFieldsRef = useRef({});
+  /* بعد أي حفظ ناجح (تلقائي أو يدوي) بيبقى المحلي = الخادم لكل الأقسام دفعة واحدة — نحدّث القيمة
+     المرجعية لكل قسم عشان الدمج الذكي في onSnapshot يعرف إن كل حاجة بقت متزامنة */
+  const refreshFieldBaselines = (payload) => {
+    Object.keys(payload).forEach((k) => {
+      lastSyncedFieldsRef.current[k] = JSON.stringify(payload[k]);
+    });
+  };
   const dirtyRef = useRef(false);
   useEffect(() => {
     dirtyRef.current = dirty;
@@ -1429,16 +1439,53 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   /* الاستماع لحظيًا لبيانات النظام من Firestore — أي تعديل من أي جهاز يوصل هنا فورًا */
   useEffect(() => {
+    /* كل قسم بيانات وطريقة تحديثه والقيمة الافتراضية له — تُستخدم لدمج التحديثات الواردة قسمًا
+       بقسم بدل معاملة المستند كوحدة واحدة */
+    const FIELD_DEFS = [
+      ["entities", setEntities, ENTITIES_SEED],
+      ["branches", setBranches, BRANCHES_SEED],
+      ["employees", setEmployees, []],
+      ["leaves", setLeaves, []],
+      ["leaveRequests", setLeaveRequests, []],
+      ["advanceRequests", setAdvanceRequests, []],
+      ["attendance", setAttendance, []],
+      ["gosiRates", setGosiRates, { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 }],
+      ["vehicles", setVehicles, []],
+      ["payrollItems", setPayrollItems, []],
+      ["tasks", setTasks, []],
+      ["messages", setMessages, []],
+      ["equipment", setEquipment, []],
+      ["workOrders", setWorkOrders, []],
+      ["qualityTemplates", setQualityTemplates, []],
+      ["qualitySubmissions", setQualitySubmissions, []],
+      ["warnings", setWarnings, []],
+    ];
     const unsub = DATA_DOC.onSnapshot(
       (snap) => {
         /* نتجاهل النسخة المحلية غير المؤكدة من الخادم بعد (كتابتنا إحنا) لتفادي قطع الكتابة أثناء الكتابة */
         if (snap.metadata.hasPendingWrites) return;
-        /* لو فيه تعديلات محلية لسه ما اتحفظتش، نتجاهل التحديث الوارد من جهاز تاني مؤقتًا
-           عشان ما نمسحش تعديلات المستخدم قبل ما يحفظها بنفسه */
-        if (dirtyRef.current) return;
         const d = snap.data();
         if (d) {
-          const next = {
+          /* دمج ذكي قسمًا بقسم: لو المستخدم عدّل قسمًا معينًا محليًا (موظفين مثلاً) ولسه ما حفظش،
+             نسيب نسخته المحلية لهذا القسم فقط زي ما هي لحد ما يحفظ — لكن باقي الأقسام (زي حضور/انصراف
+             موظف تاني بيسجّل لحظيًا) تتحدّث فورًا كالمعتاد، بدل ما يتجمّد النظام بالكامل بسبب تعديل
+             بسيط ناقص حفظ في قسم مختلف تمامًا (وهو اللي كان بيسبب اختفاء تسجيلات الحضور/الانصراف
+             الجديدة من شاشة الأدمن رغم وصولها فعليًا لقاعدة البيانات) */
+          FIELD_DEFS.forEach(([key, setter, fallback]) => {
+            const incoming = d[key] !== undefined ? d[key] : fallback;
+            const incomingJson = JSON.stringify(incoming);
+            setter((prevLocal) => {
+              const baselineJson = lastSyncedFieldsRef.current[key];
+              if (baselineJson === undefined || JSON.stringify(prevLocal) === baselineJson) {
+                lastSyncedFieldsRef.current[key] = incomingJson;
+                return incoming;
+              }
+              /* فيه تعديل محلي غير محفوظ في هذا القسم تحديدًا — نسيبه زي ما هو، هيتزامن تلقائيًا
+                 لما المستخدم يحفظ (عندها هتتحدّث القيمة المرجعية لكل الأقسام دفعة واحدة) */
+              return prevLocal;
+            });
+          });
+          lastSyncedRef.current = JSON.stringify({
             entities: d.entities || ENTITIES_SEED,
             branches: d.branches || BRANCHES_SEED,
             employees: d.employees || [],
@@ -1456,25 +1503,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             qualityTemplates: d.qualityTemplates || [],
             qualitySubmissions: d.qualitySubmissions || [],
             warnings: d.warnings || [],
-          };
-          setEntities(next.entities);
-          setBranches(next.branches);
-          setEmployees(next.employees);
-          setLeaves(next.leaves);
-          setLeaveRequests(next.leaveRequests);
-          setAdvanceRequests(next.advanceRequests);
-          setAttendance(next.attendance);
-          setVehicles(next.vehicles);
-          setGosiRates(next.gosiRates);
-          setPayrollItems(next.payrollItems);
-          setTasks(next.tasks);
-          setMessages(next.messages);
-          setEquipment(next.equipment);
-          setWorkOrders(next.workOrders);
-          setQualityTemplates(next.qualityTemplates);
-          setQualitySubmissions(next.qualitySubmissions);
-          setWarnings(next.warnings);
-          lastSyncedRef.current = JSON.stringify(next);
+          });
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
           DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [], warnings: [] }).catch(() => {});
@@ -1524,6 +1553,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
         .then(() => {
           lastSyncedRef.current = json;
+          refreshFieldBaselines(payload);
           setDirty(false);
           setSaving(false);
           setSyncError("");
@@ -1634,6 +1664,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     };
     DATA_DOC.set(payload).then(() => {
       lastSyncedRef.current = JSON.stringify(payload);
+      refreshFieldBaselines(payload);
     });
     if (Array.isArray(bUsers) && bUsers.length) {
       setUsers(bUsers);
@@ -1685,6 +1716,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
       .then(() => {
         lastSyncedRef.current = json;
+        refreshFieldBaselines(payload);
         setDirty(false);
         setSaving(false);
         setSaveMsg("تم الحفظ ✓");
@@ -6221,8 +6253,8 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
         >
           <span>
             {t(
-              "⚠ لديك تعديلات غير محفوظة — طالما لم تُحفظ، لن تظهر لك تسجيلات حضور/انصراف جديدة من الموظفين تلقائيًا (لتفادي فقدان تعديلك). احفظ الآن لتظهر أحدث البيانات.",
-              "⚠ You have unsaved changes — until you save, new employee check-ins/check-outs won't appear automatically (to avoid losing your edit). Save now to see the latest data."
+              "⚠ لديك تعديل غير محفوظ في سجل الحضور — تسجيلات حضور/انصراف الموظفين الآخرين تظهر تلقائيًا كالعادة، لكن السجل اللي عدّلته بنفسك لن يتحدّث بتغييرات جديدة عليه من الموظف حتى تحفظ. احفظ الآن لتفادي أي تعارض.",
+              "⚠ You have an unsaved edit in the attendance log — other employees' check-ins/check-outs still appear automatically as usual, but the record you edited won't pick up further changes from the employee until you save. Save now to avoid any conflict."
             )}
           </span>
           {onSaveNow && (
