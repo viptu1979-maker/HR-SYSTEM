@@ -6638,69 +6638,49 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
      المعروض حاليًا — بالضغط مباشرة على الخانة في الجدول. التعديل خاص بهذا الشهر فقط ولا يغيّر
      سجلات الحضور نفسها؛ الخصم/القيمة المالية المقابلة تُحتسب تلقائيًا من نفس معادلة النظام لكن
      بناءً على الرقم المُعدَّل بدل الرقم المحسوب من سجل الحضور */
-  const [editingCell, setEditingCell] = useState(null); // { employeeId, field }
-  const [editingValue, setEditingValue] = useState("");
-  const [editingNote, setEditingNote] = useState("");
-  const ADJUSTMENT_FIELD_KEYS = {
-    absentDays: "absentDaysOverride",
-    lateMinutes: "lateMinutesOverride",
-    overtimeHours: "overtimeHoursOverride",
+  const [editingAdjId, setEditingAdjId] = useState(null);
+  const [adjForm, setAdjForm] = useState(null);
+  const startEditAdjustment = (r) => {
+    const adj = payrollAdjustments.find((a) => a.employeeId === r.id && a.month === month);
+    setEditingAdjId(r.id);
+    setAdjForm({
+      absentDays: adj && adj.absentDaysOverride != null ? String(adj.absentDaysOverride) : "",
+      lateMinutes: adj && adj.lateMinutesOverride != null ? String(adj.lateMinutesOverride) : "",
+      overtimeHours: adj && adj.overtimeHoursOverride != null ? String(adj.overtimeHoursOverride) : "",
+      note: (adj && adj.note) || "",
+    });
   };
-  const getAdjustment = (employeeId) => payrollAdjustments.find((a) => a.employeeId === employeeId && a.month === month);
-  const startEditCell = (employeeId, field) => {
-    const adj = getAdjustment(employeeId);
-    const overrideKey = ADJUSTMENT_FIELD_KEYS[field];
-    setEditingCell({ employeeId, field });
-    setEditingValue(adj && adj[overrideKey] != null ? String(adj[overrideKey]) : "");
-    setEditingNote((adj && adj.note) || "");
+  const cancelEditAdjustment = () => {
+    setEditingAdjId(null);
+    setAdjForm(null);
   };
-  const cancelEditCell = () => {
-    setEditingCell(null);
-    setEditingValue("");
-    setEditingNote("");
-  };
-  const saveEditCell = () => {
-    if (!editingCell) return;
-    const { employeeId, field } = editingCell;
-    const overrideKey = ADJUSTMENT_FIELD_KEYS[field];
-    const hasValue = editingValue !== "" && !isNaN(Number(editingValue));
+  const saveEditAdjustment = (employeeId) => {
+    if (!adjForm) return;
+    const toOverride = (v) => (v === "" || isNaN(Number(v)) ? null : Number(v));
+    const absentDaysOverride = toOverride(adjForm.absentDays);
+    const lateMinutesOverride = toOverride(adjForm.lateMinutes);
+    const overtimeHoursOverride = toOverride(adjForm.overtimeHours);
+    const hasAnyOverride = absentDaysOverride != null || lateMinutesOverride != null || overtimeHoursOverride != null;
     setPayrollAdjustments((prev) => {
       const existing = prev.find((a) => a.employeeId === employeeId && a.month === month);
-      if (!hasValue) {
-        /* مسح القيمة يرجّع الاحتساب للوضع التلقائي لهذا الحقل تحديدًا */
-        if (!existing) return prev;
-        const { [overrideKey]: _drop, ...rest } = existing;
-        const stillHasOverrides = ["absentDaysOverride", "lateMinutesOverride", "overtimeHoursOverride"].some(
-          (k) => rest[k] != null
-        );
-        if (!stillHasOverrides) return prev.filter((a) => a.id !== existing.id);
-        return prev.map((a) => (a.id === existing.id ? { ...rest, note: editingNote.trim() } : a));
+      /* مسح كل الحقول (تفريغها) بيرجّع الموظف بالكامل للاحتساب التلقائي هذا الشهر */
+      if (!hasAnyOverride) {
+        return existing ? prev.filter((a) => a.id !== existing.id) : prev;
       }
-      const value = Number(editingValue);
-      if (existing) {
-        return prev.map((a) =>
-          a.id === existing.id ? { ...a, [overrideKey]: value, note: editingNote.trim(), updatedAt: new Date().toISOString() } : a
-        );
-      }
-      return [
-        ...prev,
-        {
-          id: uid(),
-          employeeId,
-          month,
-          [overrideKey]: value,
-          note: editingNote.trim(),
-          updatedAt: new Date().toISOString(),
-        },
-      ];
+      const record = {
+        id: existing ? existing.id : uid(),
+        employeeId,
+        month,
+        absentDaysOverride,
+        lateMinutesOverride,
+        overtimeHoursOverride,
+        note: adjForm.note.trim(),
+        updatedAt: new Date().toISOString(),
+      };
+      return existing ? prev.map((a) => (a.id === existing.id ? record : a)) : [...prev, record];
     });
-    logActivity &&
-      logActivity(
-        "تعديل يدوي في جدول الرواتب",
-        "payroll",
-        `${empName(employeeId)} — ${field === "absentDays" ? "أيام الغياب" : field === "lateMinutes" ? "دقائق التأخير" : "ساعات الإضافي"} (${month}): ${hasValue ? editingValue : "مسح التعديل"}`
-      );
-    cancelEditCell();
+    logActivity && logActivity("تعديل يدوي في جدول الرواتب", "payroll", `${empName(employeeId)} — ${month}`);
+    cancelEditAdjustment();
   };
 
   const addItem = () => {
@@ -6844,6 +6824,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         lateMinutesIsAdjusted,
         overtimeHoursIsAdjusted,
         adjustmentNote: adjustment?.note || "",
+        autoAbsentDays: computedAbsentDays,
+        autoLateMinutes: computedTotalDeductibleMinutes,
+        autoOvertimeHours: computedOvertimeHours,
       };
     });
 
@@ -6863,61 +6846,17 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
     { salary: 0, empShare: 0, employerShare: 0, attendanceDeduction: 0, overtimePay: 0, advances: 0, extraDeductions: 0, incentives: 0, net: 0, totalCost: 0 }
   );
 
-  /* خانة قابلة للتعديل بالضغط عليها مباشرة داخل الجدول — تعرض القيمة (تلقائية أو مُعدَّلة يدويًا)،
-     وبالضغط عليها تتحول لحقل إدخال + سبب اختياري + أزرار حفظ/إلغاء. مسح الرقم والحفظ يرجّع القيمة
-     للاحتساب التلقائي من سجل الحضور */
-  const renderEditableCell = (r, field, autoValue, isAdjusted) => {
-    const isEditingThis = editingCell && editingCell.employeeId === r.id && editingCell.field === field;
-    if (isEditingThis) {
-      return (
-        <div className="no-print" style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 140 }}>
-          <input
-            type="number"
-            step={field === "overtimeHours" ? "0.5" : "1"}
-            autoFocus
-            style={{ ...inputStyle, padding: "4px 6px", fontSize: 12.5 }}
-            value={editingValue}
-            onChange={(e) => setEditingValue(e.target.value)}
-            placeholder={t("رقم (فارغ = تلقائي)", "Number (blank = auto)")}
-          />
-          <input
-            type="text"
-            style={{ ...inputStyle, padding: "4px 6px", fontSize: 11.5 }}
-            value={editingNote}
-            onChange={(e) => setEditingNote(e.target.value)}
-            placeholder={t("سبب التعديل (اختياري)", "Reason (optional)")}
-          />
-          <div style={{ display: "flex", gap: 4 }}>
-            <Btn small onClick={saveEditCell}>{t("✓ حفظ", "✓ Save")}</Btn>
-            <Btn small tone="secondary" onClick={cancelEditCell}>{t("✕ إلغاء", "✕ Cancel")}</Btn>
-          </div>
-        </div>
-      );
-    }
-    return (
-      <span
-        onClick={() => startEditCell(r.id, field)}
-        title={
-          isAdjusted
-            ? t("قيمة مُعدَّلة يدويًا لهذا الشهر — اضغط للتعديل", "Manually adjusted for this month — click to edit")
-            : t("اضغط للتعديل اليدوي", "Click to edit manually")
-        }
-        style={{
-          cursor: "pointer",
-          borderBottom: `1px dashed ${isAdjusted ? COLORS.brick : COLORS.line}`,
-          color: isAdjusted ? COLORS.brick : "inherit",
-          fontWeight: isAdjusted ? 700 : "inherit",
-        }}
-      >
-        {fmt(autoValue)}
-        {isAdjusted && <span className="no-print"> ✎</span>}
-      </span>
-    );
-  };
+  /* عرض قيمة (تلقائية أو مُعدَّلة يدويًا) بدون أي تفاعل مباشر بها — التعديل الفعلي يتم من لوحة
+     التعديل اللي تظهر أسفل صف الموظف (زر "✏️ تعديل")، بنفس أسلوب تبويب الحضور والانصراف */
+  const adjustedValueStyle = (isAdjusted) => ({
+    borderBottom: `1px dashed ${isAdjusted ? COLORS.brick : "transparent"}`,
+    color: isAdjusted ? COLORS.brick : "inherit",
+    fontWeight: isAdjusted ? 700 : "inherit",
+  });
 
   return (
     <div>
-      <Header title={t("الرواتب واشتراكات التأمينات (GOSI)", "Payroll & GOSI Contributions")} subtitle={t("النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب. يمكنك أيضًا الضغط مباشرة على خانات \"أيام غياب\" أو \"دقائق تأخير\" أو \"ساعات إضافي\" في الجدول لتعديلها يدويًا لهذا الشهر فقط.", "Rates are defaults and editable from the Settings tab — verify the official rate at calculation time. You can also click directly on the \"Absent Days\", \"Late Minutes\" or \"Overtime Hours\" cells in the table to adjust them manually for this month only.")} />
+      <Header title={t("الرواتب واشتراكات التأمينات (GOSI)", "Payroll & GOSI Contributions")} subtitle={t("النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب. يمكنك أيضًا الضغط على \"✏️ تعديل\" بجانب أي موظف لتعديل أيام الغياب أو دقائق التأخير أو ساعات الإضافي يدويًا لهذا الشهر فقط.", "Rates are defaults and editable from the Settings tab — verify the official rate at calculation time. You can also click \"✏️ Edit\" next to any employee to manually adjust Absent Days, Late Minutes, or Overtime Hours for this month only.")} />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
         <Field label={t("شهر احتساب الغياب والتأخير", "Attendance Calculation Month")}>
@@ -7089,7 +7028,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
+                <React.Fragment key={r.id}>
+                <tr style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
                   <td
                     data-label={t("الاسم", "Name")}
                     style={{
@@ -7109,14 +7049,23 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td data-label={t("الراتب الأساسي", "Basic Salary")} style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
                   <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} className="no-print" style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
-                  <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{renderEditableCell(r, "absentDays", r.absentDays, r.absentDaysIsAdjusted)}</td>
+                  <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
+                    <span style={adjustedValueStyle(r.absentDaysIsAdjusted)}>{fmt(r.absentDays)}</span>
+                    {r.absentDaysIsAdjusted && <span className="no-print" title={t("مُعدَّل يدويًا", "Manually adjusted")}> ✎</span>}
+                  </td>
                   <td data-label={t("خصم الغياب", "Absence Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
-                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{renderEditableCell(r, "lateMinutes", r.lateMinutesTotal, r.lateMinutesIsAdjusted)}</td>
+                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
+                    <span style={adjustedValueStyle(r.lateMinutesIsAdjusted)}>{fmt(r.lateMinutesTotal)}</span>
+                    {r.lateMinutesIsAdjusted && <span className="no-print" title={t("مُعدَّل يدويًا", "Manually adjusted")}> ✎</span>}
+                  </td>
                   <td data-label={t("خصم التأخير", "Lateness Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
                   <td data-label={t("أيام إجازة بدون راتب", "Unpaid Leave Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
-                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{renderEditableCell(r, "overtimeHours", r.overtimeHours, r.overtimeHoursIsAdjusted)}</td>
+                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
+                    <span style={adjustedValueStyle(r.overtimeHoursIsAdjusted)}>{fmt(r.overtimeHours)}</span>
+                    {r.overtimeHoursIsAdjusted && <span className="no-print" title={t("مُعدَّل يدويًا", "Manually adjusted")}> ✎</span>}
+                  </td>
                   <td data-label={t("قيمة الإضافي", "Overtime Pay")} style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.overtimePay)}</td>
                   <td data-label={t("السلف", "Advances")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
                   <td data-label={t("خصومات أخرى", "Other Deductions")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
@@ -7124,10 +7073,70 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("حصة صاحب العمل", "Employer Share")} className="no-print" style={{ padding: "9px 12px" }}>{fmt(r.employerShare)}</td>
                   <td data-label={t("الصافي للموظف", "Net for Employee")} style={{ padding: "9px 12px", color: COLORS.green, fontWeight: 700 }}>{fmt(r.net)}</td>
                   <td data-label={t("تكلفة الشركة", "Company Cost")} style={{ padding: "9px 12px", fontWeight: 700 }}>{fmt(r.totalCost)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }} className="no-print">
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit", display: "flex", gap: 6, flexWrap: "wrap" }} className="no-print">
                     <Btn small onClick={() => setPayslip({ ...r, __month: month })}>{t("🖶 قسيمة الراتب", "🖶 Payslip")}</Btn>
+                    <Btn small tone="secondary" onClick={() => (editingAdjId === r.id ? cancelEditAdjustment() : startEditAdjustment(r))}>
+                      {editingAdjId === r.id ? t("إلغاء", "Cancel") : t("✏️ تعديل", "✏️ Edit")}
+                    </Btn>
                   </td>
                 </tr>
+                {editingAdjId === r.id && adjForm && (
+                  <tr className="no-print">
+                    <td colSpan={21} style={{ padding: 0 }}>
+                      <div style={{ padding: "12px 14px", background: COLORS.paper, borderTop: `1px dashed ${COLORS.line}`, borderBottom: `1px dashed ${COLORS.line}` }}>
+                        <div style={{ fontSize: 12, color: "#a3927a", marginBottom: 8 }}>
+                          {t(
+                            `تعديل يدوي لشهر ${month} فقط — اترك الحقل فارغًا لاستخدام القيمة المحسوبة تلقائيًا من سجل الحضور`,
+                            `Manual adjustment for ${month} only — leave a field blank to use the value auto-calculated from attendance`
+                          )}
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+                          <Field label={t("أيام غياب", "Absent Days")}>
+                            <input
+                              type="number"
+                              style={{ ...inputStyle, width: 130 }}
+                              value={adjForm.absentDays}
+                              onChange={(e) => setAdjForm({ ...adjForm, absentDays: e.target.value })}
+                              placeholder={t(`تلقائي: ${fmt(r.autoAbsentDays)}`, `Auto: ${fmt(r.autoAbsentDays)}`)}
+                            />
+                          </Field>
+                          <Field label={t("دقائق تأخير", "Late Minutes")}>
+                            <input
+                              type="number"
+                              style={{ ...inputStyle, width: 130 }}
+                              value={adjForm.lateMinutes}
+                              onChange={(e) => setAdjForm({ ...adjForm, lateMinutes: e.target.value })}
+                              placeholder={t(`تلقائي: ${fmt(r.autoLateMinutes)}`, `Auto: ${fmt(r.autoLateMinutes)}`)}
+                            />
+                          </Field>
+                          <Field label={t("ساعات إضافي", "Overtime Hours")}>
+                            <input
+                              type="number"
+                              step="0.5"
+                              style={{ ...inputStyle, width: 130 }}
+                              value={adjForm.overtimeHours}
+                              onChange={(e) => setAdjForm({ ...adjForm, overtimeHours: e.target.value })}
+                              placeholder={t(`تلقائي: ${fmt(r.autoOvertimeHours)}`, `Auto: ${fmt(r.autoOvertimeHours)}`)}
+                            />
+                          </Field>
+                          <Field label={t("سبب التعديل (اختياري)", "Reason (optional)")}>
+                            <input
+                              type="text"
+                              style={{ ...inputStyle, minWidth: 220 }}
+                              value={adjForm.note}
+                              onChange={(e) => setAdjForm({ ...adjForm, note: e.target.value })}
+                            />
+                          </Field>
+                        </div>
+                        <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                          <Btn small onClick={() => saveEditAdjustment(r.id)}>{t("✔ حفظ التعديل", "✔ Save Changes")}</Btn>
+                          <Btn small tone="secondary" onClick={cancelEditAdjustment}>{t("إلغاء", "Cancel")}</Btn>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
