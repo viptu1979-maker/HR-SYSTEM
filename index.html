@@ -6835,6 +6835,10 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       };
     });
 
+  /* الصف اللي فاتح له نافذة تصحيح الغياب/التأخير حاليًا — نشتقّه من rows بدل حفظ نسخة قديمة منه،
+     عشان القائمة تتحدّث فورًا بعد أي تصحيح بدون ما نحتاج نغلق ونفتح النافذة من جديد */
+  const issuesRow = rows.find((row) => row.id === openIssuesId) || null;
+
   const totals = rows.reduce(
     (acc, r) => ({
       salary: acc.salary + r.salary,
@@ -7025,8 +7029,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
             </thead>
             <tbody>
               {rows.map((r) => (
-                <React.Fragment key={r.id}>
-                <tr style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
+                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
                   <td
                     data-label={t("الاسم", "Name")}
                     style={{
@@ -7079,73 +7082,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                     <Btn small onClick={() => setPayslip({ ...r, __month: month })}>{t("🖶 قسيمة الراتب", "🖶 Payslip")}</Btn>
                   </td>
                 </tr>
-                {openIssuesId === r.id && (
-                  <tr className="no-print">
-                    <td colSpan={21} style={{ padding: 0 }}>
-                      <div style={{ padding: "12px 14px", background: COLORS.paper, borderTop: `1px dashed ${COLORS.line}`, borderBottom: `1px dashed ${COLORS.line}` }}>
-                        <div style={{ fontSize: 12, color: "#a3927a", marginBottom: 10 }}>
-                          {t(
-                            `أيام الغياب والتأخير غير الموثّقة لـ ${r.name} خلال ${month} — اضغط "تصحيح" على أي يوم لتثبيت وقت دوامه الفعلي لو ما قدر يسجّل دخوله عن طريق النظام`,
-                            `Undocumented absence/late days for ${r.name} during ${month} — click "Fix" on any day to record the actual time they worked, if they couldn't check in through the system`
-                          )}
-                        </div>
-                        {r.attendanceIssues.length === 0 && (
-                          <div style={{ fontSize: 12.5, color: "#a3927a" }}>{t("لا توجد أيام غياب أو تأخير هذا الشهر — كل شيء موثّق.", "No absence or late days this month — everything is documented.")}</div>
-                        )}
-                        {r.attendanceIssues.map((day) => (
-                          <div key={day.date} style={{ borderTop: `1px dashed ${COLORS.line}`, padding: "8px 0" }}>
-                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                              <div style={{ fontSize: 12.5 }}>
-                                <b>{day.date}</b>
-                                {dayNameOfDate(day.date, t) && <span style={{ color: "#8a7a63" }}> ({dayNameOfDate(day.date, t)})</span>}
-                                {" — "}
-                                <Stamp tone={day.kind === "late" ? "gold" : "brick"}>
-                                  {day.kind === "missing"
-                                    ? t("غياب تلقائي (بدون تسجيل دخول)", "Automatic absence (no check-in)")
-                                    : day.kind === "absent"
-                                    ? t("غياب مسجّل يدويًا", "Manually recorded absence")
-                                    : t(`تأخير (${day.record?.lateMinutes || 0} د)`, `Late (${day.record?.lateMinutes || 0} min)`)}
-                                </Stamp>
-                                {(day.record?.checkInTime || day.record?.checkOutTime) && (
-                                  <span style={{ fontFamily: "Consolas, monospace", color: "#8a7a63", marginInlineStart: 8 }}>
-                                    {day.record.checkInTime || "—"} → {day.record.checkOutTime || "—"}
-                                  </span>
-                                )}
-                              </div>
-                              <Btn small tone="secondary" onClick={() => (editingIssueDate === day.date ? cancelEditIssue() : startEditIssue(day))}>
-                                {editingIssueDate === day.date ? t("إلغاء", "Cancel") : t("✏️ تصحيح", "✏️ Fix")}
-                              </Btn>
-                            </div>
-                            {editingIssueDate === day.date && issueForm && (
-                              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8, alignItems: "flex-end" }}>
-                                <Field label={t("الحالة", "Status")}>
-                                  <select style={inputStyle} value={issueForm.status} onChange={(e) => setIssueForm({ ...issueForm, status: e.target.value })}>
-                                    <option value="حاضر">{t("حاضر", "Present")}</option>
-                                    <option value="متأخر">{t("متأخر", "Late")}</option>
-                                  </select>
-                                </Field>
-                                <Field label={t("وقت الحضور الفعلي", "Actual check-in")}>
-                                  <input type="time" style={inputStyle} value={issueForm.checkInTime} onChange={(e) => setIssueForm({ ...issueForm, checkInTime: e.target.value })} />
-                                </Field>
-                                <Field label={t("وقت الانصراف الفعلي", "Actual check-out")}>
-                                  <input type="time" style={inputStyle} value={issueForm.checkOutTime} onChange={(e) => setIssueForm({ ...issueForm, checkOutTime: e.target.value })} />
-                                </Field>
-                                {issueForm.status === "متأخر" && (
-                                  <Field label={t("عدد دقائق التأخير", "Minutes late")}>
-                                    <input type="number" style={inputStyle} value={issueForm.lateMinutes} onChange={(e) => setIssueForm({ ...issueForm, lateMinutes: e.target.value })} />
-                                  </Field>
-                                )}
-                                <Btn small onClick={() => saveEditIssue(r, day)}>{t("✔ حفظ", "✔ Save")}</Btn>
-                                <Btn small tone="secondary" onClick={cancelEditIssue}>{t("إلغاء", "Cancel")}</Btn>
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </td>
-                  </tr>
-                )}
-                </React.Fragment>
               ))}
             </tbody>
           </table>
@@ -7421,6 +7357,118 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
               <div style={{ marginTop: 20, fontSize: 10, color: "#a3927a", textAlign: "center" }}>
                 {t(`تاريخ الإصدار: ${new Date().toLocaleDateString("ar-SA-u-nu-latn")}`, `Issue Date: ${new Date().toLocaleDateString("en-US")}`)}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {issuesRow && (
+        <div
+          className="no-print"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(36,24,17,0.55)",
+            zIndex: 60,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+          onClick={() => toggleIssues(issuesRow.id)}
+        >
+          <div
+            style={{
+              background: "#fff",
+              borderRadius: 12,
+              maxWidth: 640,
+              width: "100%",
+              maxHeight: "92vh",
+              overflow: "auto",
+              boxShadow: "0 20px 60px rgba(0,0,0,0.35)",
+            }}
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                padding: "14px 20px",
+                borderBottom: `1px solid ${COLORS.line}`,
+                position: "sticky",
+                top: 0,
+                background: "#fff",
+                zIndex: 2,
+                borderRadius: "12px 12px 0 0",
+              }}
+            >
+              <div style={{ fontWeight: 800, color: COLORS.espresso, fontSize: 15 }}>
+                {issuesRow.name}
+                <div style={{ fontSize: 11.5, color: "#a3927a", fontWeight: 400 }}>{t(`أيام الغياب والتأخير — ${month}`, `Absence & late days — ${month}`)}</div>
+              </div>
+              <Btn small tone="secondary" onClick={() => toggleIssues(issuesRow.id)}>{t("إغلاق ✕", "Close ✕")}</Btn>
+            </div>
+
+            <div style={{ padding: 20 }}>
+              <div style={{ fontSize: 12, color: "#a3927a", marginBottom: 12 }}>
+                {t(
+                  'اضغط "تصحيح" على أي يوم لتثبيت وقت دوامه الفعلي لو ما قدر يسجّل دخوله عن طريق النظام',
+                  'Click "Fix" on any day to record the actual time they worked, if they couldn\'t check in through the system'
+                )}
+              </div>
+              {issuesRow.attendanceIssues.length === 0 && (
+                <div style={{ fontSize: 12.5, color: "#a3927a" }}>{t("لا توجد أيام غياب أو تأخير هذا الشهر — كل شيء موثّق.", "No absence or late days this month — everything is documented.")}</div>
+              )}
+              {issuesRow.attendanceIssues.map((day) => (
+                <div key={day.date} style={{ borderTop: `1px dashed ${COLORS.line}`, padding: "10px 0" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                    <div style={{ fontSize: 12.5 }}>
+                      <b>{day.date}</b>
+                      {dayNameOfDate(day.date, t) && <span style={{ color: "#8a7a63" }}> ({dayNameOfDate(day.date, t)})</span>}
+                      {" — "}
+                      <Stamp tone={day.kind === "late" ? "gold" : "brick"}>
+                        {day.kind === "missing"
+                          ? t("غياب تلقائي (بدون تسجيل دخول)", "Automatic absence (no check-in)")
+                          : day.kind === "absent"
+                          ? t("غياب مسجّل يدويًا", "Manually recorded absence")
+                          : t(`تأخير (${day.record?.lateMinutes || 0} د)`, `Late (${day.record?.lateMinutes || 0} min)`)}
+                      </Stamp>
+                      {(day.record?.checkInTime || day.record?.checkOutTime) && (
+                        <span style={{ fontFamily: "Consolas, monospace", color: "#8a7a63", marginInlineStart: 8 }}>
+                          {day.record.checkInTime || "—"} → {day.record.checkOutTime || "—"}
+                        </span>
+                      )}
+                    </div>
+                    <Btn small tone="secondary" onClick={() => (editingIssueDate === day.date ? cancelEditIssue() : startEditIssue(day))}>
+                      {editingIssueDate === day.date ? t("إلغاء", "Cancel") : t("✏️ تصحيح", "✏️ Fix")}
+                    </Btn>
+                  </div>
+                  {editingIssueDate === day.date && issueForm && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 10, alignItems: "flex-end" }}>
+                      <Field label={t("الحالة", "Status")}>
+                        <select style={inputStyle} value={issueForm.status} onChange={(e) => setIssueForm({ ...issueForm, status: e.target.value })}>
+                          <option value="حاضر">{t("حاضر", "Present")}</option>
+                          <option value="متأخر">{t("متأخر", "Late")}</option>
+                        </select>
+                      </Field>
+                      <Field label={t("وقت الحضور الفعلي", "Actual check-in")}>
+                        <input type="time" style={inputStyle} value={issueForm.checkInTime} onChange={(e) => setIssueForm({ ...issueForm, checkInTime: e.target.value })} />
+                      </Field>
+                      <Field label={t("وقت الانصراف الفعلي", "Actual check-out")}>
+                        <input type="time" style={inputStyle} value={issueForm.checkOutTime} onChange={(e) => setIssueForm({ ...issueForm, checkOutTime: e.target.value })} />
+                      </Field>
+                      {issueForm.status === "متأخر" && (
+                        <Field label={t("عدد دقائق التأخير", "Minutes late")}>
+                          <input type="number" style={inputStyle} value={issueForm.lateMinutes} onChange={(e) => setIssueForm({ ...issueForm, lateMinutes: e.target.value })} />
+                        </Field>
+                      )}
+                      <Btn small onClick={() => saveEditIssue(issuesRow, day)}>{t("✔ حفظ", "✔ Save")}</Btn>
+                      <Btn small tone="secondary" onClick={cancelEditIssue}>{t("إلغاء", "Cancel")}</Btn>
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         </div>
