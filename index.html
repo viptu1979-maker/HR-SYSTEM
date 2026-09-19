@@ -6856,7 +6856,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
 
   return (
     <div>
-      <Header title={t("الرواتب واشتراكات التأمينات (GOSI)", "Payroll & GOSI Contributions")} subtitle={t("النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب. يمكنك أيضًا الضغط على \"✏️ تعديل\" بجانب أي موظف لتعديل أيام الغياب أو دقائق التأخير أو ساعات الإضافي يدويًا لهذا الشهر فقط.", "Rates are defaults and editable from the Settings tab — verify the official rate at calculation time. You can also click \"✏️ Edit\" next to any employee to manually adjust Absent Days, Late Minutes, or Overtime Hours for this month only.")} />
+      <Header title={t("الرواتب واشتراكات التأمينات (GOSI)", "Payroll & GOSI Contributions")} subtitle={t("النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب. يمكنك الضغط مباشرة على \"أيام غياب\" أو \"دقائق تأخير\" أو \"ساعات إضافي\" (أو زر \"✏️ تعديل\") لأي موظف، فتظهر لوحة تعديل أسفل صفه زي لوحة تعديل الحضور والانصراف، لتعديل هذه القيم يدويًا لهذا الشهر فقط.", "Rates are defaults and editable from the Settings tab — verify the official rate at calculation time. You can click directly on \"Absent Days\", \"Late Minutes\", or \"Overtime Hours\" (or the \"✏️ Edit\" button) for any employee to open an edit panel below their row — just like the Attendance edit panel — to manually adjust these values for this month only.")} />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
         <Field label={t("شهر احتساب الغياب والتأخير", "Attendance Calculation Month")}>
@@ -7050,12 +7050,24 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("الراتب الأساسي", "Basic Salary")} style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
                   <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} className="no-print" style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
                   <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
-                    <span style={adjustedValueStyle(r.absentDaysIsAdjusted)}>{fmt(r.absentDays)}</span>
+                    <span
+                      onClick={() => (editingAdjId === r.id ? cancelEditAdjustment() : startEditAdjustment(r))}
+                      title={t("اضغط للتعديل اليدوي (زي الحضور والانصراف)", "Click to edit manually (like Attendance)")}
+                      style={{ ...adjustedValueStyle(r.absentDaysIsAdjusted), cursor: "pointer", borderBottom: `1px dashed ${r.absentDaysIsAdjusted ? COLORS.brick : COLORS.line}` }}
+                    >
+                      {fmt(r.absentDays)}
+                    </span>
                     {r.absentDaysIsAdjusted && <span className="no-print" title={t("مُعدَّل يدويًا", "Manually adjusted")}> ✎</span>}
                   </td>
                   <td data-label={t("خصم الغياب", "Absence Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
                   <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
-                    <span style={adjustedValueStyle(r.lateMinutesIsAdjusted)}>{fmt(r.lateMinutesTotal)}</span>
+                    <span
+                      onClick={() => (editingAdjId === r.id ? cancelEditAdjustment() : startEditAdjustment(r))}
+                      title={t("اضغط للتعديل اليدوي (زي الحضور والانصراف)", "Click to edit manually (like Attendance)")}
+                      style={{ ...adjustedValueStyle(r.lateMinutesIsAdjusted), cursor: "pointer", borderBottom: `1px dashed ${r.lateMinutesIsAdjusted ? COLORS.brick : COLORS.line}` }}
+                    >
+                      {fmt(r.lateMinutesTotal)}
+                    </span>
                     {r.lateMinutesIsAdjusted && <span className="no-print" title={t("مُعدَّل يدويًا", "Manually adjusted")}> ✎</span>}
                   </td>
                   <td data-label={t("خصم التأخير", "Lateness Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
@@ -7063,7 +7075,13 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
                   <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
-                    <span style={adjustedValueStyle(r.overtimeHoursIsAdjusted)}>{fmt(r.overtimeHours)}</span>
+                    <span
+                      onClick={() => (editingAdjId === r.id ? cancelEditAdjustment() : startEditAdjustment(r))}
+                      title={t("اضغط للتعديل اليدوي (زي الحضور والانصراف)", "Click to edit manually (like Attendance)")}
+                      style={{ ...adjustedValueStyle(r.overtimeHoursIsAdjusted), cursor: "pointer", borderBottom: `1px dashed ${r.overtimeHoursIsAdjusted ? COLORS.brick : COLORS.line}` }}
+                    >
+                      {fmt(r.overtimeHours)}
+                    </span>
                     {r.overtimeHoursIsAdjusted && <span className="no-print" title={t("مُعدَّل يدويًا", "Manually adjusted")}> ✎</span>}
                   </td>
                   <td data-label={t("قيمة الإضافي", "Overtime Pay")} style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.overtimePay)}</td>
