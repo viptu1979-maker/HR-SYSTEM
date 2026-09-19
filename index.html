@@ -1392,11 +1392,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [qualityTemplates, setQualityTemplates] = useState([]);
   const [qualitySubmissions, setQualitySubmissions] = useState([]);
   const [warnings, setWarnings] = useState([]);
-  /* تعديلات يدوية على بنود الرواتب المحسوبة تلقائيًا (أيام غياب / دقائق تأخير / ساعات إضافي) لموظف
-     معيّن في شهر معيّن — بدون المساس بسجلات الحضور نفسها. كل عنصر: { id, employeeId, month,
-     absentDaysOverride, lateMinutesOverride, overtimeHoursOverride, note, updatedBy, updatedAt } —
-     أي حقل override يبقى null/محذوف لو مفيش تعديل عليه (يُستخدم الاحتساب التلقائي بدلاً منه) */
-  const [payrollAdjustments, setPayrollAdjustments] = useState([]);
   const [gosiRates, setGosiRates] = useState({
     saudiEmployee: 9.75,
     saudiEmployer: 11.75,
@@ -1464,7 +1459,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       ["qualityTemplates", setQualityTemplates, []],
       ["qualitySubmissions", setQualitySubmissions, []],
       ["warnings", setWarnings, []],
-      ["payrollAdjustments", setPayrollAdjustments, []],
     ];
     const unsub = DATA_DOC.onSnapshot(
       (snap) => {
@@ -1509,11 +1503,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             qualityTemplates: d.qualityTemplates || [],
             qualitySubmissions: d.qualitySubmissions || [],
             warnings: d.warnings || [],
-            payrollAdjustments: d.payrollAdjustments || [],
           });
         } else {
           /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [], warnings: [], payrollAdjustments: [] }).catch(() => {});
+          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [], warnings: [] }).catch(() => {});
         }
         setSyncError("");
         setLoaded(true);
@@ -1542,7 +1535,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   useEffect(() => {
     if (!loaded) return;
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, payrollAdjustments };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1577,7 +1570,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return;
     }
     setDirty(true);
-  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, payrollAdjustments, loaded, role, retryTick]);
+  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, loaded, role, retryTick]);
 
   /* نسخة احتياطية يومية تلقائية (بيانات النظام + حسابات الدخول معًا) — لو انحذف أو اتغيّر شيء بالغلط
      (من داخل النظام أو حتى من Firestore Console مباشرة) يقدر الأدمن يسترجعها من تبويب "الإعدادات" */
@@ -1593,7 +1586,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           date: today,
           savedAt: firebase.firestore.FieldValue.serverTimestamp(),
           entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance,
-          gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, payrollAdjustments, users,
+          gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, users,
         });
       })
       .then(() => {
@@ -1642,7 +1635,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       leaveRequests: bLeaveRequests, advanceRequests: bAdvanceRequests, attendance: bAttendance,
       gosiRates: bGosiRates, vehicles: bVehicles, payrollItems: bPayrollItems, tasks: bTasks,
       messages: bMessages, equipment: bEquipment, workOrders: bWorkOrders, qualityTemplates: bQualityTemplates,
-      qualitySubmissions: bQualitySubmissions, warnings: bWarnings, payrollAdjustments: bPayrollAdjustments, users: bUsers,
+      qualitySubmissions: bQualitySubmissions, warnings: bWarnings, users: bUsers,
     } = backupData;
     setEntities(bEntities || []);
     setBranches(bBranches || []);
@@ -1661,14 +1654,13 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     setQualityTemplates(bQualityTemplates || []);
     setQualitySubmissions(bQualitySubmissions || []);
     setWarnings(bWarnings || []);
-    setPayrollAdjustments(bPayrollAdjustments || []);
     const payload = {
       entities: bEntities || [], branches: bBranches || [], employees: bEmployees || [], leaves: bLeaves || [],
       leaveRequests: bLeaveRequests || [], advanceRequests: bAdvanceRequests || [], attendance: bAttendance || [],
       gosiRates: bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
       vehicles: bVehicles || [], payrollItems: bPayrollItems || [], tasks: bTasks || [], messages: bMessages || [],
       equipment: bEquipment || [], workOrders: bWorkOrders || [], qualityTemplates: bQualityTemplates || [], qualitySubmissions: bQualitySubmissions || [],
-      warnings: bWarnings || [], payrollAdjustments: bPayrollAdjustments || [],
+      warnings: bWarnings || [],
     };
     DATA_DOC.set(payload).then(() => {
       lastSyncedRef.current = JSON.stringify(payload);
@@ -1713,7 +1705,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
   /* حفظ يدوي — يُستدعى عند ضغط المستخدم على أيقونة الحفظ (للأدوار غير الموظف الذاتي) */
   const saveNow = () => {
-    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, payrollAdjustments };
+    const payload = { entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings };
     const json = JSON.stringify(payload);
     if (json === lastSyncedRef.current) {
       setDirty(false);
@@ -1822,9 +1814,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const scopedWarnings = isBranchManager || isEntityManager
     ? warnings.filter((w) => scopedEmployees.some((e) => e.id === w.employeeId))
     : warnings;
-  const scopedPayrollAdjustments = isBranchManager || isEntityManager
-    ? payrollAdjustments.filter((p) => scopedEmployees.some((e) => e.id === p.employeeId))
-    : payrollAdjustments;
 
   /* إدارة مهام الموظفين: تسجيل مهمة جديدة، تحديث حالتها، حذفها */
   const addTask = (task) => {
@@ -3082,8 +3071,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             leaves={scopedLeaves}
             payrollItems={scopedPayrollItems}
             setPayrollItems={setPayrollItems}
-            payrollAdjustments={scopedPayrollAdjustments}
-            setPayrollAdjustments={setPayrollAdjustments}
             logActivity={logActivity}
             onSendMessage={sendMessage}
           />
@@ -6625,7 +6612,7 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
 }
 
 
-function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, leaves, payrollItems, setPayrollItems, payrollAdjustments, setPayrollAdjustments, logActivity, onSendMessage }) {
+function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -6633,55 +6620,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", date: new Date().toISOString().slice(0, 10), month: new Date().toISOString().slice(0, 7), note: "", repayment: "دفعة واحدة", installments: 2 });
   const [payslip, setPayslip] = useState(null);
   const [printItem, setPrintItem] = useState(null);
-
-  /* تعديل يدوي على قِيَم محسوبة تلقائيًا (أيام غياب / دقائق تأخير / ساعات إضافي) لموظف في الشهر
-     المعروض حاليًا — بالضغط مباشرة على الخانة في الجدول. التعديل خاص بهذا الشهر فقط ولا يغيّر
-     سجلات الحضور نفسها؛ الخصم/القيمة المالية المقابلة تُحتسب تلقائيًا من نفس معادلة النظام لكن
-     بناءً على الرقم المُعدَّل بدل الرقم المحسوب من سجل الحضور */
-  const [editingAdjId, setEditingAdjId] = useState(null);
-  const [adjForm, setAdjForm] = useState(null);
-  const startEditAdjustment = (r) => {
-    const adj = payrollAdjustments.find((a) => a.employeeId === r.id && a.month === month);
-    setEditingAdjId(r.id);
-    setAdjForm({
-      absentDays: adj && adj.absentDaysOverride != null ? String(adj.absentDaysOverride) : "",
-      lateMinutes: adj && adj.lateMinutesOverride != null ? String(adj.lateMinutesOverride) : "",
-      overtimeHours: adj && adj.overtimeHoursOverride != null ? String(adj.overtimeHoursOverride) : "",
-      note: (adj && adj.note) || "",
-    });
-  };
-  const cancelEditAdjustment = () => {
-    setEditingAdjId(null);
-    setAdjForm(null);
-  };
-  const saveEditAdjustment = (employeeId) => {
-    if (!adjForm) return;
-    const toOverride = (v) => (v === "" || isNaN(Number(v)) ? null : Number(v));
-    const absentDaysOverride = toOverride(adjForm.absentDays);
-    const lateMinutesOverride = toOverride(adjForm.lateMinutes);
-    const overtimeHoursOverride = toOverride(adjForm.overtimeHours);
-    const hasAnyOverride = absentDaysOverride != null || lateMinutesOverride != null || overtimeHoursOverride != null;
-    setPayrollAdjustments((prev) => {
-      const existing = prev.find((a) => a.employeeId === employeeId && a.month === month);
-      /* مسح كل الحقول (تفريغها) بيرجّع الموظف بالكامل للاحتساب التلقائي هذا الشهر */
-      if (!hasAnyOverride) {
-        return existing ? prev.filter((a) => a.id !== existing.id) : prev;
-      }
-      const record = {
-        id: existing ? existing.id : uid(),
-        employeeId,
-        month,
-        absentDaysOverride,
-        lateMinutesOverride,
-        overtimeHoursOverride,
-        note: adjForm.note.trim(),
-        updatedAt: new Date().toISOString(),
-      };
-      return existing ? prev.map((a) => (a.id === existing.id ? record : a)) : [...prev, record];
-    });
-    logActivity && logActivity("تعديل يدوي في جدول الرواتب", "payroll", `${empName(employeeId)} — ${month}`);
-    cancelEditAdjustment();
-  };
 
   const addItem = () => {
     if (!itemForm.employeeId || !itemForm.amount || Number(itemForm.amount) <= 0) return;
@@ -6755,8 +6693,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const monthStart = `${month}-01`;
       const monthEnd = fmtISODate(new Date(__pmY, __pmM, 0));
       const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
-      const computedAbsentDays = manualAbsentDays + autoAbsentDays;
-      const computedLateMinutes = monthAttendance
+      const absentDays = manualAbsentDays + autoAbsentDays;
+      const lateMinutesTotal = monthAttendance
         .filter((a) => a.status === "متأخر")
         .reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
       /* دوام حر: نقص الساعات عن 8 ساعات فعلية يوميًا (لا "تأخير" بالمعنى العادي، لكن نفس أساس الخصم بالدقيقة) */
@@ -6766,19 +6704,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         (s, a) => s + Number(a.earlyLeaveMinutes || 0) + Number(a.earlyLeaveMinutes2 || 0),
         0
       );
-      const computedTotalDeductibleMinutes = computedLateMinutes + flexibleShortfallMinutes + earlyLeaveMinutesTotal;
-      const computedOvertimeHours = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0), 0);
-
-      /* تعديل يدوي (اختياري) لهذا الموظف ولهذا الشهر تحديدًا — بالضغط على الخانة في الجدول. لو موجود
-         نستخدمه بدل الرقم المحسوب تلقائيًا من سجل الحضور، مع إعادة احتساب الخصم/القيمة المالية
-         المقابلة بنفس المعادلة دايمًا (بدل ما يُطلب من المستخدم يكتب مبلغ الخصم بنفسه) */
-      const adjustment = payrollAdjustments.find((a) => a.employeeId === e.id && a.month === month);
-      const absentDaysIsAdjusted = adjustment && adjustment.absentDaysOverride != null;
-      const lateMinutesIsAdjusted = adjustment && adjustment.lateMinutesOverride != null;
-      const overtimeHoursIsAdjusted = adjustment && adjustment.overtimeHoursOverride != null;
-      const absentDays = absentDaysIsAdjusted ? Number(adjustment.absentDaysOverride) : computedAbsentDays;
-      const totalDeductibleMinutes = lateMinutesIsAdjusted ? Number(adjustment.lateMinutesOverride) : computedTotalDeductibleMinutes;
-      const overtimeHours = overtimeHoursIsAdjusted ? Number(adjustment.overtimeHoursOverride) : computedOvertimeHours;
+      const totalDeductibleMinutes = lateMinutesTotal + flexibleShortfallMinutes + earlyLeaveMinutesTotal;
 
       const unpaidLeaveDays = leaves
         .filter((l) => l.employeeId === e.id && l.type === "بدون راتب")
@@ -6791,6 +6717,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
 
       /* الوقت الإضافي: ساعات الإضافي المسجّلة هذا الشهر × سعر الساعة (وفق ساعات دوامه الفعلية) × 1٫5 (وفق نظام العمل السعودي) */
       const hourlyRate = dailyRate / dailyHours;
+      const overtimeHours = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0), 0);
       const overtimePay = overtimeHours * hourlyRate * 1.5;
 
       /* السلف والخصومات والحوافز المسجّلة لهذا الموظف في الشهر المختار */
@@ -6820,13 +6747,6 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         incentives,
         net,
         totalCost: salary + employerShare + overtimePay,
-        absentDaysIsAdjusted,
-        lateMinutesIsAdjusted,
-        overtimeHoursIsAdjusted,
-        adjustmentNote: adjustment?.note || "",
-        autoAbsentDays: computedAbsentDays,
-        autoLateMinutes: computedTotalDeductibleMinutes,
-        autoOvertimeHours: computedOvertimeHours,
       };
     });
 
@@ -6846,17 +6766,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
     { salary: 0, empShare: 0, employerShare: 0, attendanceDeduction: 0, overtimePay: 0, advances: 0, extraDeductions: 0, incentives: 0, net: 0, totalCost: 0 }
   );
 
-  /* عرض قيمة (تلقائية أو مُعدَّلة يدويًا) بدون أي تفاعل مباشر بها — التعديل الفعلي يتم من لوحة
-     التعديل اللي تظهر أسفل صف الموظف (زر "✏️ تعديل")، بنفس أسلوب تبويب الحضور والانصراف */
-  const adjustedValueStyle = (isAdjusted) => ({
-    borderBottom: `1px dashed ${isAdjusted ? COLORS.brick : "transparent"}`,
-    color: isAdjusted ? COLORS.brick : "inherit",
-    fontWeight: isAdjusted ? 700 : "inherit",
-  });
-
   return (
     <div>
-      <Header title={t("الرواتب واشتراكات التأمينات (GOSI)", "Payroll & GOSI Contributions")} subtitle={t("النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب. يمكنك الضغط مباشرة على \"أيام غياب\" أو \"دقائق تأخير\" أو \"ساعات إضافي\" (أو زر \"✏️ تعديل\") لأي موظف، فتظهر لوحة تعديل أسفل صفه زي لوحة تعديل الحضور والانصراف، لتعديل هذه القيم يدويًا لهذا الشهر فقط.", "Rates are defaults and editable from the Settings tab — verify the official rate at calculation time. You can click directly on \"Absent Days\", \"Late Minutes\", or \"Overtime Hours\" (or the \"✏️ Edit\" button) for any employee to open an edit panel below their row — just like the Attendance edit panel — to manually adjust these values for this month only.")} />
+      <Header title={t("الرواتب واشتراكات التأمينات (GOSI)", "Payroll & GOSI Contributions")} subtitle={t("النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب", "Rates are defaults and editable from the Settings tab — verify the official rate at calculation time")} />
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
         <Field label={t("شهر احتساب الغياب والتأخير", "Attendance Calculation Month")}>
@@ -7028,8 +6940,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
             </thead>
             <tbody>
               {rows.map((r) => (
-                <React.Fragment key={r.id}>
-                <tr style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
+                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
                   <td
                     data-label={t("الاسم", "Name")}
                     style={{
@@ -7049,41 +6960,14 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td data-label={t("الراتب الأساسي", "Basic Salary")} style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
                   <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} className="no-print" style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
-                  <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
-                    <span
-                      onClick={() => (editingAdjId === r.id ? cancelEditAdjustment() : startEditAdjustment(r))}
-                      title={t("اضغط للتعديل اليدوي (زي الحضور والانصراف)", "Click to edit manually (like Attendance)")}
-                      style={{ ...adjustedValueStyle(r.absentDaysIsAdjusted), cursor: "pointer", borderBottom: `1px dashed ${r.absentDaysIsAdjusted ? COLORS.brick : COLORS.line}` }}
-                    >
-                      {fmt(r.absentDays)}
-                    </span>
-                    {r.absentDaysIsAdjusted && <span className="no-print" title={t("مُعدَّل يدويًا", "Manually adjusted")}> ✎</span>}
-                  </td>
+                  <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.absentDays)}</td>
                   <td data-label={t("خصم الغياب", "Absence Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
-                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
-                    <span
-                      onClick={() => (editingAdjId === r.id ? cancelEditAdjustment() : startEditAdjustment(r))}
-                      title={t("اضغط للتعديل اليدوي (زي الحضور والانصراف)", "Click to edit manually (like Attendance)")}
-                      style={{ ...adjustedValueStyle(r.lateMinutesIsAdjusted), cursor: "pointer", borderBottom: `1px dashed ${r.lateMinutesIsAdjusted ? COLORS.brick : COLORS.line}` }}
-                    >
-                      {fmt(r.lateMinutesTotal)}
-                    </span>
-                    {r.lateMinutesIsAdjusted && <span className="no-print" title={t("مُعدَّل يدويًا", "Manually adjusted")}> ✎</span>}
-                  </td>
+                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.lateMinutesTotal)}</td>
                   <td data-label={t("خصم التأخير", "Lateness Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
                   <td data-label={t("أيام إجازة بدون راتب", "Unpaid Leave Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
-                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
-                    <span
-                      onClick={() => (editingAdjId === r.id ? cancelEditAdjustment() : startEditAdjustment(r))}
-                      title={t("اضغط للتعديل اليدوي (زي الحضور والانصراف)", "Click to edit manually (like Attendance)")}
-                      style={{ ...adjustedValueStyle(r.overtimeHoursIsAdjusted), cursor: "pointer", borderBottom: `1px dashed ${r.overtimeHoursIsAdjusted ? COLORS.brick : COLORS.line}` }}
-                    >
-                      {fmt(r.overtimeHours)}
-                    </span>
-                    {r.overtimeHoursIsAdjusted && <span className="no-print" title={t("مُعدَّل يدويًا", "Manually adjusted")}> ✎</span>}
-                  </td>
+                  <td data-label={t("ساعات إضافي", "Overtime Hours")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.overtimeHours)}</td>
                   <td data-label={t("قيمة الإضافي", "Overtime Pay")} style={{ padding: "9px 12px", color: COLORS.green }}>{fmt(r.overtimePay)}</td>
                   <td data-label={t("السلف", "Advances")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.advances)}</td>
                   <td data-label={t("خصومات أخرى", "Other Deductions")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.extraDeductions)}</td>
@@ -7091,70 +6975,10 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("حصة صاحب العمل", "Employer Share")} className="no-print" style={{ padding: "9px 12px" }}>{fmt(r.employerShare)}</td>
                   <td data-label={t("الصافي للموظف", "Net for Employee")} style={{ padding: "9px 12px", color: COLORS.green, fontWeight: 700 }}>{fmt(r.net)}</td>
                   <td data-label={t("تكلفة الشركة", "Company Cost")} style={{ padding: "9px 12px", fontWeight: 700 }}>{fmt(r.totalCost)}</td>
-                  <td style={{ padding: "9px 12px", fontFamily: "inherit", display: "flex", gap: 6, flexWrap: "wrap" }} className="no-print">
+                  <td style={{ padding: "9px 12px", fontFamily: "inherit" }} className="no-print">
                     <Btn small onClick={() => setPayslip({ ...r, __month: month })}>{t("🖶 قسيمة الراتب", "🖶 Payslip")}</Btn>
-                    <Btn small tone="secondary" onClick={() => (editingAdjId === r.id ? cancelEditAdjustment() : startEditAdjustment(r))}>
-                      {editingAdjId === r.id ? t("إلغاء", "Cancel") : t("✏️ تعديل", "✏️ Edit")}
-                    </Btn>
                   </td>
                 </tr>
-                {editingAdjId === r.id && adjForm && (
-                  <tr className="no-print">
-                    <td colSpan={21} style={{ padding: 0 }}>
-                      <div style={{ padding: "12px 14px", background: COLORS.paper, borderTop: `1px dashed ${COLORS.line}`, borderBottom: `1px dashed ${COLORS.line}` }}>
-                        <div style={{ fontSize: 12, color: "#a3927a", marginBottom: 8 }}>
-                          {t(
-                            `تعديل يدوي لشهر ${month} فقط — اترك الحقل فارغًا لاستخدام القيمة المحسوبة تلقائيًا من سجل الحضور`,
-                            `Manual adjustment for ${month} only — leave a field blank to use the value auto-calculated from attendance`
-                          )}
-                        </div>
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-                          <Field label={t("أيام غياب", "Absent Days")}>
-                            <input
-                              type="number"
-                              style={{ ...inputStyle, width: 130 }}
-                              value={adjForm.absentDays}
-                              onChange={(e) => setAdjForm({ ...adjForm, absentDays: e.target.value })}
-                              placeholder={t(`تلقائي: ${fmt(r.autoAbsentDays)}`, `Auto: ${fmt(r.autoAbsentDays)}`)}
-                            />
-                          </Field>
-                          <Field label={t("دقائق تأخير", "Late Minutes")}>
-                            <input
-                              type="number"
-                              style={{ ...inputStyle, width: 130 }}
-                              value={adjForm.lateMinutes}
-                              onChange={(e) => setAdjForm({ ...adjForm, lateMinutes: e.target.value })}
-                              placeholder={t(`تلقائي: ${fmt(r.autoLateMinutes)}`, `Auto: ${fmt(r.autoLateMinutes)}`)}
-                            />
-                          </Field>
-                          <Field label={t("ساعات إضافي", "Overtime Hours")}>
-                            <input
-                              type="number"
-                              step="0.5"
-                              style={{ ...inputStyle, width: 130 }}
-                              value={adjForm.overtimeHours}
-                              onChange={(e) => setAdjForm({ ...adjForm, overtimeHours: e.target.value })}
-                              placeholder={t(`تلقائي: ${fmt(r.autoOvertimeHours)}`, `Auto: ${fmt(r.autoOvertimeHours)}`)}
-                            />
-                          </Field>
-                          <Field label={t("سبب التعديل (اختياري)", "Reason (optional)")}>
-                            <input
-                              type="text"
-                              style={{ ...inputStyle, minWidth: 220 }}
-                              value={adjForm.note}
-                              onChange={(e) => setAdjForm({ ...adjForm, note: e.target.value })}
-                            />
-                          </Field>
-                        </div>
-                        <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-                          <Btn small onClick={() => saveEditAdjustment(r.id)}>{t("✔ حفظ التعديل", "✔ Save Changes")}</Btn>
-                          <Btn small tone="secondary" onClick={cancelEditAdjustment}>{t("إلغاء", "Cancel")}</Btn>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                )}
-                </React.Fragment>
               ))}
             </tbody>
           </table>
