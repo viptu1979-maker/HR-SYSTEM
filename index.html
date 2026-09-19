@@ -3506,18 +3506,28 @@ function getAttendanceIssueDays(emp, periodAttendanceRecords, employeeApprovedLe
     const dateStr = fmtISODate(dateObj);
     const rec = byDate[dateStr];
     if (rec) {
-      if (rec.status === "غائب" || rec.status === "متأخر") {
-        issues.push({ date: dateStr, kind: rec.status === "غائب" ? "absent" : "late", record: rec });
-      } else if (Number(rec.overtimeHours || 0) > 0) {
+      /* إجمالي الدقائق القابلة للخصم لهذا اليوم — بنفس مكوّنات معادلة "دقائق تأخير" في جدول الرواتب
+         (تأخير + نقص دوام حر + خروج مبكر)، عشان أي يوم يساهم في الرقم المعروض يظهر هنا ويقدر يتصحّح */
+      const lateMin = rec.status === "متأخر" ? Number(rec.lateMinutes || 0) : 0;
+      const shortfallMin = Number(rec.shortfallMinutes || 0);
+      const earlyMin = Number(rec.earlyLeaveMinutes || 0) + Number(rec.earlyLeaveMinutes2 || 0);
+      const deductibleMinutes = lateMin + shortfallMin + earlyMin;
+      const overtimeHrs = Number(rec.overtimeHours || 0) + Number(rec.overtimeHours2 || 0);
+      const breakdown = { lateMin, shortfallMin, earlyMin };
+      if (rec.status === "غائب") {
+        issues.push({ date: dateStr, kind: "absent", record: rec, deductibleMinutes: 0, overtimeHours: overtimeHrs, breakdown });
+      } else if (rec.status === "متأخر" || deductibleMinutes > 0) {
+        issues.push({ date: dateStr, kind: "late", record: rec, deductibleMinutes, overtimeHours: overtimeHrs, breakdown });
+      } else if (overtimeHrs > 0) {
         /* يوم فيه عمل إضافي مسجَّل بالفعل — نعرضه أيضًا عشان يقدر الأدمن يصحّح عدد ساعاته لو غلط */
-        issues.push({ date: dateStr, kind: "overtime", record: rec });
+        issues.push({ date: dateStr, kind: "overtime", record: rec, deductibleMinutes: 0, overtimeHours: overtimeHrs, breakdown });
       }
       continue;
     }
     if (offDays.includes(JS_DAY_INDEX_TO_AR[dateObj.getDay()])) continue; /* يوم إجازته الأسبوعية */
     const onApprovedLeave = (employeeApprovedLeaves || []).some((l) => l.from && l.to && dateStr >= l.from && dateStr <= l.to);
     if (onApprovedLeave) continue; /* ضمن إجازة معتمدة */
-    issues.push({ date: dateStr, kind: "missing", record: null });
+    issues.push({ date: dateStr, kind: "missing", record: null, deductibleMinutes: 0, overtimeHours: 0, breakdown: { lateMin: 0, shortfallMin: 0, earlyMin: 0 } });
   }
   return issues;
 }
@@ -6677,11 +6687,17 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const startEditIssue = (day) => {
     setEditingIssueDate(day.date);
     setIssueForm({
-      status: day.kind === "late" ? "متأخر" : "حاضر",
+      status: day.kind === "late" ? "متأخر" : day.kind === "absent" ? "غائب" : "حاضر",
       checkInTime: day.record?.checkInTime || "",
       checkOutTime: day.record?.checkOutTime || "",
+      checkInTime2: day.record?.checkInTime2 || "",
+      checkOutTime2: day.record?.checkOutTime2 || "",
       lateMinutes: day.record?.lateMinutes || "",
+      shortfallMinutes: day.record?.shortfallMinutes || "",
+      earlyLeaveMinutes: day.record?.earlyLeaveMinutes || "",
+      earlyLeaveMinutes2: day.record?.earlyLeaveMinutes2 || "",
       overtimeHours: day.record?.overtimeHours || "",
+      overtimeHours2: day.record?.overtimeHours2 || "",
     });
   };
   const cancelEditIssue = () => {
@@ -6694,8 +6710,14 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       status: issueForm.status,
       checkInTime: issueForm.checkInTime,
       checkOutTime: issueForm.checkOutTime,
+      checkInTime2: issueForm.checkInTime2,
+      checkOutTime2: issueForm.checkOutTime2,
       lateMinutes: issueForm.status === "متأخر" ? Number(issueForm.lateMinutes || 0) : 0,
+      shortfallMinutes: Number(issueForm.shortfallMinutes || 0),
+      earlyLeaveMinutes: Number(issueForm.earlyLeaveMinutes || 0),
+      earlyLeaveMinutes2: Number(issueForm.earlyLeaveMinutes2 || 0),
       overtimeHours: Number(issueForm.overtimeHours || 0),
+      overtimeHours2: Number(issueForm.overtimeHours2 || 0),
     };
     if (day.record) {
       setAttendance((prev) => prev.map((a) => (a.id === day.record.id ? { ...a, ...updated } : a)));
@@ -7445,12 +7467,23 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                           : day.kind === "absent"
                           ? t("غياب مسجّل يدويًا", "Manually recorded absence")
                           : day.kind === "overtime"
-                          ? t(`عمل إضافي مسجّل (${day.record?.overtimeHours || 0} س)`, `Recorded overtime (${day.record?.overtimeHours || 0}h)`)
-                          : t(`تأخير (${day.record?.lateMinutes || 0} د)`, `Late (${day.record?.lateMinutes || 0} min)`)}
+                          ? t(`عمل إضافي مسجّل (${day.overtimeHours || 0} س)`, `Recorded overtime (${day.overtimeHours || 0}h)`)
+                          : t(`دقائق قابلة للخصم (${day.deductibleMinutes || 0} د)`, `Deductible minutes (${day.deductibleMinutes || 0})`)}
                       </Stamp>
                       {(day.record?.checkInTime || day.record?.checkOutTime) && (
                         <span style={{ fontFamily: "Consolas, monospace", color: "#8a7a63", marginInlineStart: 8 }}>
                           {day.record.checkInTime || "—"} → {day.record.checkOutTime || "—"}
+                        </span>
+                      )}
+                      {day.kind === "late" && (day.breakdown.lateMin > 0) + (day.breakdown.shortfallMin > 0) + (day.breakdown.earlyMin > 0) > 1 && (
+                        <span style={{ color: "#8a7a63", marginInlineStart: 8 }}>
+                          {t("(", "(")}
+                          {[
+                            day.breakdown.lateMin > 0 ? t(`تأخير ${day.breakdown.lateMin}`, `late ${day.breakdown.lateMin}`) : null,
+                            day.breakdown.shortfallMin > 0 ? t(`نقص دوام حر ${day.breakdown.shortfallMin}`, `shortfall ${day.breakdown.shortfallMin}`) : null,
+                            day.breakdown.earlyMin > 0 ? t(`خروج مبكر ${day.breakdown.earlyMin}`, `early leave ${day.breakdown.earlyMin}`) : null,
+                          ].filter(Boolean).join(t(" + ", " + "))}
+                          {t(")", ")")}
                         </span>
                       )}
                     </div>
@@ -7463,29 +7496,67 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                       <Field label={t("الحالة", "Status")}>
                         <select style={inputStyle} value={issueForm.status} onChange={(e) => setIssueForm({ ...issueForm, status: e.target.value })}>
                           <option value="حاضر">{t("حاضر", "Present")}</option>
+                          <option value="غائب">{t("غائب", "Absent")}</option>
                           <option value="متأخر">{t("متأخر", "Late")}</option>
                         </select>
                       </Field>
-                      <Field label={t("وقت الحضور الفعلي", "Actual check-in")}>
+                      <Field label={t("وقت الحضور الفعلي (صباحي)", "Actual check-in (AM)")}>
                         <input type="time" style={inputStyle} value={issueForm.checkInTime} onChange={(e) => setIssueForm({ ...issueForm, checkInTime: e.target.value })} />
                       </Field>
-                      <Field label={t("وقت الانصراف الفعلي", "Actual check-out")}>
+                      <Field label={t("وقت الانصراف الفعلي (صباحي)", "Actual check-out (AM)")}>
                         <input type="time" style={inputStyle} value={issueForm.checkOutTime} onChange={(e) => setIssueForm({ ...issueForm, checkOutTime: e.target.value })} />
                       </Field>
+                      <Field label={t("وقت الحضور الفعلي (مسائي)", "Actual check-in (PM)")}>
+                        <input type="time" style={inputStyle} value={issueForm.checkInTime2} onChange={(e) => setIssueForm({ ...issueForm, checkInTime2: e.target.value })} />
+                      </Field>
+                      <Field label={t("وقت الانصراف الفعلي (مسائي)", "Actual check-out (PM)")}>
+                        <input type="time" style={inputStyle} value={issueForm.checkOutTime2} onChange={(e) => setIssueForm({ ...issueForm, checkOutTime2: e.target.value })} />
+                      </Field>
                       {issueForm.status === "متأخر" && (
-                        <Field label={t("عدد دقائق التأخير", "Minutes late")}>
-                          <input type="number" style={inputStyle} value={issueForm.lateMinutes} onChange={(e) => setIssueForm({ ...issueForm, lateMinutes: e.target.value })} />
+                        <Field label={t("دقائق التأخير", "Late minutes")}>
+                          <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.lateMinutes} onChange={(e) => setIssueForm({ ...issueForm, lateMinutes: e.target.value })} />
                         </Field>
                       )}
-                      <Field label={t("ساعات العمل الإضافي", "Overtime hours")}>
+                      <Field label={t("دقائق نقص دوام حر", "Flexible-shift shortfall (min)")}>
+                        <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.shortfallMinutes} onChange={(e) => setIssueForm({ ...issueForm, shortfallMinutes: e.target.value })} />
+                      </Field>
+                      <Field label={t("دقائق الخروج المبكر (صباحي)", "Early leave (AM, min)")}>
+                        <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.earlyLeaveMinutes} onChange={(e) => setIssueForm({ ...issueForm, earlyLeaveMinutes: e.target.value })} />
+                      </Field>
+                      <Field label={t("دقائق الخروج المبكر (مسائي)", "Early leave (PM, min)")}>
+                        <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.earlyLeaveMinutes2} onChange={(e) => setIssueForm({ ...issueForm, earlyLeaveMinutes2: e.target.value })} />
+                      </Field>
+                      <Field label={t("ساعات إضافي (صباحي)", "Overtime (AM, hours)")}>
                         <input type="number" step="0.5" style={{ ...inputStyle, width: 110 }} value={issueForm.overtimeHours} onChange={(e) => setIssueForm({ ...issueForm, overtimeHours: e.target.value })} />
                       </Field>
+                      <Field label={t("ساعات إضافي (مسائي)", "Overtime (PM, hours)")}>
+                        <input type="number" step="0.5" style={{ ...inputStyle, width: 110 }} value={issueForm.overtimeHours2} onChange={(e) => setIssueForm({ ...issueForm, overtimeHours2: e.target.value })} />
+                      </Field>
+                      <div style={{ fontSize: 11, color: "#a3927a", width: "100%" }}>
+                        {t(
+                          "دقائق نقص الدوام الحر تُحتسب تلقائيًا للموظفين بدوام حر عند تسجيل الانصراف — عدّلها هنا فقط لو الرقم غير دقيق.",
+                          "Flexible-shift shortfall minutes are auto-calculated at check-out for flexible-schedule employees — only adjust here if the number is inaccurate."
+                        )}
+                      </div>
                       <Btn small onClick={() => saveEditIssue(issuesRow, day)}>{t("✔ حفظ", "✔ Save")}</Btn>
                       <Btn small tone="secondary" onClick={cancelEditIssue}>{t("إلغاء", "Cancel")}</Btn>
                     </div>
                   )}
                 </div>
               ))}
+              {issuesRow.attendanceIssues.length > 0 && (
+                <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${COLORS.line}`, fontSize: 12, color: "#8a7a63", display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+                  <span>
+                    {t(
+                      `إجمالي الدقائق القابلة للخصم في هذه القائمة: ${issuesRow.attendanceIssues.reduce((s, d) => s + (d.deductibleMinutes || 0), 0)} د`,
+                      `Total deductible minutes in this list: ${issuesRow.attendanceIssues.reduce((s, d) => s + (d.deductibleMinutes || 0), 0)}`
+                    )}
+                  </span>
+                  <span style={{ fontWeight: 700, color: COLORS.espresso }}>
+                    {t(`الرقم في الجدول: ${fmt(issuesRow.lateMinutesTotal)} د`, `Table figure: ${fmt(issuesRow.lateMinutesTotal)}`)}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>
