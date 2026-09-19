@@ -3068,6 +3068,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             entityOfBranch={entityOfBranch}
             gosiRates={gosiRates}
             attendance={scopedAttendance}
+            setAttendance={setAttendance}
             leaves={scopedLeaves}
             payrollItems={scopedPayrollItems}
             setPayrollItems={setPayrollItems}
@@ -3479,6 +3480,43 @@ function countMissingAttendanceDays(emp, periodAttendanceRecords, employeeApprov
   }
   return missing;
 
+}
+
+/* نفس منطق countMissingAttendanceDays لكن بيرجع قائمة الأيام نفسها (بدل عدّها فقط) — كل يوم فيه غياب
+   تلقائي (بدون أي سجل حضور)، أو غياب مسجَّل يدويًا، أو تأخير — عشان تبويب الرواتب يقدر يعرضها ويتيح
+   تصحيح وقت الدوام الفعلي ليوم بعينه لو الموظف ما قدر يسجّل دخوله عن طريق النظام */
+function getAttendanceIssueDays(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd) {
+  if (!emp?.joinDate) return [];
+  const start = new Date(rangeStart + "T00:00:00");
+  const end = new Date(rangeEnd + "T00:00:00");
+  if (isNaN(start) || isNaN(end)) return [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const join = new Date(emp.joinDate + "T00:00:00");
+  if (isNaN(join)) return [];
+  const offDays = getOffDays(emp);
+  const byDate = {};
+  (periodAttendanceRecords || []).forEach((a) => {
+    byDate[a.date] = a;
+  });
+  const issues = [];
+  for (let dateObj = new Date(start); dateObj <= end; dateObj.setDate(dateObj.getDate() + 1)) {
+    if (dateObj > today) break; /* يوم مستقبلي — ما نحكم عليه */
+    if (dateObj < join) continue; /* قبل تاريخ التعيين */
+    const dateStr = fmtISODate(dateObj);
+    const rec = byDate[dateStr];
+    if (rec) {
+      if (rec.status === "غائب" || rec.status === "متأخر") {
+        issues.push({ date: dateStr, kind: rec.status === "غائب" ? "absent" : "late", record: rec });
+      }
+      continue;
+    }
+    if (offDays.includes(JS_DAY_INDEX_TO_AR[dateObj.getDay()])) continue; /* يوم إجازته الأسبوعية */
+    const onApprovedLeave = (employeeApprovedLeaves || []).some((l) => l.from && l.to && dateStr >= l.from && dateStr <= l.to);
+    if (onApprovedLeave) continue; /* ضمن إجازة معتمدة */
+    issues.push({ date: dateStr, kind: "missing", record: null });
+  }
+  return issues;
 }
 
 /* تحويل تاريخ ميلادي إلى هجري للعرض جنب حقل التاريخ (بدون اتصال إنترنت، عبر Intl المدمجة في المتصفح) */
@@ -6612,7 +6650,7 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
 }
 
 
-function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
+function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, setAttendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -6620,6 +6658,49 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", date: new Date().toISOString().slice(0, 10), month: new Date().toISOString().slice(0, 7), note: "", repayment: "دفعة واحدة", installments: 2 });
   const [payslip, setPayslip] = useState(null);
   const [printItem, setPrintItem] = useState(null);
+
+  /* تصحيح غياب/تأخير يوم بعينه مباشرة من جدول الرواتب — للحالات اللي الموظف ما قدر يسجّل
+     دخوله فيها عن طريق النظام (تطبيق/بصمة وجه) فتظهر غياب أو تأخير، ونحتاج نثبّت وقت دوامه
+     الفعلي يدويًا بدل ما يفضل الرقم خاطئ في كشف الراتب */
+  const [openIssuesId, setOpenIssuesId] = useState(null);
+  const [editingIssueDate, setEditingIssueDate] = useState(null);
+  const [issueForm, setIssueForm] = useState(null);
+
+  const toggleIssues = (rowId) => {
+    setOpenIssuesId((prev) => (prev === rowId ? null : rowId));
+    setEditingIssueDate(null);
+    setIssueForm(null);
+  };
+  const startEditIssue = (day) => {
+    setEditingIssueDate(day.date);
+    setIssueForm({
+      status: day.kind === "late" ? "متأخر" : "حاضر",
+      checkInTime: day.record?.checkInTime || "",
+      checkOutTime: day.record?.checkOutTime || "",
+      lateMinutes: day.record?.lateMinutes || "",
+    });
+  };
+  const cancelEditIssue = () => {
+    setEditingIssueDate(null);
+    setIssueForm(null);
+  };
+  const saveEditIssue = (r, day) => {
+    if (!issueForm) return;
+    const updated = {
+      status: issueForm.status,
+      checkInTime: issueForm.checkInTime,
+      checkOutTime: issueForm.checkOutTime,
+      lateMinutes: issueForm.status === "متأخر" ? Number(issueForm.lateMinutes || 0) : 0,
+    };
+    if (day.record) {
+      setAttendance((prev) => prev.map((a) => (a.id === day.record.id ? { ...a, ...updated } : a)));
+    } else {
+      setAttendance((prev) => [...prev, { id: uid(), employeeId: r.id, branchId: r.branchId, date: day.date, ...updated }]);
+    }
+    logActivity && logActivity("تصحيح وقت دوام من الرواتب", "payroll", `${r.name} — ${day.date}`);
+    setEditingIssueDate(null);
+    setIssueForm(null);
+  };
 
   const addItem = () => {
     if (!itemForm.employeeId || !itemForm.amount || Number(itemForm.amount) <= 0) return;
@@ -6694,6 +6775,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
       const monthEnd = fmtISODate(new Date(__pmY, __pmM, 0));
       const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
       const absentDays = manualAbsentDays + autoAbsentDays;
+      /* أيام الغياب (تلقائي أو يدوي) والتأخير خلال الشهر بتفاصيلها — لإتاحة تصحيح وقت الدوام الفعلي
+         ليوم بعينه من جدول الرواتب لو الموظف ما قدر يسجّل دخوله عن طريق النظام */
+      const attendanceIssues = getAttendanceIssueDays(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
       const lateMinutesTotal = monthAttendance
         .filter((a) => a.status === "متأخر")
         .reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
@@ -6735,6 +6819,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         dailyRate,
         absentDays,
         absentDeduction,
+        attendanceIssues,
         lateMinutesTotal: totalDeductibleMinutes,
         lateDeduction,
         unpaidLeaveDays,
@@ -6940,7 +7025,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
             </thead>
             <tbody>
               {rows.map((r) => (
-                <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
+                <React.Fragment key={r.id}>
+                <tr style={{ borderTop: `1px dashed ${COLORS.line}`, fontFamily: "Consolas, monospace" }}>
                   <td
                     data-label={t("الاسم", "Name")}
                     style={{
@@ -6960,9 +7046,23 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td data-label={t("الراتب الأساسي", "Basic Salary")} style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
                   <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} className="no-print" style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
-                  <td data-label={t("أيام غياب", "Absent Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.absentDays)}</td>
+                  <td
+                    data-label={t("أيام غياب", "Absent Days")}
+                    onClick={() => toggleIssues(r.id)}
+                    title={t("اضغط لعرض/تصحيح أيام الغياب لهذا الشهر", "Click to view/fix this month's absence days")}
+                    style={{ padding: "9px 12px", fontFamily: "inherit", cursor: "pointer", borderBottom: `1px dashed ${COLORS.brick}` }}
+                  >
+                    {fmt(r.absentDays)}{r.attendanceIssues.some((d) => d.kind !== "late") && <span className="no-print" title={t("توجد أيام قابلة للتصحيح", "There are correctable days")}> ✎</span>}
+                  </td>
                   <td data-label={t("خصم الغياب", "Absence Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.absentDeduction)}</td>
-                  <td data-label={t("دقائق تأخير", "Late Minutes")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.lateMinutesTotal)}</td>
+                  <td
+                    data-label={t("دقائق تأخير", "Late Minutes")}
+                    onClick={() => toggleIssues(r.id)}
+                    title={t("اضغط لعرض/تصحيح أيام التأخير لهذا الشهر", "Click to view/fix this month's late days")}
+                    style={{ padding: "9px 12px", fontFamily: "inherit", cursor: "pointer", borderBottom: `1px dashed ${COLORS.brick}` }}
+                  >
+                    {fmt(r.lateMinutesTotal)}{r.attendanceIssues.some((d) => d.kind === "late") && <span className="no-print" title={t("توجد أيام قابلة للتصحيح", "There are correctable days")}> ✎</span>}
+                  </td>
                   <td data-label={t("خصم التأخير", "Lateness Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
                   <td data-label={t("أيام إجازة بدون راتب", "Unpaid Leave Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
@@ -6979,6 +7079,73 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                     <Btn small onClick={() => setPayslip({ ...r, __month: month })}>{t("🖶 قسيمة الراتب", "🖶 Payslip")}</Btn>
                   </td>
                 </tr>
+                {openIssuesId === r.id && (
+                  <tr className="no-print">
+                    <td colSpan={21} style={{ padding: 0 }}>
+                      <div style={{ padding: "12px 14px", background: COLORS.paper, borderTop: `1px dashed ${COLORS.line}`, borderBottom: `1px dashed ${COLORS.line}` }}>
+                        <div style={{ fontSize: 12, color: "#a3927a", marginBottom: 10 }}>
+                          {t(
+                            `أيام الغياب والتأخير غير الموثّقة لـ ${r.name} خلال ${month} — اضغط "تصحيح" على أي يوم لتثبيت وقت دوامه الفعلي لو ما قدر يسجّل دخوله عن طريق النظام`,
+                            `Undocumented absence/late days for ${r.name} during ${month} — click "Fix" on any day to record the actual time they worked, if they couldn't check in through the system`
+                          )}
+                        </div>
+                        {r.attendanceIssues.length === 0 && (
+                          <div style={{ fontSize: 12.5, color: "#a3927a" }}>{t("لا توجد أيام غياب أو تأخير هذا الشهر — كل شيء موثّق.", "No absence or late days this month — everything is documented.")}</div>
+                        )}
+                        {r.attendanceIssues.map((day) => (
+                          <div key={day.date} style={{ borderTop: `1px dashed ${COLORS.line}`, padding: "8px 0" }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                              <div style={{ fontSize: 12.5 }}>
+                                <b>{day.date}</b>
+                                {dayNameOfDate(day.date, t) && <span style={{ color: "#8a7a63" }}> ({dayNameOfDate(day.date, t)})</span>}
+                                {" — "}
+                                <Stamp tone={day.kind === "late" ? "gold" : "brick"}>
+                                  {day.kind === "missing"
+                                    ? t("غياب تلقائي (بدون تسجيل دخول)", "Automatic absence (no check-in)")
+                                    : day.kind === "absent"
+                                    ? t("غياب مسجّل يدويًا", "Manually recorded absence")
+                                    : t(`تأخير (${day.record?.lateMinutes || 0} د)`, `Late (${day.record?.lateMinutes || 0} min)`)}
+                                </Stamp>
+                                {(day.record?.checkInTime || day.record?.checkOutTime) && (
+                                  <span style={{ fontFamily: "Consolas, monospace", color: "#8a7a63", marginInlineStart: 8 }}>
+                                    {day.record.checkInTime || "—"} → {day.record.checkOutTime || "—"}
+                                  </span>
+                                )}
+                              </div>
+                              <Btn small tone="secondary" onClick={() => (editingIssueDate === day.date ? cancelEditIssue() : startEditIssue(day))}>
+                                {editingIssueDate === day.date ? t("إلغاء", "Cancel") : t("✏️ تصحيح", "✏️ Fix")}
+                              </Btn>
+                            </div>
+                            {editingIssueDate === day.date && issueForm && (
+                              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8, alignItems: "flex-end" }}>
+                                <Field label={t("الحالة", "Status")}>
+                                  <select style={inputStyle} value={issueForm.status} onChange={(e) => setIssueForm({ ...issueForm, status: e.target.value })}>
+                                    <option value="حاضر">{t("حاضر", "Present")}</option>
+                                    <option value="متأخر">{t("متأخر", "Late")}</option>
+                                  </select>
+                                </Field>
+                                <Field label={t("وقت الحضور الفعلي", "Actual check-in")}>
+                                  <input type="time" style={inputStyle} value={issueForm.checkInTime} onChange={(e) => setIssueForm({ ...issueForm, checkInTime: e.target.value })} />
+                                </Field>
+                                <Field label={t("وقت الانصراف الفعلي", "Actual check-out")}>
+                                  <input type="time" style={inputStyle} value={issueForm.checkOutTime} onChange={(e) => setIssueForm({ ...issueForm, checkOutTime: e.target.value })} />
+                                </Field>
+                                {issueForm.status === "متأخر" && (
+                                  <Field label={t("عدد دقائق التأخير", "Minutes late")}>
+                                    <input type="number" style={inputStyle} value={issueForm.lateMinutes} onChange={(e) => setIssueForm({ ...issueForm, lateMinutes: e.target.value })} />
+                                  </Field>
+                                )}
+                                <Btn small onClick={() => saveEditIssue(r, day)}>{t("✔ حفظ", "✔ Save")}</Btn>
+                                <Btn small tone="secondary" onClick={cancelEditIssue}>{t("إلغاء", "Cancel")}</Btn>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </React.Fragment>
               ))}
             </tbody>
           </table>
