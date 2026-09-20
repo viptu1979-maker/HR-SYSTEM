@@ -781,7 +781,7 @@ const ADVANCE_REQUEST_STATUS_LABELS_EN = {
   "موافقة": "Approved",
   "مرفوض": "Rejected",
 };
-const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late" };
+const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late", "إجازة": "Leave" };
 const PAYROLL_ITEM_TYPE_LABELS_EN = { "سلفة": "Advance", "خصم": "Deduction", "حافز": "Incentive" };
 /* أنواع مخالفات الموظفين ودرجات الإنذار — تُستخدم في تبويب "الإنذارات والمخالفات" */
 const WARNING_CATEGORIES = ["غياب بدون عذر", "تأخر متكرر عن الدوام", "خروج مبكر بدون إذن", "مخالفة سلوكية", "مخالفة بزي العمل والمظهر", "إهمال في العمل", "أخرى"];
@@ -6437,7 +6437,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
               )}
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>
+              <Stamp tone={a.status === "حاضر" ? "green" : a.status === "غائب" ? "brick" : "gold"}>
                 {trLabel(t, ATTENDANCE_STATUS_LABELS_EN, a.status)}{a.status === "متأخر" && a.lateMinutes ? ` (${a.lateMinutes} ${t("د", "min")})` : ""}
               </Stamp>
               {Number(a.overtimeHours || 0) > 0 && (
@@ -6709,19 +6709,36 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   };
   const saveEditIssue = (r, day) => {
     if (!issueForm) return;
-    const updated = {
-      status: issueForm.status,
-      checkInTime: issueForm.checkInTime,
-      checkOutTime: issueForm.checkOutTime,
-      checkInTime2: issueForm.checkInTime2,
-      checkOutTime2: issueForm.checkOutTime2,
-      lateMinutes: issueForm.status === "متأخر" ? Number(issueForm.lateMinutes || 0) : 0,
-      shortfallMinutes: Number(issueForm.shortfallMinutes || 0),
-      earlyLeaveMinutes: Number(issueForm.earlyLeaveMinutes || 0),
-      earlyLeaveMinutes2: Number(issueForm.earlyLeaveMinutes2 || 0),
-      overtimeHours: Number(issueForm.overtimeHours || 0),
-      overtimeHours2: Number(issueForm.overtimeHours2 || 0),
-    };
+    /* يوم الإجازة: يُسجَّل بدون أي أوقات دوام أو دقائق/ساعات قابلة للخصم أو الاحتساب —
+       يوم كامل خارج حساب الغياب والتأخير والإضافي، بخلاف باقي الحالات */
+    const updated =
+      issueForm.status === "إجازة"
+        ? {
+            status: "إجازة",
+            checkInTime: "",
+            checkOutTime: "",
+            checkInTime2: "",
+            checkOutTime2: "",
+            lateMinutes: 0,
+            shortfallMinutes: 0,
+            earlyLeaveMinutes: 0,
+            earlyLeaveMinutes2: 0,
+            overtimeHours: 0,
+            overtimeHours2: 0,
+          }
+        : {
+            status: issueForm.status,
+            checkInTime: issueForm.checkInTime,
+            checkOutTime: issueForm.checkOutTime,
+            checkInTime2: issueForm.checkInTime2,
+            checkOutTime2: issueForm.checkOutTime2,
+            lateMinutes: issueForm.status === "متأخر" ? Number(issueForm.lateMinutes || 0) : 0,
+            shortfallMinutes: Number(issueForm.shortfallMinutes || 0),
+            earlyLeaveMinutes: Number(issueForm.earlyLeaveMinutes || 0),
+            earlyLeaveMinutes2: Number(issueForm.earlyLeaveMinutes2 || 0),
+            overtimeHours: Number(issueForm.overtimeHours || 0),
+            overtimeHours2: Number(issueForm.overtimeHours2 || 0),
+          };
     if (day.record) {
       setAttendance((prev) => prev.map((a) => (a.id === day.record.id ? { ...a, ...updated } : a)));
     } else {
@@ -7501,46 +7518,58 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                           <option value="حاضر">{t("حاضر", "Present")}</option>
                           <option value="غائب">{t("غائب", "Absent")}</option>
                           <option value="متأخر">{t("متأخر", "Late")}</option>
+                          <option value="إجازة">{t("إجازة", "Leave")}</option>
                         </select>
                       </Field>
-                      <Field label={t("وقت الحضور الفعلي (صباحي)", "Actual check-in (AM)")}>
-                        <input type="time" style={inputStyle} value={issueForm.checkInTime} onChange={(e) => setIssueForm({ ...issueForm, checkInTime: e.target.value })} />
-                      </Field>
-                      <Field label={t("وقت الانصراف الفعلي (صباحي)", "Actual check-out (AM)")}>
-                        <input type="time" style={inputStyle} value={issueForm.checkOutTime} onChange={(e) => setIssueForm({ ...issueForm, checkOutTime: e.target.value })} />
-                      </Field>
-                      <Field label={t("وقت الحضور الفعلي (مسائي)", "Actual check-in (PM)")}>
-                        <input type="time" style={inputStyle} value={issueForm.checkInTime2} onChange={(e) => setIssueForm({ ...issueForm, checkInTime2: e.target.value })} />
-                      </Field>
-                      <Field label={t("وقت الانصراف الفعلي (مسائي)", "Actual check-out (PM)")}>
-                        <input type="time" style={inputStyle} value={issueForm.checkOutTime2} onChange={(e) => setIssueForm({ ...issueForm, checkOutTime2: e.target.value })} />
-                      </Field>
-                      {issueForm.status === "متأخر" && (
-                        <Field label={t("دقائق التأخير", "Late minutes")}>
-                          <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.lateMinutes} onChange={(e) => setIssueForm({ ...issueForm, lateMinutes: e.target.value })} />
-                        </Field>
+                      {issueForm.status === "إجازة" ? (
+                        <div style={{ fontSize: 11.5, color: "#a3927a", width: "100%" }}>
+                          {t(
+                            "سيُسجَّل هذا اليوم كإجازة ولن يُحتسب غيابًا أو تأخيرًا، ولن يدخل في خصومات الراتب.",
+                            "This day will be recorded as leave and will not count as absence or lateness, nor factor into salary deductions."
+                          )}
+                        </div>
+                      ) : (
+                        <React.Fragment>
+                          <Field label={t("وقت الحضور الفعلي (صباحي)", "Actual check-in (AM)")}>
+                            <input type="time" style={inputStyle} value={issueForm.checkInTime} onChange={(e) => setIssueForm({ ...issueForm, checkInTime: e.target.value })} />
+                          </Field>
+                          <Field label={t("وقت الانصراف الفعلي (صباحي)", "Actual check-out (AM)")}>
+                            <input type="time" style={inputStyle} value={issueForm.checkOutTime} onChange={(e) => setIssueForm({ ...issueForm, checkOutTime: e.target.value })} />
+                          </Field>
+                          <Field label={t("وقت الحضور الفعلي (مسائي)", "Actual check-in (PM)")}>
+                            <input type="time" style={inputStyle} value={issueForm.checkInTime2} onChange={(e) => setIssueForm({ ...issueForm, checkInTime2: e.target.value })} />
+                          </Field>
+                          <Field label={t("وقت الانصراف الفعلي (مسائي)", "Actual check-out (PM)")}>
+                            <input type="time" style={inputStyle} value={issueForm.checkOutTime2} onChange={(e) => setIssueForm({ ...issueForm, checkOutTime2: e.target.value })} />
+                          </Field>
+                          {issueForm.status === "متأخر" && (
+                            <Field label={t("دقائق التأخير", "Late minutes")}>
+                              <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.lateMinutes} onChange={(e) => setIssueForm({ ...issueForm, lateMinutes: e.target.value })} />
+                            </Field>
+                          )}
+                          <Field label={t("دقائق نقص دوام حر", "Flexible-shift shortfall (min)")}>
+                            <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.shortfallMinutes} onChange={(e) => setIssueForm({ ...issueForm, shortfallMinutes: e.target.value })} />
+                          </Field>
+                          <Field label={t("دقائق الخروج المبكر (صباحي)", "Early leave (AM, min)")}>
+                            <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.earlyLeaveMinutes} onChange={(e) => setIssueForm({ ...issueForm, earlyLeaveMinutes: e.target.value })} />
+                          </Field>
+                          <Field label={t("دقائق الخروج المبكر (مسائي)", "Early leave (PM, min)")}>
+                            <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.earlyLeaveMinutes2} onChange={(e) => setIssueForm({ ...issueForm, earlyLeaveMinutes2: e.target.value })} />
+                          </Field>
+                          <Field label={t("ساعات إضافي (صباحي)", "Overtime (AM, hours)")}>
+                            <input type="number" step="0.5" style={{ ...inputStyle, width: 110 }} value={issueForm.overtimeHours} onChange={(e) => setIssueForm({ ...issueForm, overtimeHours: e.target.value })} />
+                          </Field>
+                          <Field label={t("ساعات إضافي (مسائي)", "Overtime (PM, hours)")}>
+                            <input type="number" step="0.5" style={{ ...inputStyle, width: 110 }} value={issueForm.overtimeHours2} onChange={(e) => setIssueForm({ ...issueForm, overtimeHours2: e.target.value })} />
+                          </Field>
+                          <div style={{ fontSize: 11, color: "#a3927a", width: "100%" }}>
+                            {t(
+                              "دقائق نقص الدوام الحر تُحتسب تلقائيًا للموظفين بدوام حر عند تسجيل الانصراف — عدّلها هنا فقط لو الرقم غير دقيق.",
+                              "Flexible-shift shortfall minutes are auto-calculated at check-out for flexible-schedule employees — only adjust here if the number is inaccurate."
+                            )}
+                          </div>
+                        </React.Fragment>
                       )}
-                      <Field label={t("دقائق نقص دوام حر", "Flexible-shift shortfall (min)")}>
-                        <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.shortfallMinutes} onChange={(e) => setIssueForm({ ...issueForm, shortfallMinutes: e.target.value })} />
-                      </Field>
-                      <Field label={t("دقائق الخروج المبكر (صباحي)", "Early leave (AM, min)")}>
-                        <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.earlyLeaveMinutes} onChange={(e) => setIssueForm({ ...issueForm, earlyLeaveMinutes: e.target.value })} />
-                      </Field>
-                      <Field label={t("دقائق الخروج المبكر (مسائي)", "Early leave (PM, min)")}>
-                        <input type="number" style={{ ...inputStyle, width: 110 }} value={issueForm.earlyLeaveMinutes2} onChange={(e) => setIssueForm({ ...issueForm, earlyLeaveMinutes2: e.target.value })} />
-                      </Field>
-                      <Field label={t("ساعات إضافي (صباحي)", "Overtime (AM, hours)")}>
-                        <input type="number" step="0.5" style={{ ...inputStyle, width: 110 }} value={issueForm.overtimeHours} onChange={(e) => setIssueForm({ ...issueForm, overtimeHours: e.target.value })} />
-                      </Field>
-                      <Field label={t("ساعات إضافي (مسائي)", "Overtime (PM, hours)")}>
-                        <input type="number" step="0.5" style={{ ...inputStyle, width: 110 }} value={issueForm.overtimeHours2} onChange={(e) => setIssueForm({ ...issueForm, overtimeHours2: e.target.value })} />
-                      </Field>
-                      <div style={{ fontSize: 11, color: "#a3927a", width: "100%" }}>
-                        {t(
-                          "دقائق نقص الدوام الحر تُحتسب تلقائيًا للموظفين بدوام حر عند تسجيل الانصراف — عدّلها هنا فقط لو الرقم غير دقيق.",
-                          "Flexible-shift shortfall minutes are auto-calculated at check-out for flexible-schedule employees — only adjust here if the number is inaccurate."
-                        )}
-                      </div>
                       <Btn small onClick={() => saveEditIssue(issuesRow, day)}>{t("✔ حفظ", "✔ Save")}</Btn>
                       <Btn small tone="secondary" onClick={cancelEditIssue}>{t("إلغاء", "Cancel")}</Btn>
                     </div>
@@ -11269,7 +11298,7 @@ function EmployeeSelfView({
                     {a.checkInTime || "—"} → {a.checkOutTime || "—"}
                   </span>
                 )}
-                <Stamp tone={a.status === "حاضر" ? "green" : a.status === "متأخر" ? "gold" : "brick"}>{trLabel(t, ATTENDANCE_STATUS_LABELS_EN, a.status)}</Stamp>
+                <Stamp tone={a.status === "حاضر" ? "green" : a.status === "غائب" ? "brick" : "gold"}>{trLabel(t, ATTENDANCE_STATUS_LABELS_EN, a.status)}</Stamp>
               </div>
             </div>
           ))}
