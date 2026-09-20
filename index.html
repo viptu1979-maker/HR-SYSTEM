@@ -773,6 +773,7 @@ const LEAVE_REQUEST_STATUS_LABELS_EN = {
   "قيد المراجعة": "Pending Review",
   "موافقة مبدئية": "Preliminary Approved",
   "مرفوضة من مدير الكيان": "Rejected by Entity Manager",
+  "مرفوضة مبدئيًا": "Preliminary Rejected",
   "موافقة نهائية": "Final Approved",
   "مرفوضة نهائيًا": "Finally Rejected",
 };
@@ -2056,13 +2057,15 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     logActivity && logActivity("حذف إنذار", "warnings", `${employees.find((e) => e.id === w?.employeeId)?.name || ""}`);
   };
 
-  /* دورة اعتماد طلبات الإجازة: موافقة مبدئية من مدير الكيان، ثم موافقة نهائية من الأدمن/المسؤول العام */
+  /* دورة اعتماد طلبات الإجازة: موافقة مبدئية من "المسؤول العام" (دور manager)، ثم موافقة نهائية من الأدمن —
+     والأدمن نفسه يقدر يعتمد الموافقة المبدئية مباشرة أيضًا (بالإضافة لصلاحيته في الاعتماد النهائي)،
+     بدون الحاجة لانتظار المسؤول العام */
   const preliminaryApproveLeaveRequest = (reqId) => {
     setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة مبدئية", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
     logActivity && logActivity("موافقة مبدئية على طلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
   };
   const preliminaryRejectLeaveRequest = (reqId) => {
-    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوضة من مدير الكيان", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
+    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوضة مبدئيًا", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
     logActivity && logActivity("رفض مبدئي لطلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
   };
   const finalApproveLeaveRequest = (reqId) => {
@@ -3015,8 +3018,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           <LeaveRequestsTab
             employees={scopedEmployees}
             leaveRequests={scopedLeaveRequests}
-            isEntityManager={isEntityManager}
-            isFinalApprover={isAdmin || isManager}
+            isPreliminaryApprover={isManager || isAdmin}
+            isFinalApprover={isAdmin}
             onPreliminaryApprove={preliminaryApproveLeaveRequest}
             onPreliminaryReject={preliminaryRejectLeaveRequest}
             onFinalApprove={finalApproveLeaveRequest}
@@ -8609,14 +8612,15 @@ function VerifyCodeScreen({ user, code, setCode, onSubmit, onResend, onCancel, e
 }
 
 /* ============ حساب موظف: عرض شخصي فقط ============ */
-/* ============ طلبات الإجازات: موافقة مبدئية (مدير الكيان) ثم موافقة نهائية (الأدمن/المسؤول العام) ============ */
-function LeaveRequestsTab({ employees, leaveRequests, isEntityManager, isFinalApprover, onPreliminaryApprove, onPreliminaryReject, onFinalApprove, onFinalReject, branchName }) {
+/* ============ طلبات الإجازات: موافقة مبدئية (المسؤول العام) ثم موافقة نهائية (الأدمن) —
+   والأدمن يقدر يعتمد الموافقة المبدئية بنفسه مباشرة أيضًا، بدون انتظار المسؤول العام ============ */
+function LeaveRequestsTab({ employees, leaveRequests, isPreliminaryApprover, isFinalApprover, onPreliminaryApprove, onPreliminaryReject, onFinalApprove, onFinalReject, branchName }) {
   const { t } = useLang();
   const empName = (id) => employees.find((e) => e.id === id)?.name || t("موظف محذوف", "Deleted employee");
 
   const pendingPreliminary = leaveRequests.filter((r) => r.status === "قيد المراجعة");
   const pendingFinal = leaveRequests.filter((r) => r.status === "موافقة مبدئية");
-  const history = leaveRequests.filter((r) => ["مرفوضة من مدير الكيان", "موافقة نهائية", "مرفوضة نهائيًا"].includes(r.status));
+  const history = leaveRequests.filter((r) => ["مرفوضة من مدير الكيان", "مرفوضة مبدئيًا", "موافقة نهائية", "مرفوضة نهائيًا"].includes(r.status));
 
   const statusTone = (s) =>
     s === "موافقة نهائية" ? "green" : s === "موافقة مبدئية" ? "gold" : s === "قيد المراجعة" ? "gold" : "brick";
@@ -8640,9 +8644,9 @@ function LeaveRequestsTab({ employees, leaveRequests, isEntityManager, isFinalAp
 
   return (
     <div>
-      <Header title={t("طلبات الإجازات", "Leave Requests")} subtitle={t("موافقة مبدئية من مدير الكيان، ثم موافقة نهائية من الأدمن/المسؤول العام", "Preliminary approval by the entity manager, then final approval by the admin/general manager")} />
+      <Header title={t("طلبات الإجازات", "Leave Requests")} subtitle={t("موافقة مبدئية من المسؤول العام، ثم موافقة نهائية من الأدمن — والأدمن يقدر يعتمد الموافقة المبدئية بنفسه مباشرة أيضًا", "Preliminary approval by the General Manager, then final approval by the admin — the admin can also grant preliminary approval directly")} />
 
-      {(isEntityManager || isFinalApprover) && (
+      {isPreliminaryApprover && (
         <>
           <SectionTitle>{t("بانتظار الموافقة المبدئية", "Awaiting Preliminary Approval")} ({pendingPreliminary.length})</SectionTitle>
           {pendingPreliminary.length === 0 && <Empty text={t("لا توجد طلبات بانتظار الموافقة المبدئية", "No requests awaiting preliminary approval")} />}
@@ -8677,13 +8681,6 @@ function LeaveRequestsTab({ employees, leaveRequests, isEntityManager, isFinalAp
               }
             />
           ))}
-          {!isEntityManager && (
-            <>
-              <SectionTitle>{t("بانتظار الموافقة المبدئية (لدى مدير الكيان)", "Awaiting Preliminary Approval (with Entity Manager)")} ({pendingPreliminary.length})</SectionTitle>
-              {pendingPreliminary.length === 0 && <Empty text={t("لا توجد طلبات", "No requests")} />}
-              {pendingPreliminary.map((r) => <RequestRow key={r.id} r={r} />)}
-            </>
-          )}
         </>
       )}
 
