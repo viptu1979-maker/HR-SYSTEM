@@ -3453,21 +3453,6 @@ function effectiveShift(emp, dayName, shiftKey = "workShift", defaults = { start
   return { start: base?.start || defaults.start, end: base?.end || defaults.end };
 }
 
-/* هل انتهى وقت دوام الموظف المتوقع لهذا اليوم؟ — نستخدمها عشان ما نحتسب اليوم الحالي "غياب" (تلقائي
-   أو في قائمة تصحيح الرواتب) إلا بعد ما ينتهي وقت دوامه فعليًا، بدل ما يُحتسب غائب من أول الصبح رغم
-   إن دوامه لسه ما بدأ. لو عنده فترتين (صباحية ومسائية) ناخذ نهاية الفترة الثانية */
-function workdayHasEnded(emp, dayName, now) {
-  const toMinutes = (hhmm) => {
-    const [h, m] = (hhmm || "00:00").split(":").map(Number);
-    return h * 60 + m;
-  };
-  const nowMinutes = now.getHours() * 60 + now.getMinutes();
-  let endMinutes = toMinutes(effectiveShift(emp, dayName).end);
-  if (emp?.twoShifts) {
-    endMinutes = Math.max(endMinutes, toMinutes(emp.workShift2?.end || "22:00"));
-  }
-  return nowMinutes >= endMinutes;
-}
 
 /* حساب أيام الغياب "الضمنية" لموظف خلال فترة محدَّدة (rangeStart→rangeEnd): أي يوم عمل (مو إجازته الأسبوعية،
    ومو ضمن إجازة معتمدة، ومو قبل تاريخ تعيينه، ومو يوم مستقبلي) ومالوش أي سجل حضور مسجَّل إطلاقًا (لا حضور
@@ -3492,7 +3477,7 @@ function countMissingAttendanceDays(emp, periodAttendanceRecords, employeeApprov
     if (offDays.includes(JS_DAY_INDEX_TO_AR[dateObj.getDay()])) continue; /* يوم إجازته الأسبوعية */
     const onApprovedLeave = (employeeApprovedLeaves || []).some((l) => l.from && l.to && dateStr >= l.from && dateStr <= l.to);
     if (onApprovedLeave) continue; /* ضمن إجازة معتمدة */
-    if (dateObj.getTime() === today.getTime() && !workdayHasEnded(emp, JS_DAY_INDEX_TO_AR[dateObj.getDay()], new Date())) continue; /* اليوم الحالي ولسه دوامه ما انتهى — ما نحكم عليه غياب لسه */
+    if (dateObj.getTime() === today.getTime()) continue; /* اليوم الحالي — ما نحكم عليه غياب إلا بعد انتهائه فعليًا (يبدأ يُحتسب من اليوم التالي) */
     missing++;
   }
   return missing;
@@ -3544,7 +3529,7 @@ function getAttendanceIssueDays(emp, periodAttendanceRecords, employeeApprovedLe
     if (offDays.includes(JS_DAY_INDEX_TO_AR[dateObj.getDay()])) continue; /* يوم إجازته الأسبوعية */
     const onApprovedLeave = (employeeApprovedLeaves || []).some((l) => l.from && l.to && dateStr >= l.from && dateStr <= l.to);
     if (onApprovedLeave) continue; /* ضمن إجازة معتمدة */
-    if (dateObj.getTime() === today.getTime() && !workdayHasEnded(emp, JS_DAY_INDEX_TO_AR[dateObj.getDay()], new Date())) continue; /* اليوم الحالي ولسه دوامه ما انتهى — ما نحكم عليه غياب لسه */
+    if (dateObj.getTime() === today.getTime()) continue; /* اليوم الحالي — ما نحكم عليه غياب إلا بعد انتهائه فعليًا (يبدأ يُحتسب من اليوم التالي) */
     issues.push({ date: dateStr, kind: "missing", record: null, deductibleMinutes: 0, overtimeHours: 0, breakdown: { lateMin: 0, shortfallMin: 0, earlyMin: 0 } });
   }
   return issues;
