@@ -2982,6 +2982,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         {hasTab("attendanceLog") && tab === "attendanceLog" && (
           <AttendanceLogTab
             employees={scopedEmployees}
+            setEmployees={setEmployees}
             attendance={scopedAttendance}
             setAttendance={setAttendance}
             logActivity={logActivity}
@@ -2991,6 +2992,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             onSendMessage={sendMessage}
             dirty={role !== "employee" ? dirty : false}
             onSaveNow={saveNow}
+            canEditWeeklyOff={isAdmin || isManager || isEntityManager}
           />
         )}
         {hasTab("compliance") && tab === "compliance" && (
@@ -3576,13 +3578,138 @@ function expiryStatus(dateStr, t) {
   return { label: tr(`سارية (${days} يوم متبقي)`, `Valid (${days} days left)`), tone: "green", days };
 }
 
+/* حزمة موحّدة من الحالة والدوال اللازمة لفتح/تعديل "الملف الشخصي للموظف" (EmployeeProfileModal) —
+   مستخرجة كـ hook مشترك عشان أي شاشة تحتاج تفتح نفس النافذة (تبويب الموظفين، سجل الحضور...) تقدر
+   تستخدمها بدون تكرار نفس منطق التحديث المزدوج (employees + profileEmp) في كل شاشة على حدة */
+function useEmployeeProfileHandlers(employees, setEmployees, logActivity) {
+  const [profileEmp, setProfileEmp] = useState(null);
+
+  const addCareerEntry = (empId, entry) => {
+    const newEntry = { ...entry, id: uid() };
+    setEmployees((prev) =>
+      prev.map((e) => (e.id === empId ? { ...e, careerHistory: [...(e.careerHistory || []), newEntry] } : e))
+    );
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, careerHistory: [...(prev.careerHistory || []), newEntry] } : prev));
+    logActivity && logActivity("إضافة حدث مسار وظيفي", "employees", employees.find((e) => e.id === empId)?.name || "");
+  };
+
+  const removeCareerEntry = (empId, entryId) => {
+    setEmployees((prev) =>
+      prev.map((e) => (e.id === empId ? { ...e, careerHistory: (e.careerHistory || []).filter((h) => h.id !== entryId) } : e))
+    );
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, careerHistory: (prev.careerHistory || []).filter((h) => h.id !== entryId) } : prev));
+  };
+
+  const updateGovFees = (empId, fees) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, govFees: { ...(e.govFees || {}), ...fees } } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, govFees: { ...(prev.govFees || {}), ...fees } } : prev));
+    logActivity && logActivity("تعديل رسوم حكومية", "employees", employees.find((e) => e.id === empId)?.name || "");
+  };
+
+  const toggleWeeklyOffDay = (empId, day) => {
+    setEmployees((prev) =>
+      prev.map((e) => {
+        if (e.id !== empId) return e;
+        const current = getOffDays(e);
+        const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day];
+        return { ...e, weeklyOffDays: next, weeklyOffDay: next[0] || "" };
+      })
+    );
+    setProfileEmp((prev) => {
+      if (!prev || prev.id !== empId) return prev;
+      const current = getOffDays(prev);
+      const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day];
+      return { ...prev, weeklyOffDays: next, weeklyOffDay: next[0] || "" };
+    });
+    logActivity && logActivity("تحديد الإجازة الأسبوعية", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${day}`);
+  };
+
+  const updateWorkShift = (empId, shift) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, workShift: shift } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, workShift: shift } : prev));
+    logActivity && logActivity("تحديد وقت الدوام", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${shift.start}-${shift.end}`);
+  };
+
+  /* دوامين في اليوم لبعض الموظفين (مثلاً فترة صباحية وفترة مسائية) */
+  const updateWorkShift2 = (empId, shift) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, workShift2: shift } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, workShift2: shift } : prev));
+    logActivity && logActivity("تحديد وقت الفترة المسائية", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${shift.start}-${shift.end}`);
+  };
+  const toggleTwoShifts = (empId, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, twoShifts: value } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, twoShifts: value } : prev));
+    logActivity && logActivity("تفعيل دوامين", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
+  };
+
+  /* الدوام الحر: بدون وقت دخول محدد (ما فيش "تأخير")، لكن لازم يكمّل 8 ساعات عمل فعلية كل يوم —
+     أي نقص في الساعات وقت الانصراف يُخصم بنفس منطق خصم التأخير الموجود، وأي زيادة تُحتسب وقت إضافي */
+  const toggleFlexibleSchedule = (empId, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, flexibleSchedule: value } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, flexibleSchedule: value } : prev));
+    logActivity && logActivity("تفعيل الدوام الحر", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
+  };
+
+  /* أوقات دوام مخصّصة لكل يوم من أيام الأسبوع (مثلاً السبت دوام أقصر من باقي الأيام) — بديل عن وقت الفترة
+     الصباحية الموحّدة لكل الأيام */
+  const toggleUseDaySchedules = (empId, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, useDaySchedules: value } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, useDaySchedules: value } : prev));
+    logActivity && logActivity("تفعيل الدوام حسب اليوم", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
+  };
+  const updateDaySchedule = (empId, day, field, value) => {
+    setEmployees((prev) =>
+      prev.map((e) => {
+        if (e.id !== empId) return e;
+        const current = e.daySchedules || {};
+        const dayCurrent = current[day] || { start: e.workShift?.start || "08:00", end: e.workShift?.end || "17:00" };
+        return { ...e, daySchedules: { ...current, [day]: { ...dayCurrent, [field]: value } } };
+      })
+    );
+    setProfileEmp((prev) => {
+      if (!prev || prev.id !== empId) return prev;
+      const current = prev.daySchedules || {};
+      const dayCurrent = current[day] || { start: prev.workShift?.start || "08:00", end: prev.workShift?.end || "17:00" };
+      return { ...prev, daySchedules: { ...current, [day]: { ...dayCurrent, [field]: value } } };
+    });
+  };
+
+  /* إعادة ضبط بصمة الوجه — تحذفها من ملف الموظف، فيُطلب منه تسجيلها من جديد عند أول حضور/انصراف قادم
+     (يُستخدم لو تغيّر شكل الموظف بشكل كبير، أو لو تم تسجيلها بالخطأ لموظف آخر، أو بطلب الموظف) */
+  const resetFaceDescriptor = (empId) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, faceDescriptor: null, faceRegisteredAt: null } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, faceDescriptor: null, faceRegisteredAt: null } : prev));
+    logActivity && logActivity("إعادة ضبط بصمة الوجه", "employees", employees.find((e) => e.id === empId)?.name || "");
+  };
+
+  /* تفعيل/تعطيل اشتراط التحقق بالوجه لموظف معيّن — لو معطّل، الموظف يسجّل حضور/انصراف بالموقع فقط بدون كاميرا.
+     غير محدد (undefined) = مفعّل افتراضيًا (نفس السلوك الحالي لكل الموظفين) */
+  const toggleFaceRequired = (empId, value) => {
+    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, faceAttendanceEnabled: value } : e)));
+    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, faceAttendanceEnabled: value } : prev));
+    logActivity && logActivity("تفعيل/تعطيل التحقق بالوجه", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "مفعّل" : "معطّل"}`);
+  };
+
+  return {
+    profileEmp, setProfileEmp,
+    addCareerEntry, removeCareerEntry, updateGovFees, toggleWeeklyOffDay,
+    updateWorkShift, updateWorkShift2, toggleTwoShifts, toggleFlexibleSchedule,
+    toggleUseDaySchedules, updateDaySchedule, resetFaceDescriptor, toggleFaceRequired,
+  };
+}
+
 function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch, leaves, logActivity, canEditWeeklyOff = true, jumpToEmployeeId, onJumpHandled }) {
   const { t } = useLang();
   const [form, setForm] = useState(EMPTY_EMP);
   const [editingId, setEditingId] = useState(null);
   const [filterBranch, setFilterBranch] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [profileEmp, setProfileEmp] = useState(null);
+  const {
+    profileEmp, setProfileEmp,
+    addCareerEntry, removeCareerEntry, updateGovFees, toggleWeeklyOffDay,
+    updateWorkShift, updateWorkShift2, toggleTwoShifts, toggleFlexibleSchedule,
+    toggleUseDaySchedules, updateDaySchedule, resetFaceDescriptor, toggleFaceRequired,
+  } = useEmployeeProfileHandlers(employees, setEmployees, logActivity);
   const [formErr, setFormErr] = useState("");
   /* تعريف براتب / تعريف بجهة عمل — قابلة للطباعة، معتمدة على نمط الخطابات الرسمية السعودية */
   const [certEmp, setCertEmp] = useState(null);
@@ -3643,112 +3770,6 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     setEmployees((prev) => prev.filter((e) => e.id !== id));
     logActivity && logActivity("حذف موظف", "employees", target?.name || id);
     if (editingId === id) resetForm();
-  };
-
-  const addCareerEntry = (empId, entry) => {
-    const newEntry = { ...entry, id: uid() };
-    setEmployees((prev) =>
-      prev.map((e) => (e.id === empId ? { ...e, careerHistory: [...(e.careerHistory || []), newEntry] } : e))
-    );
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, careerHistory: [...(prev.careerHistory || []), newEntry] } : prev));
-    logActivity && logActivity("إضافة حدث مسار وظيفي", "employees", employees.find((e) => e.id === empId)?.name || "");
-  };
-
-  const updateGovFees = (empId, fees) => {
-    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, govFees: { ...(e.govFees || {}), ...fees } } : e)));
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, govFees: { ...(prev.govFees || {}), ...fees } } : prev));
-    logActivity && logActivity("تعديل رسوم حكومية", "employees", employees.find((e) => e.id === empId)?.name || "");
-  };
-
-  const toggleWeeklyOffDay = (empId, day) => {
-    setEmployees((prev) =>
-      prev.map((e) => {
-        if (e.id !== empId) return e;
-        const current = getOffDays(e);
-        const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day];
-        return { ...e, weeklyOffDays: next, weeklyOffDay: next[0] || "" };
-      })
-    );
-    setProfileEmp((prev) => {
-      if (!prev || prev.id !== empId) return prev;
-      const current = getOffDays(prev);
-      const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day];
-      return { ...prev, weeklyOffDays: next, weeklyOffDay: next[0] || "" };
-    });
-    logActivity && logActivity("تحديد الإجازة الأسبوعية", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${day}`);
-  };
-
-  const updateWorkShift = (empId, shift) => {
-    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, workShift: shift } : e)));
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, workShift: shift } : prev));
-    logActivity && logActivity("تحديد وقت الدوام", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${shift.start}-${shift.end}`);
-  };
-
-  /* دوامين في اليوم لبعض الموظفين (مثلاً فترة صباحية وفترة مسائية) */
-  const updateWorkShift2 = (empId, shift) => {
-    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, workShift2: shift } : e)));
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, workShift2: shift } : prev));
-    logActivity && logActivity("تحديد وقت الفترة المسائية", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${shift.start}-${shift.end}`);
-  };
-  const toggleTwoShifts = (empId, value) => {
-    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, twoShifts: value } : e)));
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, twoShifts: value } : prev));
-    logActivity && logActivity("تفعيل دوامين", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
-  };
-
-  /* الدوام الحر: بدون وقت دخول محدد (ما فيش "تأخير")، لكن لازم يكمّل 8 ساعات عمل فعلية كل يوم —
-     أي نقص في الساعات وقت الانصراف يُخصم بنفس منطق خصم التأخير الموجود، وأي زيادة تُحتسب وقت إضافي */
-  const toggleFlexibleSchedule = (empId, value) => {
-    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, flexibleSchedule: value } : e)));
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, flexibleSchedule: value } : prev));
-    logActivity && logActivity("تفعيل الدوام الحر", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
-  };
-
-  /* أوقات دوام مخصّصة لكل يوم من أيام الأسبوع (مثلاً السبت دوام أقصر من باقي الأيام) — بديل عن وقت الفترة
-     الصباحية الموحّد لكل الأيام */
-  const toggleUseDaySchedules = (empId, value) => {
-    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, useDaySchedules: value } : e)));
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, useDaySchedules: value } : prev));
-    logActivity && logActivity("تفعيل الدوام حسب اليوم", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "نعم" : "لا"}`);
-  };
-  const updateDaySchedule = (empId, day, field, value) => {
-    setEmployees((prev) =>
-      prev.map((e) => {
-        if (e.id !== empId) return e;
-        const current = e.daySchedules || {};
-        const dayCurrent = current[day] || { start: e.workShift?.start || "08:00", end: e.workShift?.end || "17:00" };
-        return { ...e, daySchedules: { ...current, [day]: { ...dayCurrent, [field]: value } } };
-      })
-    );
-    setProfileEmp((prev) => {
-      if (!prev || prev.id !== empId) return prev;
-      const current = prev.daySchedules || {};
-      const dayCurrent = current[day] || { start: prev.workShift?.start || "08:00", end: prev.workShift?.end || "17:00" };
-      return { ...prev, daySchedules: { ...current, [day]: { ...dayCurrent, [field]: value } } };
-    });
-  };
-
-  /* إعادة ضبط بصمة الوجه — تحذفها من ملف الموظف، فيُطلب منه تسجيلها من جديد عند أول حضور/انصراف قادم
-     (يُستخدم لو تغيّر شكل الموظف بشكل كبير، أو لو تم تسجيلها بالخطأ لموظف آخر، أو بطلب الموظف) */
-  const resetFaceDescriptor = (empId) => {
-    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, faceDescriptor: null, faceRegisteredAt: null } : e)));
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, faceDescriptor: null, faceRegisteredAt: null } : prev));
-    logActivity && logActivity("إعادة ضبط بصمة الوجه", "employees", employees.find((e) => e.id === empId)?.name || "");
-  };
-
-  /* تفعيل/تعطيل اشتراط التحقق بالوجه لموظف معيّن — لو معطّل، الموظف يسجّل حضور/انصراف بالموقع فقط بدون كاميرا.
-     غير محدد (undefined) = مفعّل افتراضيًا (نفس السلوك الحالي لكل الموظفين) */
-  const toggleFaceRequired = (empId, value) => {
-    setEmployees((prev) => prev.map((e) => (e.id === empId ? { ...e, faceAttendanceEnabled: value } : e)));
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, faceAttendanceEnabled: value } : prev));
-    logActivity && logActivity("تفعيل/تعطيل التحقق بالوجه", "employees", `${employees.find((e) => e.id === empId)?.name || ""}: ${value ? "مفعّل" : "معطّل"}`);
-  };
-
-  const removeCareerEntry = (empId, entryId) => {
-    setEmployees((prev) =>
-      prev.map((e) => (e.id === empId ? { ...e, careerHistory: (e.careerHistory || []).filter((h) => h.id !== entryId) } : e))
-    );
-    setProfileEmp((prev) => (prev && prev.id === empId ? { ...prev, careerHistory: (prev.careerHistory || []).filter((h) => h.id !== entryId) } : prev));
   };
 
   const q = searchQuery.trim().toLowerCase();
@@ -6149,12 +6170,20 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
 }
 
 /* ============ سجل الحضور اليومي (قسم مستقل تحت الحضور والإجازات) ============ */
-function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage, dirty, onSaveNow }) {
+function AttendanceLogTab({ employees, setEmployees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage, dirty, onSaveNow, canEditWeeklyOff = true }) {
   const { t } = useLang();
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [logSearch, setLogSearch] = useState("");
   const [notifyResult, setNotifyResult] = useState("");
+  /* فتح "الملف الشخصي للموظف" (نفس نافذة تبويب الموظفين) عند الضغط على اسم الموظف في سجل الحضور —
+     نفس حزمة الحالة والدوال المشتركة، فأي تعديل هنا (مثلاً وقت الدوام) ينعكس فورًا في تبويب الموظفين والعكس */
+  const {
+    profileEmp, setProfileEmp,
+    addCareerEntry, removeCareerEntry, updateGovFees, toggleWeeklyOffDay,
+    updateWorkShift, updateWorkShift2, toggleTwoShifts, toggleFlexibleSchedule,
+    toggleUseDaySchedules, updateDaySchedule, resetFaceDescriptor, toggleFaceRequired,
+  } = useEmployeeProfileHandlers(employees, setEmployees, logActivity);
   /* تعديل سجل حضور موجود بالفعل (تصحيح وقت حضور/انصراف خاطئ، تعديل الحالة أو دقائق التأخير/الإضافي...)
      بدل ما يضطر الأدمن يحذف السجل بالكامل (ويضيع الصور المرفوعة معه) ويسجّله يدويًا من جديد */
   const [editingId, setEditingId] = useState(null);
@@ -6401,7 +6430,17 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
           <React.Fragment key={a.id}>
           <div style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5, flexWrap: "wrap", gap: 8 }}>
             <div>
-              <b>{empName(a.employeeId)}</b> — {a.date}
+              <b
+                onClick={() => {
+                  const emp = employees.find((e) => e.id === a.employeeId);
+                  if (emp) setProfileEmp(emp);
+                }}
+                style={{ cursor: employees.some((e) => e.id === a.employeeId) ? "pointer" : "default", textDecoration: employees.some((e) => e.id === a.employeeId) ? "underline dotted" : "none" }}
+                title={t("عرض معلومات الموظف", "View employee info")}
+              >
+                {empName(a.employeeId)}
+              </b>{" "}
+              — {a.date}
               {dayNameOfDate(a.date, t) && (
                 <span style={{ color: "#8a7a63", fontWeight: 400 }}> ({dayNameOfDate(a.date, t)})</span>
               )}
@@ -6527,6 +6566,28 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
           <img src={viewingPhoto.src} style={{ maxWidth: 320, maxHeight: 320, borderRadius: 14, border: "3px solid #fff" }} />
           <div style={{ color: "#fff", marginTop: 10, fontSize: 13 }}>{viewingPhoto.label}</div>
         </div>
+      )}
+
+      {profileEmp && (
+        <EmployeeProfileModal
+          emp={employees.find((e) => e.id === profileEmp.id) || profileEmp}
+          branches={branches}
+          leaves={leaves || []}
+          onAddCareerEntry={addCareerEntry}
+          onRemoveCareerEntry={removeCareerEntry}
+          onUpdateGovFees={updateGovFees}
+          onToggleWeeklyOffDay={toggleWeeklyOffDay}
+          onUpdateWorkShift={updateWorkShift}
+          onUpdateWorkShift2={updateWorkShift2}
+          onToggleTwoShifts={toggleTwoShifts}
+          onToggleFlexibleSchedule={toggleFlexibleSchedule}
+          onToggleUseDaySchedules={toggleUseDaySchedules}
+          onUpdateDaySchedule={updateDaySchedule}
+          onResetFace={resetFaceDescriptor}
+          onToggleFaceRequired={toggleFaceRequired}
+          canEditWeeklyOff={canEditWeeklyOff}
+          onClose={() => setProfileEmp(null)}
+        />
       )}
     </div>
   );
