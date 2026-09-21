@@ -1506,8 +1506,15 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             warnings: d.warnings || [],
           });
         } else {
-          /* أول مرة يتشغّل فيها النظام: أنشئ المستند بالبيانات الافتراضية */
-          DATA_DOC.set({ entities: ENTITIES_SEED, branches: BRANCHES_SEED, employees: [], leaves: [], leaveRequests: [], advanceRequests: [], attendance: [], vehicles: [], gosiRates, payrollItems: [], tasks: [], messages: [], equipment: [], workOrders: [], qualityTemplates: [], qualitySubmissions: [], warnings: [] }).catch(() => {});
+          /* المستند الرئيسي غير موجود على الخادم إطلاقًا. سابقًا كان الكود هنا يكتب فورًا مستندًا
+             فاضيًا بصمت (بدون تنبيه ولا تأكيد) — وهذا خطير: أي عطل مؤقت أو خطأ صلاحيات يخلّي القراءة
+             ترجع "المستند مش موجود" كان بيتسبب في مسح أي بيانات حقيقية للأبد بصمت. دلوقتي: لا نكتب
+             أي شيء تلقائيًا فوق القاعدة — نسيب الحالة المحلية زي ما هي (لو كانت فيها بيانات محمّلة من
+             قبل هتفضل ظاهرة على الشاشة) وننبّه الأدمن بوضوح ليتصرف بنفسه (يتأكد إنه فعلاً نظام جديد
+             لسه ما اتفتحش قبل كده، أو يسترجع نسخة احتياطية فورًا من الإعدادات) */
+          setSyncError("⚠ تنبيه هام: مستند البيانات الرئيسي غير موجود في القاعدة! لا تحفظ أي شيء الآن — روح لتبويب الإعدادات واسترجع أحدث نسخة احتياطية فورًا، أو تواصل مع الدعم الفني قبل أي خطوة أخرى");
+          setLoaded(true);
+          return;
         }
         setSyncError("");
         setLoaded(true);
@@ -1633,22 +1640,37 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const restoreBackup = (backupData) => {
     const {
       entities: bEntities, branches: bBranches, employees: bEmployees, leaves: bLeaves,
-      leaveRequests: bLeaveRequests, advanceRequests: bAdvanceRequests, attendance: bAttendance,
-      gosiRates: bGosiRates, vehicles: bVehicles, payrollItems: bPayrollItems, tasks: bTasks,
+      leaveRequests: bLeaveRequests, advanceRequests: bAdvanceRequests, attendance: bAttendanceRaw,
+      gosiRates: bGosiRates, vehicles: bVehicles, payrollItems: bPayrollItems, tasks: bTasksRaw,
       messages: bMessages, equipment: bEquipment, workOrders: bWorkOrders, qualityTemplates: bQualityTemplates,
       qualitySubmissions: bQualitySubmissions, warnings: bWarnings, users: bUsers,
-    } = backupData;
+    } = backupData || {};
+    /* حماية إضافية: لو النسخة الاحتياطية المُسترجَعة فيها صور base64 قديمة (قبل نقل الصور لـ Firebase
+       Storage)، نشيلها هنا نفس منطق cleanupLegacyBase64Photos — عشان ما تمنعش الاسترجاع نفسه من
+       الحفظ بسبب تخطّي حد حجم مستند Firestore (1 ميجابايت)، زي ما حصل قبل كده مع الحفظ العادي */
+    const isBase64Photo = (s) => typeof s === "string" && s.startsWith("data:");
+    const bAttendance = (bAttendanceRaw || []).map((a) => {
+      const clean = { ...a };
+      ["checkInPhoto", "checkOutPhoto", "checkInPhoto2", "checkOutPhoto2"].forEach((k) => {
+        if (isBase64Photo(clean[k])) clean[k] = "";
+      });
+      return clean;
+    });
+    const bTasks = (bTasksRaw || []).map((ts) => ({
+      ...ts,
+      completionPhotos: (ts.completionPhotos || []).filter((p) => !isBase64Photo(p)),
+    }));
     setEntities(bEntities || []);
     setBranches(bBranches || []);
     setEmployees(bEmployees || []);
     setLeaves(bLeaves || []);
     setLeaveRequests(bLeaveRequests || []);
     setAdvanceRequests(bAdvanceRequests || []);
-    setAttendance(bAttendance || []);
+    setAttendance(bAttendance);
     setGosiRates(bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 });
     setVehicles(bVehicles || []);
     setPayrollItems(bPayrollItems || []);
-    setTasks(bTasks || []);
+    setTasks(bTasks);
     setMessages(bMessages || []);
     setEquipment(bEquipment || []);
     setWorkOrders(bWorkOrders || []);
@@ -1657,21 +1679,45 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     setWarnings(bWarnings || []);
     const payload = {
       entities: bEntities || [], branches: bBranches || [], employees: bEmployees || [], leaves: bLeaves || [],
-      leaveRequests: bLeaveRequests || [], advanceRequests: bAdvanceRequests || [], attendance: bAttendance || [],
+      leaveRequests: bLeaveRequests || [], advanceRequests: bAdvanceRequests || [], attendance: bAttendance,
       gosiRates: bGosiRates || { saudiEmployee: 9.75, saudiEmployer: 11.75, nonSaudiEmployer: 2 },
-      vehicles: bVehicles || [], payrollItems: bPayrollItems || [], tasks: bTasks || [], messages: bMessages || [],
+      vehicles: bVehicles || [], payrollItems: bPayrollItems || [], tasks: bTasks, messages: bMessages || [],
       equipment: bEquipment || [], workOrders: bWorkOrders || [], qualityTemplates: bQualityTemplates || [], qualitySubmissions: bQualitySubmissions || [],
       warnings: bWarnings || [],
     };
-    DATA_DOC.set(payload).then(() => {
+    setSaving(true);
+    setSyncError("");
+    /* مهم: هذه الدالة كانت قبل كده "أطلق واترك" (fire-and-forget) بدون أي .catch() على كتابة
+       Firestore — فلو فشلت الكتابة (صلاحيات، انقطاع، أو تخطّي حد الحجم) كان الأدمن يشوف البيانات
+       محليًا وكأن الاسترجاع نجح، بينما القاعدة الفعلية فضلت زي ما هي، ولما يعمل تحديث للصفحة يرجع
+       يشوف صفر بيانات من غير أي رسالة خطأ توضّح السبب. دلوقتي بترجع Promise حقيقي يعكس نجاح/فشل
+       الحفظ فعليًا في القاعدة */
+    const dataPromise = DATA_DOC.set(JSON.parse(JSON.stringify(payload))).then(() => {
       lastSyncedRef.current = JSON.stringify(payload);
       refreshFieldBaselines(payload);
+      setDirty(false);
     });
+    let usersPromise = Promise.resolve();
     if (Array.isArray(bUsers) && bUsers.length) {
       setUsers(bUsers);
-      USERS_DOC.set({ users: bUsers });
+      usersPromise = USERS_DOC.set({ users: bUsers });
     }
-    logActivity && logActivity("استرجاع نسخة احتياطية", "settings", `تاريخ النسخة: ${backupData.date || "—"}`);
+    return Promise.all([dataPromise, usersPromise])
+      .then(() => {
+        setSaving(false);
+        setSyncError("");
+        setSaveMsg("تم استرجاع النسخة الاحتياطية وحفظها ✓");
+        setTimeout(() => setSaveMsg(""), 3000);
+        logActivity && logActivity("استرجاع نسخة احتياطية", "settings", `تاريخ النسخة: ${backupData.date || "—"}`);
+        return { ok: true };
+      })
+      .catch((err) => {
+        setSaving(false);
+        const detail = (err ? `${err.code || ""} ${err.message || ""}`.trim() : "") || "خطأ غير معروف";
+        setSyncError(`تعذّر حفظ الاسترجاع في القاعدة [${detail}] — البيانات الظاهرة الآن محليًا فقط ولم تُحفظ فعليًا`);
+        logActivity && logActivity("فشل استرجاع نسخة احتياطية", "settings", `تاريخ النسخة: ${backupData.date || "—"} — ${detail}`);
+        return { ok: false, error: detail };
+      });
   };
 
   /* تنظيف عاجل: صور الحضور/الانصراف وصور توثيق المهام كانت تُخزَّن قديمًا كنص base64 ضخم داخل نفس
@@ -7964,6 +8010,7 @@ function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onClea
   const [backupsLoaded, setBackupsLoaded] = useState(false);
   const [restoring, setRestoring] = useState("");
   const [confirmDate, setConfirmDate] = useState("");
+  const [restoreMsg, setRestoreMsg] = useState({});
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -7979,12 +8026,33 @@ function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onClea
 
   const doRestore = (backup) => {
     setRestoring(backup.date);
-    try {
-      onRestoreBackup && onRestoreBackup(backup);
-    } finally {
-      setRestoring("");
-      setConfirmDate("");
-    }
+    setConfirmDate("");
+    setRestoreMsg((prev) => ({ ...prev, [backup.date]: null }));
+    const result = onRestoreBackup && onRestoreBackup(backup);
+    /* الاسترجاع أصبح غير متزامن (يكتب فعليًا في Firestore وينتظر التأكيد) — نستنى نتيجته الحقيقية
+       قبل ما نقول للأدمن "تم" أو نطفي مؤشر "جارِ الاسترجاع..." */
+    Promise.resolve(result)
+      .then((res) => {
+        setRestoring("");
+        if (res && res.ok === false) {
+          setRestoreMsg((prev) => ({
+            ...prev,
+            [backup.date]: { ok: false, text: t(`✗ فشل الاسترجاع ولم تُحفظ البيانات في القاعدة: ${res.error}`, `✗ Restore failed — nothing was saved to the database: ${res.error}`) },
+          }));
+        } else {
+          setRestoreMsg((prev) => ({
+            ...prev,
+            [backup.date]: { ok: true, text: t("✓ تم الاسترجاع وحُفظ في القاعدة بنجاح", "✓ Restored and saved to the database successfully") },
+          }));
+        }
+      })
+      .catch((err) => {
+        setRestoring("");
+        setRestoreMsg((prev) => ({
+          ...prev,
+          [backup.date]: { ok: false, text: t(`✗ فشل الاسترجاع: ${err && err.message ? err.message : "خطأ غير معروف"}`, `✗ Restore failed: ${err && err.message ? err.message : "unknown error"}`) },
+        }));
+      });
   };
 
   return (
@@ -8078,26 +8146,33 @@ function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onClea
               {backups.map((b) => (
                 <div
                   key={b.date}
-                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", border: `1px solid ${COLORS.line}`, borderRadius: 8, padding: "8px 12px" }}
+                  style={{ border: `1px solid ${COLORS.line}`, borderRadius: 8, padding: "8px 12px" }}
                 >
-                  <div style={{ fontSize: 12.5, color: COLORS.espresso, fontWeight: 700 }}>
-                    {b.date}
-                    <span style={{ fontWeight: 400, color: "#a3927a", marginInlineStart: 8 }}>
-                      {t(`${(b.employees || []).length} موظف — ${(b.users || []).length} حساب دخول`, `${(b.employees || []).length} employees — ${(b.users || []).length} login accounts`)}
-                    </span>
-                  </div>
-                  {confirmDate === b.date ? (
-                    <div style={{ display: "flex", gap: 8 }}>
-                      <span style={{ fontSize: 11.5, color: COLORS.brick, fontWeight: 700 }}>
-                        {t("متأكد؟ هذا هيكتب فوق البيانات الحالية", "Sure? This overwrites current data")}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontSize: 12.5, color: COLORS.espresso, fontWeight: 700 }}>
+                      {b.date}
+                      <span style={{ fontWeight: 400, color: "#a3927a", marginInlineStart: 8 }}>
+                        {t(`${(b.employees || []).length} موظف — ${(b.users || []).length} حساب دخول`, `${(b.employees || []).length} employees — ${(b.users || []).length} login accounts`)}
                       </span>
-                      <Btn small tone="danger" disabled={restoring === b.date} onClick={() => doRestore(b)}>
-                        {restoring === b.date ? t("جارِ الاسترجاع...", "Restoring...") : t("تأكيد الاسترجاع", "Confirm Restore")}
-                      </Btn>
-                      <Btn small tone="secondary" onClick={() => setConfirmDate("")}>{t("إلغاء", "Cancel")}</Btn>
                     </div>
-                  ) : (
-                    <Btn small tone="secondary" onClick={() => setConfirmDate(b.date)}>{t("استرجاع هذه النسخة", "Restore this backup")}</Btn>
+                    {confirmDate === b.date ? (
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <span style={{ fontSize: 11.5, color: COLORS.brick, fontWeight: 700 }}>
+                          {t("متأكد؟ هذا هيكتب فوق البيانات الحالية", "Sure? This overwrites current data")}
+                        </span>
+                        <Btn small tone="danger" disabled={restoring === b.date} onClick={() => doRestore(b)}>
+                          {restoring === b.date ? t("جارِ الاسترجاع...", "Restoring...") : t("تأكيد الاسترجاع", "Confirm Restore")}
+                        </Btn>
+                        <Btn small tone="secondary" onClick={() => setConfirmDate("")}>{t("إلغاء", "Cancel")}</Btn>
+                      </div>
+                    ) : (
+                      <Btn small tone="secondary" onClick={() => setConfirmDate(b.date)}>{t("استرجاع هذه النسخة", "Restore this backup")}</Btn>
+                    )}
+                  </div>
+                  {restoreMsg[b.date] && (
+                    <div style={{ fontSize: 11.5, marginTop: 6, fontWeight: 700, color: restoreMsg[b.date].ok ? "#5FA875" : COLORS.brick }}>
+                      {restoreMsg[b.date].text}
+                    </div>
                   )}
                 </div>
               ))}
