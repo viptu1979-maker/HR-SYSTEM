@@ -1552,16 +1552,33 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     if (role === "employee") {
       setSaving(true);
       setSyncError("");
-      /* الحفظ فوري (بدون أي تأخير) — أهم حاجة إن تسجيل الحضور/الانصراف ينحفظ في قاعدة البيانات
+      /* الحفظ فوري (بدون أي تأخير مصطنع) — أهم حاجة إن تسجيل الحضور/الانصراف ينحفظ في قاعدة البيانات
          *قبل* ما الموظف يقفل المتصفح أو يبدّل تطبيق على جواله، لأن المتصفحات على الموبايل بتوقف أي
          مؤقّت (setTimeout) لسه ما اشتغلش لو التطبيق راح للخلفية — فأي تأخير هنا كان بيخاطر بضياع
-         الحركة بالكامل دون أي إشعار بالفشل */
-      /* شبكة أمان: أي قيمة "undefined" في أي مكان بالبيانات (حتى لو ما انتبهناش لها) هترفض الحفظ
-         بالكامل من Firestore — تحويلها لـ JSON وإرجاعها يشيلها تلقائيًا قبل الحفظ */
-      DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
-        .then(() => {
-          lastSyncedRef.current = json;
-          refreshFieldBaselines(payload);
+         الحركة بالكامل دون أي إشعار بالفشل. الكود بيبدأ الحفظ فورًا زي ما كان بالظبط، بس بخطوة أمان
+         إضافية (get سريع) قبل الكتابة النهائية — موضّحة بالتفصيل تحت */
+      /* إصلاح جوهري لحماية البيانات: جهاز الموظف (خصوصًا لو فاضل شغال ساعات/أيام طويلة زي تابلت
+         تسجيل الحضور عند الباب) ممكن تبقى نسخته المحلية من أقسام تانية غير الحضور (زي قائمة الموظفين
+         أو الفروع) قديمة لو حصل أي انقطاع مؤقت في الاتصال اللحظي (onSnapshot) من غير ما يلاحظ حد.
+         الكود القديم كان بيكتب "كل" الأقسام دفعة واحدة من النسخة المحلية (حتى لو قديمة) فوق القاعدة —
+         وده بالظبط اللي كان قادر يمسح موظفين حقيقيين لو جهاز موظف واحد بس كانت نسخته المحلية قديمة
+         وعمل أي حركة بسيطة (تسجيل حضور مثلاً). دلوقتي: قبل الحفظ مباشرة، نجيب أحدث نسخة من الخادم،
+         ونستخدمها لأي قسم إحنا (الجلسة دي تحديدًا) ما عدّلناهوش محليًا، ونحافظ على نسختنا المحلية بس
+         للأقسام اللي فعلاً عدّلنا عليها (زي الحضور نفسه) — فمفيش أي قسم تاني ينمسح بالغلط أبدًا */
+      DATA_DOC.get()
+        .then((snap) => {
+          const server = snap.data() || {};
+          const merged = {};
+          Object.keys(payload).forEach((key) => {
+            const baselineJson = lastSyncedFieldsRef.current[key];
+            const localJson = JSON.stringify(payload[key]);
+            merged[key] = baselineJson !== undefined && localJson === baselineJson && server[key] !== undefined ? server[key] : payload[key];
+          });
+          return DATA_DOC.set(JSON.parse(JSON.stringify(merged))).then(() => merged);
+        })
+        .then((merged) => {
+          lastSyncedRef.current = JSON.stringify(merged);
+          refreshFieldBaselines(merged);
           setDirty(false);
           setSaving(false);
           setSyncError("");
@@ -1760,10 +1777,23 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     }
     setSaving(true);
     setSyncError("");
-    DATA_DOC.set(JSON.parse(JSON.stringify(payload)))
-      .then(() => {
-        lastSyncedRef.current = json;
-        refreshFieldBaselines(payload);
+    /* نفس منطق الحماية المستخدم في الحفظ التلقائي للموظف: نجيب أحدث نسخة من الخادم أولًا، ونحافظ
+       على قيمتها لأي قسم ما عدّلناهوش محليًا في هذه الجلسة (لو مثلاً الجلسة فضلت مفتوحة فترة طويلة
+       وفاتها تحديثات من أجهزة تانية) — بدل ما نكتب فوقها بنسخة محلية قديمة بالغلط */
+    DATA_DOC.get()
+      .then((snap) => {
+        const server = snap.data() || {};
+        const merged = {};
+        Object.keys(payload).forEach((key) => {
+          const baselineJson = lastSyncedFieldsRef.current[key];
+          const localJson = JSON.stringify(payload[key]);
+          merged[key] = baselineJson !== undefined && localJson === baselineJson && server[key] !== undefined ? server[key] : payload[key];
+        });
+        return DATA_DOC.set(JSON.parse(JSON.stringify(merged))).then(() => merged);
+      })
+      .then((merged) => {
+        lastSyncedRef.current = JSON.stringify(merged);
+        refreshFieldBaselines(merged);
         setDirty(false);
         setSaving(false);
         setSaveMsg("تم الحفظ ✓");
