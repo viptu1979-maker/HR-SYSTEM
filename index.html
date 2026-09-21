@@ -2982,7 +2982,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         {hasTab("attendanceLog") && tab === "attendanceLog" && (
           <AttendanceLogTab
             employees={scopedEmployees}
-            setEmployees={setEmployees}
             attendance={scopedAttendance}
             setAttendance={setAttendance}
             logActivity={logActivity}
@@ -2992,7 +2991,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             onSendMessage={sendMessage}
             dirty={role !== "employee" ? dirty : false}
             onSaveNow={saveNow}
-            canEditWeeklyOff={isAdmin || isManager || isEntityManager}
           />
         )}
         {hasTab("compliance") && tab === "compliance" && (
@@ -3538,6 +3536,65 @@ function getAttendanceIssueDays(emp, periodAttendanceRecords, employeeApprovedLe
     issues.push({ date: dateStr, kind: "missing", record: null, deductibleMinutes: 0, overtimeHours: 0, breakdown: { lateMin: 0, shortfallMin: 0, earlyMin: 0 } });
   }
   return issues;
+}
+
+/* تقرير حضور وانصراف كامل ليوم بيوم (لموظف واحد خلال فترة معيّنة) — بخلاف getAttendanceIssueDays اللي
+   يعرض بس "المشاكل" (غياب/تأخير/إضافي)، هذه الدالة ترجّع كل يوم في الفترة بحالته الحقيقية (حاضر،
+   إجازة أسبوعية، إجازة معتمدة، إجازة مسجّلة يدويًا، غياب، متأخر، قبل التعيين، أو يوم لسه ما جاء) —
+   عشان تُستخدم في تقرير شامل يُطبَع، مو بس لأغراض التصحيح */
+function buildAttendanceReportDays(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd) {
+  if (!emp) return [];
+  const start = new Date(rangeStart + "T00:00:00");
+  const end = new Date(rangeEnd + "T00:00:00");
+  if (isNaN(start) || isNaN(end)) return [];
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const join = emp.joinDate ? new Date(emp.joinDate + "T00:00:00") : null;
+  const offDays = getOffDays(emp);
+  const byDate = {};
+  (periodAttendanceRecords || []).forEach((a) => {
+    byDate[a.date] = a;
+  });
+  const days = [];
+  for (let dateObj = new Date(start); dateObj <= end; dateObj.setDate(dateObj.getDate() + 1)) {
+    const dateStr = fmtISODate(dateObj);
+    const dayName = JS_DAY_INDEX_TO_AR[dateObj.getDay()];
+    const rec = byDate[dateStr];
+    const isFuture = dateObj > today;
+    const isPreJoin = join && !isNaN(join) && dateObj < join;
+    const approvedLeave = (employeeApprovedLeaves || []).find((l) => l.from && l.to && dateStr >= l.from && dateStr <= l.to);
+
+    let kind;
+    if (isPreJoin) kind = "preJoin";
+    else if (rec) {
+      kind =
+        rec.status === "غائب" ? "absent" :
+        rec.status === "متأخر" ? "late" :
+        rec.status === "إجازة" ? "leaveRecorded" :
+        "present";
+    } else if (approvedLeave) kind = "approvedLeave";
+    else if (offDays.includes(dayName)) kind = "weeklyOff";
+    else if (isFuture) kind = "future";
+    else kind = "autoAbsent";
+
+    const lateMinutes = rec && rec.status === "متأخر" ? Number(rec.lateMinutes || 0) : 0;
+    const shortfallMinutes = rec ? Number(rec.shortfallMinutes || 0) : 0;
+    const earlyLeaveMinutes = rec ? Number(rec.earlyLeaveMinutes || 0) + Number(rec.earlyLeaveMinutes2 || 0) : 0;
+    const overtimeHours = rec ? Number(rec.overtimeHours || 0) + Number(rec.overtimeHours2 || 0) : 0;
+
+    days.push({
+      date: dateStr,
+      dayName,
+      kind,
+      record: rec || null,
+      approvedLeaveType: approvedLeave ? approvedLeave.type : null,
+      lateMinutes,
+      shortfallMinutes,
+      earlyLeaveMinutes,
+      overtimeHours,
+    });
+  }
+  return days;
 }
 
 /* تحويل تاريخ ميلادي إلى هجري للعرض جنب حقل التاريخ (بدون اتصال إنترنت، عبر Intl المدمجة في المتصفح) */
@@ -6170,20 +6227,147 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
 }
 
 /* ============ سجل الحضور اليومي (قسم مستقل تحت الحضور والإجازات) ============ */
-function AttendanceLogTab({ employees, setEmployees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage, dirty, onSaveNow, canEditWeeklyOff = true }) {
+/* ============ تقرير الحضور والانصراف لموظف واحد — جدول يومي كامل + ملخص شهري قابل للطباعة ============ */
+function EmployeeAttendanceReportModal({ emp, attendance, leaves, branches, onClose }) {
+  const { t } = useLang();
+  const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [__ry, __rm] = month.split("-").map(Number);
+  const monthStart = `${month}-01`;
+  const monthEnd = fmtISODate(new Date(__ry, __rm, 0));
+
+  const monthAttendance = (attendance || []).filter((a) => a.employeeId === emp.id && (a.date || "").startsWith(month));
+  const employeeApprovedLeaves = (leaves || []).filter((l) => l.employeeId === emp.id);
+  const days = buildAttendanceReportDays(emp, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
+
+  const presentDays = days.filter((d) => d.kind === "present").length;
+  const lateDays = days.filter((d) => d.kind === "late").length;
+  const absentDays = days.filter((d) => d.kind === "absent" || d.kind === "autoAbsent").length;
+  const leaveDays = days.filter((d) => d.kind === "approvedLeave" || d.kind === "leaveRecorded" || d.kind === "weeklyOff").length;
+  const lateMinutesTotal = days.reduce((s, d) => s + d.lateMinutes + d.shortfallMinutes + d.earlyLeaveMinutes, 0);
+  const overtimeHoursTotal = days.reduce((s, d) => s + d.overtimeHours, 0);
+
+  const branchName = branches.find((b) => b.id === emp.branchId)?.name || "—";
+
+  const kindLabel = (d) => {
+    switch (d.kind) {
+      case "present": return t("حاضر", "Present");
+      case "late": return t("متأخر", "Late");
+      case "absent": return t("غائب", "Absent");
+      case "autoAbsent": return t("غائب", "Absent");
+      case "weeklyOff": return t("إجازة أسبوعية", "Weekly off");
+      case "approvedLeave": return t("إجازة", "Leave");
+      case "leaveRecorded": return t("إجازة", "Leave");
+      case "preJoin": return t("قبل التعيين", "Before joining");
+      case "future": return "—";
+      default: return "—";
+    }
+  };
+  const kindTone = (d) => {
+    if (d.kind === "present") return "green";
+    if (d.kind === "absent" || d.kind === "autoAbsent") return "brick";
+    if (d.kind === "preJoin" || d.kind === "future") return "gold";
+    return "gold";
+  };
+  const timesFor = (d) => {
+    if (!d.record) return "—";
+    const r = d.record;
+    const parts = [];
+    if (r.checkInTime || r.checkOutTime) parts.push(`${t("صباحي", "AM")}: ${r.checkInTime || "—"} → ${r.checkOutTime || "—"}`);
+    if (r.checkInTime2 || r.checkOutTime2) parts.push(`${t("مسائي", "PM")}: ${r.checkInTime2 || "—"} → ${r.checkOutTime2 || "—"}`);
+    return parts.length ? parts.join(t(" / ", " / ")) : "—";
+  };
+  const noteFor = (d) => {
+    const parts = [];
+    if (d.kind === "autoAbsent") parts.push(t("غياب تلقائي (بدون تسجيل دخول)", "Automatic absence (no check-in)"));
+    if (d.kind === "approvedLeave" && d.approvedLeaveType) parts.push(trLabel(t, LEAVE_TYPE_LABELS_EN, d.approvedLeaveType));
+    if (d.lateMinutes > 0) parts.push(t(`تأخير ${d.lateMinutes} د`, `late ${d.lateMinutes}m`));
+    if (d.shortfallMinutes > 0) parts.push(t(`نقص دوام حر ${d.shortfallMinutes} د`, `shortfall ${d.shortfallMinutes}m`));
+    if (d.earlyLeaveMinutes > 0) parts.push(t(`خروج مبكر ${d.earlyLeaveMinutes} د`, `early leave ${d.earlyLeaveMinutes}m`));
+    if (d.overtimeHours > 0) parts.push(t(`إضافي ${d.overtimeHours} س`, `overtime ${d.overtimeHours}h`));
+    return parts.length ? parts.join(t("، ", ", ")) : "—";
+  };
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "#fff", borderRadius: 12, maxWidth: 760, width: "100%", maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.35)" }}
+        onClick={(ev) => ev.stopPropagation()}
+      >
+        <div
+          className="no-print"
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: `1px solid ${COLORS.line}`, position: "sticky", top: 0, background: "#fff", zIndex: 2, borderRadius: "12px 12px 0 0", flexWrap: "wrap", gap: 10 }}
+        >
+          <div>
+            <div style={{ fontWeight: 700, color: COLORS.espresso }}>{t(`تقرير الحضور والانصراف — ${emp.name}`, `Attendance & Departure Report — ${emp.name}`)}</div>
+            <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{branchName}</div>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input type="month" style={inputStyle} value={month} onChange={(e) => setMonth(e.target.value)} />
+            <Btn small onClick={() => window.print()}>{t("🖶 طباعة", "🖶 Print")}</Btn>
+            <Btn small tone="secondary" onClick={onClose}>{t("إغلاق ✕", "Close ✕")}</Btn>
+          </div>
+        </div>
+
+        <div className="print-section print-section-modal" style={{ padding: 24 }}>
+          <div style={{ textAlign: "center", marginBottom: 16, borderBottom: `2px solid ${COLORS.gold}`, paddingBottom: 12 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso }}>{t("تقرير الحضور والانصراف", "Attendance & Departure Report")}</div>
+            <div style={{ fontSize: 13, color: "#8a7a63", marginTop: 4 }}>{emp.name} — {branchName}</div>
+            <div style={{ fontSize: 12, color: "#a3927a", marginTop: 2, fontFamily: "Consolas, monospace" }}>{month}</div>
+          </div>
+
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 16 }}>
+            <Stamp tone="green">{t(`حضور: ${presentDays}`, `Present: ${presentDays}`)}</Stamp>
+            <Stamp tone="brick">{t(`غياب: ${absentDays}`, `Absent: ${absentDays}`)}</Stamp>
+            <Stamp tone="gold">{t(`تأخير: ${lateDays} (${lateMinutesTotal} د)`, `Late: ${lateDays} (${lateMinutesTotal}m)`)}</Stamp>
+            <Stamp tone="gold">{t(`إجازة: ${leaveDays}`, `Leave: ${leaveDays}`)}</Stamp>
+            <Stamp tone="green">{t(`إضافي: ${overtimeHoursTotal} س`, `Overtime: ${overtimeHoursTotal}h`)}</Stamp>
+          </div>
+
+          {days.length === 0 && <Empty text={t("لا توجد بيانات لهذا الشهر", "No data for this month")} />}
+          {days.length > 0 && (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: COLORS.paper }}>
+                  <th style={{ padding: "8px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("التاريخ", "Date")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("اليوم", "Day")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("الحالة", "Status")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("حضور → انصراف", "Check-in → Check-out")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("ملاحظات", "Notes")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {days.map((d) => (
+                  <tr key={d.date} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                    <td style={{ padding: "7px 10px", fontFamily: "Consolas, monospace" }}>{d.date}</td>
+                    <td style={{ padding: "7px 10px", color: "#8a7a63" }}>{dayNameOfDate(d.date, t)}</td>
+                    <td style={{ padding: "7px 10px" }}>
+                      <Stamp tone={kindTone(d)}>{kindLabel(d)}</Stamp>
+                    </td>
+                    <td style={{ padding: "7px 10px", fontFamily: "Consolas, monospace", fontSize: 11 }}>{timesFor(d)}</td>
+                    <td style={{ padding: "7px 10px", color: "#8a7a63" }}>{noteFor(d)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage, dirty, onSaveNow }) {
   const { t } = useLang();
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [logSearch, setLogSearch] = useState("");
   const [notifyResult, setNotifyResult] = useState("");
-  /* فتح "الملف الشخصي للموظف" (نفس نافذة تبويب الموظفين) عند الضغط على اسم الموظف في سجل الحضور —
-     نفس حزمة الحالة والدوال المشتركة، فأي تعديل هنا (مثلاً وقت الدوام) ينعكس فورًا في تبويب الموظفين والعكس */
-  const {
-    profileEmp, setProfileEmp,
-    addCareerEntry, removeCareerEntry, updateGovFees, toggleWeeklyOffDay,
-    updateWorkShift, updateWorkShift2, toggleTwoShifts, toggleFlexibleSchedule,
-    toggleUseDaySchedules, updateDaySchedule, resetFaceDescriptor, toggleFaceRequired,
-  } = useEmployeeProfileHandlers(employees, setEmployees, logActivity);
+  /* الضغط على اسم الموظف في سجل الحضور يفتح تقرير الحضور والانصراف الخاص فيه مباشرة (جدول يومي +
+     ملخص شهري قابل للطباعة) */
+  const [reportEmp, setReportEmp] = useState(null);
   /* تعديل سجل حضور موجود بالفعل (تصحيح وقت حضور/انصراف خاطئ، تعديل الحالة أو دقائق التأخير/الإضافي...)
      بدل ما يضطر الأدمن يحذف السجل بالكامل (ويضيع الصور المرفوعة معه) ويسجّله يدويًا من جديد */
   const [editingId, setEditingId] = useState(null);
@@ -6433,10 +6617,10 @@ function AttendanceLogTab({ employees, setEmployees, attendance, setAttendance, 
               <b
                 onClick={() => {
                   const emp = employees.find((e) => e.id === a.employeeId);
-                  if (emp) setProfileEmp(emp);
+                  if (emp) setReportEmp(emp);
                 }}
                 style={{ cursor: employees.some((e) => e.id === a.employeeId) ? "pointer" : "default", textDecoration: employees.some((e) => e.id === a.employeeId) ? "underline dotted" : "none" }}
-                title={t("عرض معلومات الموظف", "View employee info")}
+                title={t("تقرير الحضور والانصراف", "Attendance & departure report")}
               >
                 {empName(a.employeeId)}
               </b>{" "}
@@ -6568,25 +6752,13 @@ function AttendanceLogTab({ employees, setEmployees, attendance, setAttendance, 
         </div>
       )}
 
-      {profileEmp && (
-        <EmployeeProfileModal
-          emp={employees.find((e) => e.id === profileEmp.id) || profileEmp}
-          branches={branches}
+      {reportEmp && (
+        <EmployeeAttendanceReportModal
+          emp={employees.find((e) => e.id === reportEmp.id) || reportEmp}
+          attendance={attendance}
           leaves={leaves || []}
-          onAddCareerEntry={addCareerEntry}
-          onRemoveCareerEntry={removeCareerEntry}
-          onUpdateGovFees={updateGovFees}
-          onToggleWeeklyOffDay={toggleWeeklyOffDay}
-          onUpdateWorkShift={updateWorkShift}
-          onUpdateWorkShift2={updateWorkShift2}
-          onToggleTwoShifts={toggleTwoShifts}
-          onToggleFlexibleSchedule={toggleFlexibleSchedule}
-          onToggleUseDaySchedules={toggleUseDaySchedules}
-          onUpdateDaySchedule={updateDaySchedule}
-          onResetFace={resetFaceDescriptor}
-          onToggleFaceRequired={toggleFaceRequired}
-          canEditWeeklyOff={canEditWeeklyOff}
-          onClose={() => setProfileEmp(null)}
+          branches={branches}
+          onClose={() => setReportEmp(null)}
         />
       )}
     </div>
