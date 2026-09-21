@@ -3905,6 +3905,78 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
     if (editingId === id) resetForm();
   };
 
+  /* ============ استيراد جماعي (يُستخدم في استرجاع البيانات بعد فقدها) ============
+     لا يكتب أي شيء في القاعدة مباشرة — بيضيف فقط للحالة المحلية (state) بنفس طريقة زر "إضافة موظف"،
+     وبعدها لازم تضغطي "حفظ" العادي في الشريط الجانبي عشان تتخزن البيانات فعليًا. */
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [importErr, setImportErr] = useState("");
+  const [importPreview, setImportPreview] = useState(null);
+
+  const findBranchByName = (name) => {
+    if (!name) return "";
+    const clean = String(name).trim();
+    if (!clean) return "";
+    const exact = branches.find((b) => b.name === clean);
+    if (exact) return exact.id;
+    const partial = branches.find((b) => b.name.includes(clean) || clean.includes(b.name));
+    return partial ? partial.id : "";
+  };
+
+  const buildImportPreview = () => {
+    setImportErr("");
+    setImportPreview(null);
+    let parsed;
+    try {
+      parsed = JSON.parse(importText);
+    } catch (e) {
+      setImportErr(t("النص المُلصق ليس JSON صالحًا — تأكد إنه مصفوفة [ ... ] بالتنسيق الصحيح", "Pasted text is not valid JSON — make sure it's a properly formatted [ ... ] array"));
+      return;
+    }
+    if (!Array.isArray(parsed)) {
+      setImportErr(t("المتوقع مصفوفة موظفين [ ... ]", "Expected an array of employees [ ... ]"));
+      return;
+    }
+    const existingIds = new Set(employees.map((e) => e.nationalId).filter(Boolean));
+    const rows = parsed.map((raw) => {
+      const nationalId = String(raw.nationalId || "").trim();
+      const branchId = raw.branchId || findBranchByName(raw.branchName || raw.branch || "");
+      const isDuplicate = nationalId && existingIds.has(nationalId);
+      return {
+        raw,
+        name: raw.name || "",
+        nationalId,
+        branchId,
+        branchName: raw.branchName || raw.branch || "",
+        branchMatched: !!branchId,
+        isDuplicate,
+      };
+    });
+    setImportPreview(rows);
+  };
+
+  const confirmImport = () => {
+    if (!importPreview) return;
+    const toAdd = importPreview.filter((r) => !r.isDuplicate);
+    const newEmployees = toAdd.map((r) => {
+      const raw = r.raw;
+      return {
+        ...EMPTY_EMP,
+        ...raw,
+        id: uid(),
+        branchId: r.branchId || "",
+        additionalBranchIds: [],
+        salary: raw.salary !== undefined && raw.salary !== null ? String(raw.salary) : "",
+        status: raw.status || "نشط",
+      };
+    });
+    setEmployees((prev) => [...prev, ...newEmployees]);
+    logActivity && logActivity("استيراد جماعي لموظفين", "employees", `تم استيراد ${newEmployees.length} موظف`);
+    setImportText("");
+    setImportPreview(null);
+    setShowImport(false);
+  };
+
   const q = searchQuery.trim().toLowerCase();
   const list = employees.filter(
     (e) =>
@@ -3914,7 +3986,72 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 
   return (
     <div>
-      <Header title={t("الموظفون", "Employees")} subtitle={t("سجل بيانات الموظفين عبر جميع الفروع", "Employee records across all branches")} />
+      <Header
+        title={t("الموظفون", "Employees")}
+        subtitle={t("سجل بيانات الموظفين عبر جميع الفروع", "Employee records across all branches")}
+        action={<Btn tone="secondary" small onClick={() => setShowImport((v) => !v)}>{showImport ? t("إغلاق الاستيراد", "Close Import") : t("استيراد جماعي", "Bulk Import")}</Btn>}
+      />
+
+      {showImport && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.gold}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: COLORS.espresso }}>
+            {t("استيراد جماعي للموظفين (JSON)", "Bulk Employee Import (JSON)")}
+          </div>
+          <div style={{ fontSize: 11.5, color: "#8a7a63", marginBottom: 10 }}>
+            {t(
+              "الصقي مصفوفة JSON فيها بيانات الموظفين، ثم اضغطي «معاينة». الاستيراد بيضيف للقائمة محليًا فقط — لازم تضغطي «حفظ» من الشريط الجانبي بعدها عشان يتخزن فعليًا. الموظفين اللي رقم هويتهم موجود بالفعل في القائمة يتم تجاهلهم تلقائيًا لمنع التكرار.",
+              "Paste a JSON array of employees, then click Preview. Importing only adds to the local list — you still need to click Save in the sidebar to persist it. Employees whose national ID already exists are skipped automatically to avoid duplicates."
+            )}
+          </div>
+          <textarea
+            value={importText}
+            onChange={(e) => setImportText(e.target.value)}
+            placeholder='[{"name":"...","nationalId":"...","nationality":"...","branchName":"أملج","position":"...","salary":1500,"joinDate":"2023-05-07","phone":"0576493449","iqamaExpiry":"2026-09-08","email":"...","iban":"...","bank":"..."}]'
+            style={{ ...inputStyle, width: "100%", minHeight: 140, fontFamily: "Consolas, monospace", fontSize: 12, resize: "vertical" }}
+            dir="ltr"
+          />
+          {importErr && <div style={{ color: COLORS.brick, fontSize: 12, marginTop: 8 }}>{importErr}</div>}
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <Btn small onClick={buildImportPreview}>{t("معاينة", "Preview")}</Btn>
+            {importPreview && (
+              <Btn small tone="secondary" onClick={confirmImport}>
+                {t(`تأكيد استيراد ${importPreview.filter((r) => !r.isDuplicate).length} موظف`, `Confirm import of ${importPreview.filter((r) => !r.isDuplicate).length}`)}
+              </Btn>
+            )}
+          </div>
+          {importPreview && (
+            <div style={{ marginTop: 12, border: `1px dashed ${COLORS.line}`, borderRadius: 8, overflow: "auto", maxHeight: 260 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: COLORS.paperDark, textAlign: "right" }}>
+                    {[t("الاسم", "Name"), t("رقم الهوية", "National ID"), t("الفرع", "Branch"), t("الحالة", "Status")].map((h) => (
+                      <th key={h} style={{ padding: "6px 10px" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {importPreview.map((r, i) => (
+                    <tr key={i} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                      <td style={{ padding: "6px 10px", fontWeight: 700 }}>{r.name || "—"}</td>
+                      <td style={{ padding: "6px 10px", fontFamily: "Consolas, monospace" }}>{r.nationalId || "—"}</td>
+                      <td style={{ padding: "6px 10px" }}>{r.branchMatched ? r.branchName : (r.branchName ? `⚠ ${r.branchName} (${t("غير مطابق", "no match")})` : t("—", "—"))}</td>
+                      <td style={{ padding: "6px 10px" }}>
+                        {r.isDuplicate ? (
+                          <Stamp tone="brick">{t("مكرر — لن يُستورد", "Duplicate — skipped")}</Stamp>
+                        ) : r.branchMatched ? (
+                          <Stamp tone="green">{t("جاهز", "Ready")}</Stamp>
+                        ) : (
+                          <Stamp tone="gold">{t("سيُستورد بدون فرع", "Will import without branch")}</Stamp>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
