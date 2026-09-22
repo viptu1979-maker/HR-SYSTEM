@@ -3275,7 +3275,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           />
         )}
         {isAdmin && tab === "users" && (
-          <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} logActivity={logActivity} />
+          <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} logActivity={logActivity} dirty={dirty} onSaveNow={saveNow} />
         )}
       </main>
     </div>
@@ -6656,6 +6656,11 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   const [viewingPhoto, setViewingPhoto] = useState(null);
   const [logSearch, setLogSearch] = useState("");
   const [notifyResult, setNotifyResult] = useState("");
+  /* تسجيل حضور جماعي: تحديد كل الموظفين (أو نطاق كيان/فرع معيّن حسب فلتر النموذج أعلاه) "حاضر"
+     ليوم معيّن دفعة واحدة — بدل تسجيلهم يدويًا واحدًا واحدًا. نتجاوز أي موظف عنده سجل حضور بالفعل
+     لنفس التاريخ حتى ما نكرر أو نبدّل حالة موجودة (زي متأخر) بالغلط */
+  const [bulkDate, setBulkDate] = useState("");
+  const [bulkResult, setBulkResult] = useState("");
   /* الضغط على اسم الموظف في سجل الحضور يفتح تقرير الحضور والانصراف الخاص فيه مباشرة (جدول يومي +
      ملخص شهري قابل للطباعة) */
   const [reportEmp, setReportEmp] = useState(null);
@@ -6748,6 +6753,54 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
         : t("لا يوجد موظفون غائبون حاليًا حسب أوقات دوامهم", "No employees currently absent based on their shift times")
     );
     setTimeout(() => setNotifyResult(""), 5000);
+  };
+
+  const markAllPresentForDate = () => {
+    if (!bulkDate) return;
+    const scopeEmployees = attEmployees.filter((e) => e.status === "نشط");
+    const alreadyMarked = new Set(attendance.filter((a) => a.date === bulkDate).map((a) => a.employeeId));
+    const toAdd = scopeEmployees.filter((e) => !alreadyMarked.has(e.id));
+    if (toAdd.length === 0) {
+      setBulkResult(
+        t(
+          "كل الموظفين في هذا النطاق عندهم سجل حضور بالفعل لهذا التاريخ — لم تتم إضافة شيء",
+          "All employees in this scope already have an attendance record for this date — nothing added"
+        )
+      );
+      setTimeout(() => setBulkResult(""), 5000);
+      return;
+    }
+    if (
+      !window.confirm(
+        t(
+          `سيتم تسجيل "حاضر" لـ ${toAdd.length} موظف بتاريخ ${bulkDate} (الموظفين اللي عندهم سجل حضور بالفعل لهذا التاريخ لن يتأثروا). متأكدة؟`,
+          `This will register "Present" for ${toAdd.length} employees on ${bulkDate} (employees who already have a record for this date are skipped). Confirm?`
+        )
+      )
+    )
+      return;
+    setAttendance((prev) => [
+      ...prev,
+      ...toAdd.map((e) => ({
+        id: uid(),
+        employeeId: e.id,
+        branchId: e.branchId || "",
+        date: bulkDate,
+        status: "حاضر",
+        lateMinutes: 0,
+        overtimeHours: 0,
+      })),
+    ]);
+    logActivity && logActivity("تسجيل حضور جماعي", "attendance", `${toAdd.length} موظف — ${bulkDate}`);
+    setBulkResult(
+      scopeEmployees.length > toAdd.length
+        ? t(
+            `✔ تم تسجيل حضور ${toAdd.length} موظف — تم تجاوز ${scopeEmployees.length - toAdd.length} كان عندهم سجل مسبق لنفس اليوم`,
+            `✔ Registered ${toAdd.length} employees — skipped ${scopeEmployees.length - toAdd.length} who already had a record for that day`
+          )
+        : t(`✔ تم تسجيل حضور ${toAdd.length} موظف بنجاح`, `✔ Successfully registered ${toAdd.length} employees`)
+    );
+    setTimeout(() => setBulkResult(""), 6000);
   };
 
   const attBranches = attForm.entityId ? branches.filter((b) => b.entityId === attForm.entityId) : branches;
@@ -6885,6 +6938,31 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
             <Btn onClick={addAtt}>{t("تسجيل", "Register")}</Btn>
           </div>
         </div>
+      </div>
+      <div
+        className="no-print"
+        style={{
+          background: COLORS.paper,
+          border: `1px solid ${COLORS.line}`,
+          borderRadius: 10,
+          padding: 14,
+          marginBottom: 12,
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 10,
+          alignItems: "flex-end",
+        }}
+      >
+        <Field label={t("تسجيل جماعي: تحديد كل الموظفين حاضر ليوم معيّن", "Bulk: mark all employees present for a date")}>
+          <DateField style={inputStyle} value={bulkDate} onChange={setBulkDate} />
+        </Field>
+        <Btn onClick={markAllPresentForDate} disabled={!bulkDate}>
+          {t(
+            `✔ تحديد الكل حاضر (${attEmployees.filter((e) => e.status === "نشط").length} موظف${attForm.entityId || attForm.branchId ? " — حسب الفلتر أعلاه" : ""})`,
+            `✔ Mark all present (${attEmployees.filter((e) => e.status === "نشط").length} employees${attForm.entityId || attForm.branchId ? " — per filter above" : ""})`
+          )}
+        </Btn>
+        {bulkResult && <span style={{ fontSize: 12, color: COLORS.espresso, fontWeight: 700 }}>{bulkResult}</span>}
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12, alignItems: "center" }} className="no-print">
         <input
@@ -11931,7 +12009,7 @@ function EmployeeSelfView({
 }
 
 /* ============ إدارة المستخدمين (أدمن فقط) ============ */
-function UsersTab({ users, setUsers, employees, branches, entities, logActivity }) {
+function UsersTab({ users, setUsers, employees, branches, entities, logActivity, dirty, onSaveNow }) {
   const { t } = useLang();
   const [form, setForm] = useState(EMPTY_USER);
   const [editingId, setEditingId] = useState(null);
@@ -11999,7 +12077,30 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
         setUsers((prev) => prev.map((x) => (x.username === u.username ? { ...x, authUid: cred.user.uid } : x)));
         migrated++;
       } catch (e) {
-        failed.push(`${u.name || u.username} (${u.username}): ${e.code === "auth/email-already-in-use" ? t("الحساب موجود مسبقًا في Firebase لكن غير مربوط — راجعه يدويًا", "Account already exists in Firebase but isn't linked — needs manual review") : e.message}`);
+        /* لو الحساب موجود بالفعل في Firebase (auth/email-already-in-use)، الاحتمال الأكبر إنه اترحّل
+           فعلًا في محاولة سابقة، لكن ربط authUid في Firestore ضاع لأن الأدمن ما ضغطتش "حفظ الآن"
+           بعدها مباشرة (أو حصل انقطاع). بدل ما نوقف عند "راجعه يدويًا" بدون أي حل، نجرّب تسجيل دخول
+           بنفس كلمة المرور الحالية المخزّنة للمستخدم — لو نجح فهذا يثبت إن حساب الـ Auth هو نفسه
+           ويمكن ربطه تلقائيًا وبأمان. الفشل هنا يعني فعلًا إن كلمة المرور تغيّرت بعد إنشاء حساب الـ
+           Auth ويحتاج تدخل يدوي حقيقي (تغيير كلمة مرور هذا الموظف ثم محاولة الترحيل مرة ثانية) */
+        if (e.code === "auth/email-already-in-use") {
+          try {
+            const signInCred = await secondaryAuth.signInWithEmailAndPassword(email, padPasswordForAuth(u.password));
+            await secondaryAuth.signOut().catch(() => {});
+            setUsers((prev) => prev.map((x) => (x.username === u.username ? { ...x, authUid: signInCred.user.uid } : x)));
+            migrated++;
+            continue;
+          } catch (signInErr) {
+            failed.push(
+              `${u.name || u.username} (${u.username}): ${t(
+                "الحساب موجود في Firebase لكن بكلمة مرور مختلفة عن كلمة المرور الحالية في النظام — غيّري كلمة مرور هذا الحساب من هنا ثم أعيدي محاولة الترحيل",
+                "Account exists in Firebase but with a different password than the one currently set here — change this account's password here, then retry migration"
+              )}`
+            );
+            continue;
+          }
+        }
+        failed.push(`${u.name || u.username} (${u.username}): ${e.message}`);
       }
     }
     setMigrationResult({ migrated, failed, total: unmigratedUsers.length });
@@ -12138,6 +12239,20 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity 
                   <li key={i} style={{ color: COLORS.brick }}>{f}</li>
                 ))}
               </ul>
+            )}
+            {migrationResult.migrated > 0 && dirty && (
+              <div
+                className="no-print"
+                style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, fontWeight: 700, color: COLORS.brick }}
+              >
+                <span>
+                  {t(
+                    "⚠ مهم: اضغطي حفظ الآن عشان ربط الحسابات المرحّلة يتخزّن في القاعدة — لو خرجتي أو عملتي تحديث للصفحة قبل الحفظ، الترحيل هيضيع وهيتكرر نفس الخطأ.",
+                    "⚠ Important: click Save Now so the migrated accounts' linkage is stored — if you leave or refresh before saving, the migration is lost and this same error will happen again."
+                  )}
+                </span>
+                {onSaveNow && <Btn small onClick={onSaveNow}>{t("💾 حفظ الآن", "💾 Save Now")}</Btn>}
+              </div>
             )}
           </div>
         )}
