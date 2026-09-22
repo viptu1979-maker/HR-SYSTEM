@@ -805,6 +805,16 @@ function roleLabel(u, t) {
 /* ترجمة نصوص العرض فقط لقيم مخزّنة بالعربي (الحالة/الجنسية/إلخ) — القيمة المخزّنة في البيانات تفضل عربي دايمًا */
 const STATUS_LABELS_EN = { "نشط": "Active", "موقوف": "Suspended", "منتهي الخدمة": "Terminated" };
 const NATIONALITY_LABELS_EN = { "سعودي": "Saudi", "غير سعودي": "Non-Saudi" };
+/* بعض سجلات الموظفين (خصوصًا لو اتدخلت أو اتستوردت قبل كذا) ممكن يكون حقل الجنسية فيها مكتوب بصيغة
+   قريبة من "سعودي" لكن مش مطابقة له حرفيًا (زي "السعودية" أو "سعودية") — القائمة المنسدلة والمقارنات
+   القديمة كانت تتحقق بمطابقة حرفية دقيقة بس، فأي فرق بسيط زي ده كان يخلي النظام يعامل موظف سعودي فعليًا
+   كأنه غير سعودي بصمت تام: حصة GOSI بتاعته تطلع صفر في الراتب، وتنبيهات تأشيرة الخروج والعودة (اللي
+   المفروض تخص غير السعوديين بس) تظهر له بالغلط — بدون أي رسالة خطأ توضح السبب. هذه الدالة تتعرف على
+   أشهر الصيغ الشائعة للجنسية السعودية بدل الاعتماد على تطابق حرفي دقيق فقط */
+function isSaudiNationality(v) {
+  const s = String(v || "").trim();
+  return s === "سعودي" || s === "السعودية" || s === "سعودية" || s.toLowerCase() === "saudi" || s.toLowerCase() === "sa";
+}
 const CONTRACT_TYPE_LABELS_EN = { "محدد المدة": "Fixed-term", "غير محدد المدة": "Unlimited" };
 const LEAVE_TYPE_LABELS_EN = { "سنوية": "Annual", "مرضية": "Sick", "طارئة": "Emergency", "بدون راتب": "Unpaid", "أخرى": "Other" };
 const LEAVE_REQUEST_STATUS_LABELS_EN = {
@@ -3302,7 +3312,7 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, branchName
     .filter((e) => e.status === "نشط")
     .forEach((e) => {
       if (isUrgent(e.iqamaExpiry)) urgentAlerts.push({ label: t("إقامة", "Iqama"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.iqamaExpiry, t) });
-      if (e.nationality !== "سعودي" && isUrgent(e.exitReentryExpiry)) urgentAlerts.push({ label: t("تأشيرة خروج وعودة", "Exit/Re-entry Visa"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.exitReentryExpiry, t) });
+      if (!isSaudiNationality(e.nationality) && isUrgent(e.exitReentryExpiry)) urgentAlerts.push({ label: t("تأشيرة خروج وعودة", "Exit/Re-entry Visa"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.exitReentryExpiry, t) });
       if (e.contractType !== "غير محدد المدة" && isUrgent(e.contractEnd)) urgentAlerts.push({ label: t("عقد عمل", "Work Contract"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.contractEnd, t) });
       if (isUrgent(e.healthCertExpiry)) urgentAlerts.push({ label: t("شهادة صحية", "Health Certificate"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.healthCertExpiry, t) });
       if (isUrgent(e.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين طبي", "Medical Insurance"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.insuranceExpiry, t) });
@@ -3960,7 +3970,13 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
       return;
     }
     setFormErr("");
-    const cleanForm = { ...form, additionalBranchIds: (form.additionalBranchIds || []).filter((id) => id !== form.branchId) };
+    /* توحيد قيمة الجنسية وقت الحفظ لأي صيغة سعودية شائعة غير قياسية (زي "السعودية")، عشان تتصحح البيانات
+       تلقائيًا مع أول حفظ لأي موظف عنده هذه المشكلة، بدل ما تفضل معتمدة على تسامح الحسابات وقت القراءة بس */
+    const cleanForm = {
+      ...form,
+      nationality: isSaudiNationality(form.nationality) ? "سعودي" : form.nationality,
+      additionalBranchIds: (form.additionalBranchIds || []).filter((id) => id !== form.branchId),
+    };
     if (editingId) {
       setEmployees((prev) => prev.map((e) => (e.id === editingId ? { ...cleanForm, id: editingId } : e)));
       logActivity && logActivity("تعديل موظف", "employees", form.name);
@@ -4046,6 +4062,9 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         additionalBranchIds: [],
         salary: raw.salary !== undefined && raw.salary !== null ? String(raw.salary) : "",
         status: raw.status || "نشط",
+        /* توحيد أي صيغة سعودية غير قياسية (زي "السعودية") في بيانات الاستيراد الجماعي إلى القيمة
+           القياسية "سعودي" — تفادي نفس مشكلة صفر حصة GOSI للموظفين المستوردين */
+        nationality: isSaudiNationality(raw.nationality) ? "سعودي" : raw.nationality || "غير سعودي",
       };
     });
     setEmployees((prev) => [...prev, ...newEmployees]);
@@ -4214,7 +4233,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           <Field label={t("المهنة على الإقامة", "Profession on Iqama")}>
             <input style={inputStyle} value={form.iqamaProfession} onChange={(e) => setForm({ ...form, iqamaProfession: e.target.value })} />
           </Field>
-          {form.nationality !== "سعودي" && (
+          {!isSaudiNationality(form.nationality) && (
             <React.Fragment>
               <Field label={t("رقم تأشيرة الخروج والعودة", "Exit/Re-entry Visa No.")}>
                 <input
@@ -4620,7 +4639,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
       Number(emp.govFees?.other || 0)
   );
 
-  const isSaudi = emp.nationality === "سعودي";
+  const isSaudi = isSaudiNationality(emp.nationality);
   const branchName = branches.find((b) => b.id === emp.branchId)?.name || "—";
   const iqamaSt = expiryStatus(emp.iqamaExpiry, t);
   const contractSt = expiryStatus(emp.contractEnd, t);
@@ -4977,7 +4996,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
               </div>
             </div>
             <InfoRow label={t("المهنة على الإقامة", "Profession on Iqama")} value={emp.iqamaProfession} />
-            {emp.nationality !== "سعودي" && (
+            {!isSaudiNationality(emp.nationality) && (
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0" }}>
                 <span style={{ fontSize: 12.5, color: "#a3927a" }}>{t("تأشيرة الخروج والعودة", "Exit/Re-entry Visa")}</span>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -5168,7 +5187,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
 
   const iqamaAlerts = rows.filter((r) => r.iqamaStatus.days !== null && r.iqamaStatus.days <= 30).length;
   const contractAlerts = rows.filter((r) => r.contractStatus.days !== null && r.contractStatus.days <= 30).length;
-  const exitReentryAlerts = rows.filter((r) => r.nationality !== "سعودي" && r.exitReentryStatus.days !== null && r.exitReentryStatus.days <= 30).length;
+  const exitReentryAlerts = rows.filter((r) => !isSaudiNationality(r.nationality) && r.exitReentryStatus.days !== null && r.exitReentryStatus.days <= 30).length;
 
   return (
     <div>
@@ -5284,7 +5303,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                     <Stamp tone={r.iqamaStatus.tone}>{r.iqamaStatus.label}</Stamp>
                   </td>
                   <td data-label={t("رقم تأشيرة الخروج والعودة", "Exit/Re-entry Visa No.")} style={{ padding: "9px 12px" }}>
-                    {r.nationality === "سعودي" ? (
+                    {isSaudiNationality(r.nationality) ? (
                       "—"
                     ) : (
                       <input
@@ -5295,7 +5314,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                     )}
                   </td>
                   <td data-label={t("انتهاء تأشيرة الخروج والعودة", "Exit/Re-entry Visa Expiry")} style={{ padding: "9px 12px" }}>
-                    {r.nationality === "سعودي" ? (
+                    {isSaudiNationality(r.nationality) ? (
                       "—"
                     ) : (
                       <React.Fragment>
@@ -5309,7 +5328,7 @@ function IqamasContractsTab({ employees, setEmployees, branches }) {
                     )}
                   </td>
                   <td data-label={t("حالة تأشيرة الخروج والعودة", "Exit/Re-entry Visa Status")} style={{ padding: "9px 12px" }}>
-                    {r.nationality === "سعودي" ? "—" : <Stamp tone={r.exitReentryStatus.tone}>{r.exitReentryStatus.label}</Stamp>}
+                    {isSaudiNationality(r.nationality) ? "—" : <Stamp tone={r.exitReentryStatus.tone}>{r.exitReentryStatus.label}</Stamp>}
                   </td>
                   <td data-label={t("نوع العقد", "Contract Type")} style={{ padding: "9px 12px" }}>
                     <select
@@ -7408,7 +7427,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
     .filter((e) => !q || (e.name || "").toLowerCase().includes(q) || (e.nationalId || "").toLowerCase().includes(q))
     .map((e) => {
       const salary = Number(e.salary || 0);
-      const isSaudi = e.nationality === "سعودي";
+      const isSaudi = isSaudiNationality(e.nationality);
       const empShare = isSaudi ? (salary * gosiRates.saudiEmployee) / 100 : 0;
       const employerShare = isSaudi ? (salary * gosiRates.saudiEmployer) / 100 : (salary * gosiRates.nonSaudiEmployer) / 100;
 
