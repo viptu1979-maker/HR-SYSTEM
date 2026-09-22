@@ -199,6 +199,44 @@ const LOG_DOC = db.collection("hrSystem").doc("activityLog");
 const BACKUPS_COLLECTION = db.collection("hrSystemBackups");
 const BACKUP_RETENTION_DAYS = 14;
 
+/* ============ دمج آمن لأقسام البيانات وقت الحفظ (يمنع تعارض عمل شخصين في نفس الوقت) ============
+   الأقسام دي كلها "قوائم سجلات" (كل سجل له id فريد) — لو شخصين شغالين وقت واحد وكل واحد لمس نفس
+   القسم (مثلاً الاتنين على "الموظفين" أو "الفروع")، الحفظ القديم كان بياخد قرار "الكل أو ولا حاجة"
+   لكل قسم: إما ياخد نسخة الخادم كاملة، أو يكتب فوقها بنسخته المحلية كاملة — فلو نسخته المحلية كانت
+   ناقصة سجل اتضاف حديثًا من جهاز التاني، الحفظ كان بيمسحه بالغلط تمامًا. الحل: بدل الاستبدال الكامل،
+   ندمج السجلات بالـ id — أي سجل موجود في أي نسخة (المحلية أو الخادم) يفضل موجود في النتيجة النهائية،
+   والنسخة المحلية تفوز لأي id موجود عندها (تعديلاتها هي الأحدث من منظورها). النتيجة: مفيش سجل حقيقي
+   يتمسح بالغلط بسبب تزامن الحفظ — أقصى أثر جانبي محتمل إن سجل اتحذف عمدًا من جهاز وبرضو موجود في نسخة
+   تانية قديمة يرجع يظهر تاني (يحتاج حذفه تاني يدويًا)، وده أهون بكتير من ضياع بيانات حقيقية بصمت */
+const ARRAY_MERGE_FIELDS = new Set([
+  "entities", "branches", "employees", "leaves", "leaveRequests", "advanceRequests",
+  "attendance", "vehicles", "payrollItems", "tasks", "messages", "equipment",
+  "workOrders", "qualityTemplates", "qualitySubmissions", "warnings",
+]);
+function mergeArrayByIdUnion(localArr, serverArr) {
+  if (!Array.isArray(localArr)) return Array.isArray(serverArr) ? serverArr : [];
+  if (!Array.isArray(serverArr)) return localArr;
+  const localIds = new Set(localArr.filter((r) => r && r.id != null).map((r) => r.id));
+  const merged = localArr.slice();
+  serverArr.forEach((rec) => {
+    if (rec && rec.id != null && !localIds.has(rec.id)) merged.push(rec);
+  });
+  return merged;
+}
+/* يحسب القيمة النهائية لقسم واحد وقت الحفظ: لو القسم زي ما هو من آخر مزامنة (مفيش تعديل محلي عليه)
+   ناخد أحدث نسخة من الخادم كالمعتاد. لو فيه تعديل محلي عليه وهو من نوع "قائمة سجلات"، ندمج بالـ id
+   بدل الاستبدال الكامل. غير كده (تعديل محلي على قسم مش قائمة، زي نسب GOSI) نستخدم النسخة المحلية زي
+   ما كان الحال قبل كده بالظبط */
+function resolveFieldForSave(key, localValue, server, baselineJson) {
+  const localJson = JSON.stringify(localValue);
+  const untouchedLocally = baselineJson !== undefined && localJson === baselineJson;
+  if (untouchedLocally && server[key] !== undefined) return server[key];
+  if (ARRAY_MERGE_FIELDS.has(key) && Array.isArray(server[key])) {
+    return mergeArrayByIdUnion(localValue, server[key]);
+  }
+  return localValue;
+}
+
 /* ============ Firebase Authentication — الأساس الحقيقي للحماية ============
    أسماء المستخدمين عندنا مو إيميلات (أرقام هوية/إقامة غالبًا)، فنحوّلها لصيغة إيميل داخلية صناعية
    ثابتة لكل مستخدم، يستخدمها Firebase Auth فقط، والموظف نفسه ما يشوفها ولا يحتاجها إطلاقًا */
@@ -1571,8 +1609,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           const merged = {};
           Object.keys(payload).forEach((key) => {
             const baselineJson = lastSyncedFieldsRef.current[key];
-            const localJson = JSON.stringify(payload[key]);
-            merged[key] = baselineJson !== undefined && localJson === baselineJson && server[key] !== undefined ? server[key] : payload[key];
+            merged[key] = resolveFieldForSave(key, payload[key], server, baselineJson);
           });
           return DATA_DOC.set(JSON.parse(JSON.stringify(merged))).then(() => merged);
         })
@@ -1603,17 +1640,24 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     if (!loaded) return;
     const today = new Date().toISOString().slice(0, 10);
     const backupDoc = BACKUPS_COLLECTION.doc(today);
+    /* إصلاح علة تعارض كانت موجودة: الكود القديم كان يتحقق أولًا "هل نسخة اليوم موجودة؟" ويتوقف عن
+       الكتابة لو لقاها موجودة. المشكلة إن التأثير التالي (تحديث حسابات الدخول) كان بيكتب فورًا بدون
+       أي قراءة سابقة، فيوصل السيرفر دايمًا قبل ما هذا التأثير يخلّص قراءته — فيلاقي نسخة اليوم "موجودة
+       بالفعل" (بحقل users بس) ويتوقف عن كتابة باقي الأقسام نهائيًا، ونسخة اليوم تفضل ناقصة للأبد.
+       هذا بالظبط سبب اختفاء بيانات الكيانات/الفروع/الموظفين من كل النسخ الاحتياطية لحد الآن. الحل:
+       الكتابة دايمًا بـ merge:true فوق أي حقول موجودة، وبدون أي قراءة سابقة — فمهما كان ترتيب
+       التنفيذ، كل الحقول (البيانات الكاملة + حسابات الدخول) تتجمّع في نفس مستند اليوم بدل ما يلغي
+       أحد التأثيرين التاني */
     backupDoc
-      .get()
-      .then((snap) => {
-        if (snap.exists) return; /* نسخة اليوم موجودة بالفعل — ما نكرّرها */
-        return backupDoc.set({
+      .set(
+        {
           date: today,
           savedAt: firebase.firestore.FieldValue.serverTimestamp(),
           entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance,
           gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, users,
-        });
-      })
+        },
+        { merge: true }
+      )
       .then(() => {
         /* تنظيف النسخ الأقدم من مدة الاحتفاظ لتفادي تراكمها */
         const cutoff = new Date();
@@ -1662,6 +1706,21 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       messages: bMessages, equipment: bEquipment, workOrders: bWorkOrders, qualityTemplates: bQualityTemplates,
       qualitySubmissions: bQualitySubmissions, warnings: bWarnings, users: bUsers,
     } = backupData || {};
+    /* حماية جوهرية جديدة: بعض النسخ الاحتياطية القديمة كانت بسبب عِلّة برمجية (تم إصلاحها الآن في
+       منطق الحفظ اليومي التلقائي) تحتوي على حسابات الدخول (users) فقط، بدون أي بيانات فعلية للكيانات
+       أو الفروع أو الموظفين. الكود القديم هنا كان "يسترجع" هذه النسخة الناقصة حرفيًا، أي يكتب مصفوفات
+       فاضية فوق بيانات حقيقية موجودة فعليًا في القاعدة — وهذا ما تسبب في مسح كل عمل يوم كامل بالغلط.
+       الآن: لو النسخة المختارة ليس فيها ولا قسم واحد من الأقسام الجوهرية (كيانات/فروع/موظفين) بينما
+       القسم المقابل موجود بالفعل، نرفض الاسترجاع تمامًا ونعيد خطأ واضح بدل الكتابة فوق أي شيء */
+    const looksLikeUsersOnlyBackup =
+      !Array.isArray(bEntities) && !Array.isArray(bBranches) && !Array.isArray(bEmployees);
+    if (looksLikeUsersOnlyBackup) {
+      return Promise.resolve({
+        ok: false,
+        error:
+          "هذه النسخة الاحتياطية لا تحتوي على بيانات الكيانات/الفروع/الموظفين (تحتوي فقط على حسابات الدخول) — تم رفض الاسترجاع تلقائيًا لحمايتك من مسح البيانات الحالية. اختر نسخة أخرى أو تواصل مع الدعم الفني.",
+      });
+    }
     /* حماية إضافية: لو النسخة الاحتياطية المُسترجَعة فيها صور base64 قديمة (قبل نقل الصور لـ Firebase
        Storage)، نشيلها هنا نفس منطق cleanupLegacyBase64Photos — عشان ما تمنعش الاسترجاع نفسه من
        الحفظ بسبب تخطّي حد حجم مستند Firestore (1 ميجابايت)، زي ما حصل قبل كده مع الحفظ العادي */
@@ -1786,8 +1845,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         const merged = {};
         Object.keys(payload).forEach((key) => {
           const baselineJson = lastSyncedFieldsRef.current[key];
-          const localJson = JSON.stringify(payload[key]);
-          merged[key] = baselineJson !== undefined && localJson === baselineJson && server[key] !== undefined ? server[key] : payload[key];
+          merged[key] = resolveFieldForSave(key, payload[key], server, baselineJson);
         });
         return DATA_DOC.set(JSON.parse(JSON.stringify(merged))).then(() => merged);
       })
@@ -3194,7 +3252,19 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           <ReportsTab activityLog={activityLog} users={users} />
         )}
         {hasTab("settings") && tab === "settings" && (
-          <SettingsTab gosiRates={gosiRates} setGosiRates={setGosiRates} isAdmin={isAdmin} onRestoreBackup={restoreBackup} onCleanupLegacyPhotos={cleanupLegacyBase64Photos} logActivity={logActivity} />
+          <SettingsTab
+            gosiRates={gosiRates}
+            setGosiRates={setGosiRates}
+            isAdmin={isAdmin}
+            onRestoreBackup={restoreBackup}
+            onCleanupLegacyPhotos={cleanupLegacyBase64Photos}
+            logActivity={logActivity}
+            getFullDataSnapshot={() => ({
+              entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance,
+              gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders,
+              qualityTemplates, qualitySubmissions, warnings, users,
+            })}
+          />
         )}
         {isAdmin && tab === "users" && (
           <UsersTab users={users} setUsers={setUsers} employees={employees} branches={branches} entities={entities} logActivity={logActivity} />
@@ -8171,13 +8241,31 @@ function EOSTab({ employees }) {
 }
 
 /* ============ الإعدادات ============ */
-function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onCleanupLegacyPhotos, logActivity }) {
+function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onCleanupLegacyPhotos, logActivity, getFullDataSnapshot }) {
   const { t } = useLang();
   const [backups, setBackups] = useState([]);
   const [backupsLoaded, setBackupsLoaded] = useState(false);
   const [restoring, setRestoring] = useState("");
   const [confirmDate, setConfirmDate] = useState("");
   const [restoreMsg, setRestoreMsg] = useState({});
+
+  /* تنزيل نسخة احتياطية على جهاز الأدمن نفسه (خارج Firestore تمامًا) — طبقة حماية إضافية مستقلة
+     عن أي علة أو حادثة تحصل في القاعدة، الأدمن يقدر يحتفظ بالملف على جهازه أو يبعته لنفسه بالإيميل */
+  const downloadLocalBackup = () => {
+    if (!getFullDataSnapshot) return;
+    const snapshot = getFullDataSnapshot();
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `نسخة-احتياطية-${dateStr}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    logActivity && logActivity("تنزيل نسخة احتياطية يدوية على الجهاز", "settings", dateStr);
+  };
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -8225,6 +8313,20 @@ function SettingsTab({ gosiRates, setGosiRates, isAdmin, onRestoreBackup, onClea
   return (
     <div>
       <Header title={t("الإعدادات", "Settings")} subtitle={t("تعديل نسب التأمينات الاجتماعية (GOSI) المستخدمة في احتساب الرواتب", "Edit the Social Insurance (GOSI) rates used in payroll calculations")} />
+
+      {isAdmin && getFullDataSnapshot && (
+        <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, maxWidth: 480, marginBottom: 20 }}>
+          <SectionTitle>{t("نسخة احتياطية على جهازك", "Backup to Your Device")}</SectionTitle>
+          <div style={{ fontSize: 12.5, color: "#8a7a63", marginBottom: 12, lineHeight: 1.7 }}>
+            {t(
+              "بتنزّل كل بيانات النظام (الموظفين، الفروع، الحضور... كل حاجة) في ملف واحد على جهازك، مستقل تمامًا عن قاعدة البيانات — احتفظي بيه في مكان آمن (أو ابعتيه لنفسك بالإيميل) كطبقة حماية إضافية. يُنصح بعمل ده بعد أي يوم فيه إدخال بيانات مهم.",
+              "Downloads all system data (employees, branches, attendance… everything) into one file on your device, completely independent of the database — keep it somewhere safe (or email it to yourself) as an extra layer of protection. Recommended after any day with important data entry."
+            )}
+          </div>
+          <Btn onClick={downloadLocalBackup}>{t("⬇ تنزيل نسخة احتياطية الآن", "⬇ Download Backup Now")}</Btn>
+        </div>
+      )}
+
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, maxWidth: 480 }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <Field label={t("حصة الموظف السعودي (%)", "Saudi Employee Share (%)")}>
