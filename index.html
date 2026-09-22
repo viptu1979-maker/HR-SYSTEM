@@ -12023,7 +12023,17 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
   const [recoveryMsg, setRecoveryMsg] = useState("");
   const [recoveryErr, setRecoveryErr] = useState("");
 
-  const unmigratedUsers = users.filter((u) => !u.authUid);
+  /* حسابات الموظفين المنتهية خدمتهم لا نعرضها للترحيل لنظام Firebase Authentication — مفيش داعي
+     لإنشاء حماية حقيقية لحساب دخول لموظف خلاص ما عاد يشتغل، وده كان بيسبب ظهورهم كل مرة في قايمة
+     "لسه ما اترحّلوش" ومحاولة ترحيلهم بالغلط */
+  const migratableUsers = users.filter((u) => {
+    if (u.role === "employee" && u.employeeId) {
+      const linkedEmp = employees.find((e) => e.id === u.employeeId);
+      if (linkedEmp && linkedEmp.status === "منتهي الخدمة") return false;
+    }
+    return true;
+  });
+  const unmigratedUsers = migratableUsers.filter((u) => !u.authUid);
   const myRecord = auth.currentUser ? users.find((u) => u.authUid === auth.currentUser.uid) : null;
 
   /* ربط بريد استرجاع كلمة المرور بحساب المستخدم الحالي المسجّل دخوله فعليًا. عملية تغيير البريد في
@@ -12218,8 +12228,8 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
             <div style={{ fontSize: 11.5, color: "#6b5a45", marginTop: 3, maxWidth: 640 }}>
               {unmigratedUsers.length
                 ? t(
-                    `${unmigratedUsers.length} من ${users.length} حساب لسه ما اترحّلش لنظام الحماية الحقيقي. الترحيل آمن تمامًا ومايغيّرش اسم المستخدم/كلمة المرور الحالية لأي حد — بس يضيف طبقة حماية حقيقية من جهة Firebase. اعمله وأنت متأكد إن كل حد يقدر يدخل بعده.`,
-                    `${unmigratedUsers.length} of ${users.length} accounts haven't been migrated to real authentication yet. Migration is completely safe and doesn't change anyone's current username/password — it just adds a real Firebase-verified security layer. Run it when you can verify everyone can still log in afterward.`
+                    `${unmigratedUsers.length} من ${migratableUsers.length} حساب لسه ما اترحّلش لنظام الحماية الحقيقي (الموظفين منتهيي الخدمة مستبعدين من العدّ والترحيل). الترحيل آمن تمامًا ومايغيّرش اسم المستخدم/كلمة المرور الحالية لأي حد — بس يضيف طبقة حماية حقيقية من جهة Firebase. اعمله وأنت متأكد إن كل حد يقدر يدخل بعده.`,
+                    `${unmigratedUsers.length} of ${migratableUsers.length} accounts haven't been migrated to real authentication yet (terminated employees are excluded from the count and from migration). Migration is completely safe and doesn't change anyone's current username/password — it just adds a real Firebase-verified security layer. Run it when you can verify everyone can still log in afterward.`
                   )
                 : t("كل الحسابات مرحّلة لـ Firebase Authentication ✔ — جاهزة لتشديد قواعد Firestore متى ما حبيت.", "All accounts are migrated to Firebase Authentication ✔ — ready for tightening Firestore rules whenever you're ready.")}
             </div>
