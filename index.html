@@ -198,6 +198,10 @@ const LOG_DOC = db.collection("hrSystem").doc("activityLog");
    أو تعديل بالغلط سواء من داخل النظام أو من Firestore Console مباشرة */
 const BACKUPS_COLLECTION = db.collection("hrSystemBackups");
 const BACKUP_RETENTION_DAYS = 14;
+/* سماحية التأخير والخروج المبكر: أي فرق دقايق (عن وقت بداية/نهاية الدوام المقرَّر) يساوي هذا الرقم أو أقل
+   ما يُحتسب تأخير ولا خروج مبكر إطلاقًا (سماحية كاملة، مش خصم جزء منها) — لو تجاوز الفرق السماحية، يُحتسب
+   كامل الفرق الفعلي زي ما هو، مش الفرق ناقص السماحية */
+const LATE_EARLY_GRACE_MINUTES = 10;
 
 /* ============ دمج آمن لأقسام البيانات وقت الحفظ (يمنع تعارض عمل شخصين في نفس الوقت) ============
    الأقسام دي كلها "قوائم سجلات" (كل سجل له id فريد) — لو شخصين شغالين وقت واحد وكل واحد لمس نفس
@@ -2409,7 +2413,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         const isOffDayToday = getOffDays(myEmployee).includes(todayDayName);
         const shiftStart = effectiveShift(myEmployee, todayDayName).start;
         const diff = (myEmployee.flexibleSchedule || isOffDayToday) ? 0 : minutesOf(timeStr) - minutesOf(shiftStart);
-        const lateMinutes = diff > 0 ? diff : 0;
+        const lateMinutes = diff > LATE_EARLY_GRACE_MINUTES ? diff : 0;
         const rec = {
           id: uid(),
           employeeId: myEmployee.id,
@@ -2430,7 +2434,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       } else {
         const shiftStart2 = myEmployee.workShift2?.start || "17:00";
         const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart2);
-        const lateMinutes2 = diff > 0 ? diff : 0;
+        const lateMinutes2 = diff > LATE_EARLY_GRACE_MINUTES ? diff : 0;
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === already.id
@@ -2496,7 +2500,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           overtimeHours = diff > 0 ? Math.min(12, Math.round((diff / 60) * 2) / 2) : 0;
           /* لو انصرف قبل نهاية دوامه، نسجّل عدد دقائق الخروج المبكر (يُستخدم في خصم الراتب لاحقًا) —
              السقف الأقصى هو عدد ساعات دوامه الفعلية اليومية، مش 8 ساعات ثابتة للجميع */
-          earlyLeaveMinutes = diff < 0 ? Math.min(dailyWorkHours(myEmployee) * 60, -diff) : 0;
+          earlyLeaveMinutes = diff < -LATE_EARLY_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff) : 0;
         }
         setAttendance((prev) =>
           prev.map((a) =>
@@ -2530,7 +2534,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           if (shiftEnd2Minutes <= minutesOf(shiftStart2Raw)) shiftEnd2Minutes += 24 * 60;
           const diff2 = checkoutMinutesAdj2 - shiftEnd2Minutes;
           overtimeHours2 = diff2 > 0 ? Math.min(12, Math.round((diff2 / 60) * 2) / 2) : 0;
-          earlyLeaveMinutes2 = diff2 < 0 ? Math.min(dailyWorkHours(myEmployee) * 60, -diff2) : 0;
+          earlyLeaveMinutes2 = diff2 < -LATE_EARLY_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff2) : 0;
         }
         setAttendance((prev) =>
           prev.map((a) =>
