@@ -7348,7 +7348,12 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
     .filter((e) => e.status === "نشط")
     .map((e) => {
       const monthAttendance = attendance.filter((a) => a.employeeId === e.id && a.date >= monthStart && a.date <= monthEnd);
-      const presentDays = monthAttendance.filter((a) => a.checkInTime).length;
+      /* "أيام حضور" = أي يوم له سجل حالته حاضر/متأخر — سواء بصمة ذاتية (لها وقت حضور) أو تسجيل جماعي
+         من الأدمن (تحديد الكل حاضر ليوم معيّن، بدون وقت حضور محدَّد). قبل هذا الإصلاح كان الشرط
+         a.checkInTime بس، فكان يتجاهل أيام "التسجيل الجماعي" تمامًا من هذا العدّاد رغم إنها بتُحتسب
+         "حاضر" في cleanDays تحت — فيطلع مقام نسبة الالتزام (expectedDays) أصغر من بسطها (cleanDays)
+         بالغلط، وتظهر نسب خيالية زي 1150% أو 2300% */
+      const presentDays = monthAttendance.filter((a) => a.status === "حاضر" || a.status === "متأخر").length;
       const lateDays = monthAttendance.filter((a) => a.status === "متأخر").length;
       const lateMinutesTotal = monthAttendance.reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
       const earlyLeaveDays = monthAttendance.filter((a) => Number(a.earlyLeaveMinutes || 0) > 0 || Number(a.earlyLeaveMinutes2 || 0) > 0).length;
@@ -7357,11 +7362,16 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
       const employeeApprovedLeaves = leaves.filter((l) => l.employeeId === e.id);
       const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
       const absentDays = manualAbsentDays + autoAbsentDays;
+      const overtimeDays = monthAttendance.filter((a) => Number(a.overtimeHours || 0) > 0 || Number(a.overtimeHours2 || 0) > 0).length;
+      const overtimeHoursTotal = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0) + Number(a.overtimeHours2 || 0), 0);
       const cleanDays = monthAttendance.filter(
         (a) => a.status === "حاضر" && !Number(a.earlyLeaveMinutes || 0) && !Number(a.earlyLeaveMinutes2 || 0) && !Number(a.shortfallMinutes || 0)
       ).length;
       const expectedDays = presentDays + absentDays;
-      const complianceRate = expectedDays > 0 ? Math.round((cleanDays / expectedDays) * 100) : 100;
+      /* سقف أمان: النسبة منطقيًا ما تتعدى 100% أبدًا (cleanDays ≤ expectedDays دايمًا) — لو حصل أي
+         تضارب بيانات غريب يخلي البسط أكبر من المقام (زي سجلات قديمة من قبل هذا الإصلاح)، نحد النسبة
+         عند 100% بدل ما تظهر رقم خيالي زي 1150% */
+      const complianceRate = expectedDays > 0 ? Math.min(100, Math.round((cleanDays / expectedDays) * 100)) : 100;
       const faceEnabled = e.faceAttendanceEnabled !== false;
       const faceRegistered = !!e.faceDescriptor;
       const daysWithFacePhoto = monthAttendance.filter((a) => a.checkInPhoto).length;
@@ -7373,6 +7383,8 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
         earlyLeaveDays,
         earlyLeaveMinutesTotal,
         absentDays,
+        overtimeDays,
+        overtimeHoursTotal,
         expectedDays,
         complianceRate,
         faceEnabled,
@@ -7442,6 +7454,7 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
               <span style={{ color: r.lateDays ? COLORS.brick : "#a3927a" }}>{t(`تأخير: ${r.lateDays} يوم (${r.lateMinutesTotal} د)`, `Late: ${r.lateDays} days (${r.lateMinutesTotal}m)`)}</span>
               <span style={{ color: r.earlyLeaveDays ? COLORS.brick : "#a3927a" }}>{t(`خروج مبكر: ${r.earlyLeaveDays} يوم (${r.earlyLeaveMinutesTotal} د)`, `Early leave: ${r.earlyLeaveDays} days (${r.earlyLeaveMinutesTotal}m)`)}</span>
               <span style={{ color: r.absentDays ? COLORS.brick : "#a3927a" }}>{t(`غياب: ${r.absentDays} يوم`, `Absent: ${r.absentDays} days`)}</span>
+              <span style={{ color: r.overtimeHoursTotal ? COLORS.green : "#a3927a" }}>{t(`إضافي: ${r.overtimeDays} يوم (${r.overtimeHoursTotal} س)`, `Overtime: ${r.overtimeDays} days (${r.overtimeHoursTotal}h)`)}</span>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
               {!r.faceEnabled ? (
