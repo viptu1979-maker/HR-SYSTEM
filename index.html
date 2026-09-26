@@ -3941,6 +3941,9 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
   const [certType, setCertType] = useState("salary");
   const [certRefNo, setCertRefNo] = useState("");
   const [certAddressedTo, setCertAddressedTo] = useState("");
+  /* تقرير جدول الشفتات المقرّرة لكل فرع (دوام موحّد/دوامين/دوام حر/أوقات مختلفة لكل يوم + الإجازة
+     الأسبوعية) — تقرير خطة الدوام المقررة، مش سجل حضور فعلي */
+  const [showShiftsReport, setShowShiftsReport] = useState(false);
 
   /* فتح الملف الشخصي تلقائيًا عند القدوم من البحث العام */
   useEffect(() => {
@@ -4090,7 +4093,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
       <Header
         title={t("الموظفون", "Employees")}
         subtitle={t("سجل بيانات الموظفين عبر جميع الفروع", "Employee records across all branches")}
-        action={<Btn tone="secondary" small onClick={() => setShowImport((v) => !v)}>{showImport ? t("إغلاق الاستيراد", "Close Import") : t("استيراد جماعي", "Bulk Import")}</Btn>}
+        action={
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <Btn tone="secondary" small onClick={() => setShowShiftsReport(true)}>{t("🖶 تقرير دوامات الفروع", "🖶 Branch Shifts Report")}</Btn>
+            <Btn tone="secondary" small onClick={() => setShowImport((v) => !v)}>{showImport ? t("إغلاق الاستيراد", "Close Import") : t("استيراد جماعي", "Bulk Import")}</Btn>
+          </div>
+        }
       />
 
       {showImport && (
@@ -4622,6 +4630,126 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           </div>
         </div>
       )}
+      {showShiftsReport && (
+        <BranchShiftsReportModal branches={branches} entities={entities} employees={employees} onClose={() => setShowShiftsReport(false)} />
+      )}
+    </div>
+  );
+}
+
+/* ============ تقرير جدول الشفتات المقرّرة لكل فرع (خطة الدوام، وليس سجل حضور فعلي) ============ */
+function BranchShiftsReportModal({ branches, entities, employees, onClose }) {
+  const { t } = useLang();
+
+  const shiftKind = (e) => {
+    if (e.flexibleSchedule) return t("دوام حر", "Flexible");
+    if (e.useDaySchedules) return t("أوقات مختلفة لكل يوم", "Per-day schedule");
+    if (e.twoShifts) return t("دوامين", "Two shifts");
+    return t("دوام موحّد", "Fixed");
+  };
+
+  const shiftSummary = (e) => {
+    if (e.flexibleSchedule) {
+      return t(`${dailyWorkHours(e)} ساعات يوميًا`, `${dailyWorkHours(e)}h/day`);
+    }
+    if (e.useDaySchedules) {
+      const offDays = getOffDays(e);
+      const parts = WEEK_DAYS.filter((d) => !offDays.includes(d)).map((d) => {
+        const s = effectiveShift(e, d);
+        return `${t(d, WEEK_DAYS_EN[d] || d)} ${s.start}–${s.end}`;
+      });
+      return parts.length ? parts.join(t("، ", ", ")) : t("غير محدد", "Not set");
+    }
+    if (e.twoShifts) {
+      const s1 = e.workShift || {};
+      const s2 = e.workShift2 || {};
+      return `${s1.start || "—"}–${s1.end || "—"} / ${s2.start || "—"}–${s2.end || "—"}`;
+    }
+    const s = e.workShift || {};
+    return `${s.start || "—"}–${s.end || "—"}`;
+  };
+
+  const branchGroups = entities
+    .map((ent) => ({ entity: ent, branches: branches.filter((b) => b.entityId === ent.id) }))
+    .filter((g) => g.branches.length);
+  const orphanBranches = branches.filter((b) => !entities.some((ent) => ent.id === b.entityId));
+  if (orphanBranches.length) branchGroups.push({ entity: null, branches: orphanBranches });
+
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 65, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "#fff", borderRadius: 12, maxWidth: 920, width: "100%", maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.35)" }}
+        onClick={(ev) => ev.stopPropagation()}
+      >
+        <div
+          className="no-print"
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: `1px solid ${COLORS.line}`, position: "sticky", top: 0, background: "#fff", zIndex: 2, borderRadius: "12px 12px 0 0", flexWrap: "wrap", gap: 10 }}
+        >
+          <div style={{ fontWeight: 700, color: COLORS.espresso }}>{t("تقرير دوامات الفروع — معاينة", "Branch Shifts Report — Preview")}</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn small onClick={() => window.print()}>{t("🖶 طباعة", "🖶 Print")}</Btn>
+            <Btn small tone="secondary" onClick={onClose}>{t("إغلاق ✕", "Close ✕")}</Btn>
+          </div>
+        </div>
+
+        <div className="print-section print-section-modal" style={{ padding: 24 }}>
+          <div style={{ textAlign: "center", marginBottom: 20, borderBottom: `2px solid ${COLORS.gold}`, paddingBottom: 12 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso }}>{t("تقرير دوامات الفروع", "Branch Shifts Report")}</div>
+            <div style={{ fontSize: 11.5, color: "#a3927a", marginTop: 4 }}>
+              {t("جدول الشفتات المقرّرة لكل فرع — خطة الدوام، وليس سجل حضور فعلي", "The scheduled shift plan per branch — not an actual attendance log")}
+            </div>
+          </div>
+
+          {branches.length === 0 && <Empty text={t("لا توجد فروع مسجَّلة", "No branches registered")} />}
+
+          {branchGroups.map((group) => (
+            <div key={group.entity ? group.entity.id : "orphan"} style={{ marginBottom: 22 }}>
+              {group.entity && (
+                <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.coffee, marginBottom: 10 }}>{group.entity.name}</div>
+              )}
+              {group.branches.map((b) => {
+                const branchEmployees = employees.filter((e) => e.branchId === b.id && e.status === "نشط");
+                return (
+                  <div key={b.id} style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: COLORS.espresso, background: COLORS.paper, padding: "6px 10px", borderRadius: 6, marginBottom: 6 }}>
+                      {b.name}{b.city ? ` — ${b.city}` : ""} ({t(`${branchEmployees.length} موظف`, `${branchEmployees.length} employees`)})
+                    </div>
+                    {branchEmployees.length === 0 ? (
+                      <Empty text={t("لا يوجد موظفون نشطون في هذا الفرع", "No active employees at this branch")} />
+                    ) : (
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ background: COLORS.paper }}>
+                            <th style={{ padding: "6px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("الاسم", "Name")}</th>
+                            <th style={{ padding: "6px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("المسمى الوظيفي", "Position")}</th>
+                            <th style={{ padding: "6px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("نوع الدوام", "Shift Type")}</th>
+                            <th style={{ padding: "6px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("تفاصيل الدوام", "Shift Details")}</th>
+                            <th style={{ padding: "6px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("الإجازة الأسبوعية", "Weekly Off")}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {branchEmployees.map((e) => (
+                            <tr key={e.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                              <td style={{ padding: "6px 10px" }}>{e.name}</td>
+                              <td style={{ padding: "6px 10px" }}>{e.position || "—"}</td>
+                              <td style={{ padding: "6px 10px" }}>{shiftKind(e)}</td>
+                              <td style={{ padding: "6px 10px", fontFamily: "Consolas, monospace", fontSize: 11 }}>{shiftSummary(e)}</td>
+                              <td style={{ padding: "6px 10px" }}>{formatOffDays(getOffDays(e), t)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
