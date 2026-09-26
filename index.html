@@ -217,26 +217,53 @@ const ARRAY_MERGE_FIELDS = new Set([
   "attendance", "vehicles", "payrollItems", "tasks", "messages", "equipment",
   "workOrders", "qualityTemplates", "qualitySubmissions", "warnings",
 ]);
-function mergeArrayByIdUnion(localArr, serverArr) {
-  if (!Array.isArray(localArr)) return Array.isArray(serverArr) ? serverArr : [];
+function mergeArrayByIdUnion(localArr, serverArr, excludeIds) {
+  if (!Array.isArray(localArr)) {
+    if (!Array.isArray(serverArr)) return [];
+    return excludeIds ? serverArr.filter((r) => !(r && r.id != null && excludeIds.has(r.id))) : serverArr;
+  }
   if (!Array.isArray(serverArr)) return localArr;
   const localIds = new Set(localArr.filter((r) => r && r.id != null).map((r) => r.id));
   const merged = localArr.slice();
   serverArr.forEach((rec) => {
-    if (rec && rec.id != null && !localIds.has(rec.id)) merged.push(rec);
+    if (rec && rec.id != null && !localIds.has(rec.id) && !(excludeIds && excludeIds.has(rec.id))) merged.push(rec);
   });
   return merged;
 }
+/* اكتشاف تلقائي لأي سجلات حذفها المستخدم محليًا منذ آخر مزامنة مؤكدة مع القاعدة (baseline) — بمقارنة
+   السجلات الموجودة في baseline بالسجلات الموجودة في النسخة المحلية الحالية. أي id كان موجودًا في
+   baseline واختفى من النسخة المحلية = المستخدم حذفه بنفسه عمدًا (مفيش طريقة تانية يختفي بيها).
+   الهدف: منع دمج الاتحاد (mergeArrayByIdUnion) من "إحياء" هذا السجل تلقائيًا لمجرد إن نسخة الخادم
+   (أو تحديث onSnapshot وارد) لسه فيها النسخة القديمة قبل الحذف — بدون أي حاجة لتعديل كل دالة حذف
+   في التطبيق (السلوك يتكشف تلقائيًا من الفرق بين baseline والنسخة المحلية، في مكان واحد بس) */
+function computeLocallyDeletedIds(baselineJson, localArr) {
+  if (!baselineJson || !Array.isArray(localArr)) return null;
+  let baselineArr;
+  try {
+    baselineArr = JSON.parse(baselineJson);
+  } catch (e) {
+    return null;
+  }
+  if (!Array.isArray(baselineArr)) return null;
+  const localIds = new Set(localArr.filter((r) => r && r.id != null).map((r) => r.id));
+  const deleted = new Set();
+  baselineArr.forEach((r) => {
+    if (r && r.id != null && !localIds.has(r.id)) deleted.add(r.id);
+  });
+  return deleted.size > 0 ? deleted : null;
+}
 /* يحسب القيمة النهائية لقسم واحد وقت الحفظ: لو القسم زي ما هو من آخر مزامنة (مفيش تعديل محلي عليه)
    ناخد أحدث نسخة من الخادم كالمعتاد. لو فيه تعديل محلي عليه وهو من نوع "قائمة سجلات"، ندمج بالـ id
-   بدل الاستبدال الكامل. غير كده (تعديل محلي على قسم مش قائمة، زي نسب GOSI) نستخدم النسخة المحلية زي
-   ما كان الحال قبل كده بالظبط */
+   بدل الاستبدال الكامل — مع استبعاد أي سجل اتحذف محليًا عمدًا عشان ما يرجعش يظهر تاني (المشكلة اللي
+   كانت تخلي حذف أي إنذار/خصم/سجل يرجع فورًا بعد الحفظ). غير كده (تعديل محلي على قسم مش قائمة، زي
+   نسب GOSI) نستخدم النسخة المحلية زي ما كان الحال قبل كده بالظبط */
 function resolveFieldForSave(key, localValue, server, baselineJson) {
   const localJson = JSON.stringify(localValue);
   const untouchedLocally = baselineJson !== undefined && localJson === baselineJson;
   if (untouchedLocally && server[key] !== undefined) return server[key];
   if (ARRAY_MERGE_FIELDS.has(key) && Array.isArray(server[key])) {
-    return mergeArrayByIdUnion(localValue, server[key]);
+    const deletedIds = computeLocallyDeletedIds(baselineJson, localValue);
+    return mergeArrayByIdUnion(localValue, server[key], deletedIds);
   }
   return localValue;
 }
@@ -1542,7 +1569,10 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
                  من غير ما نلمس التعديل المحلي غير المحفوظ نفسه — فتظهر تسجيلات الحضور الجديدة
                  لحظيًا حتى لو الأدمن لسه ما حفظتش تعديلها */
               if (ARRAY_MERGE_FIELDS.has(key) && Array.isArray(incoming) && Array.isArray(prevLocal)) {
-                return mergeArrayByIdUnion(prevLocal, incoming);
+                /* برضو نستبعد أي سجل حذفه المستخدم محليًا عمدًا (زي إنذار أو خصم) من الرجوع للظهور
+                   فورًا لمجرد إن هذا التحديث الوارد من الخادم لسه ما يعرفش إن السجل اتحذف */
+                const deletedIds = computeLocallyDeletedIds(baselineJson, prevLocal);
+                return mergeArrayByIdUnion(prevLocal, incoming, deletedIds);
               }
               return prevLocal;
             });
