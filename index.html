@@ -837,11 +837,12 @@ const ADVANCE_REQUEST_STATUS_LABELS_EN = {
 const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late", "إجازة": "Leave" };
 const PAYROLL_ITEM_TYPE_LABELS_EN = { "سلفة": "Advance", "خصم": "Deduction", "حافز": "Incentive" };
 /* أنواع مخالفات الموظفين ودرجات الإنذار — تُستخدم في تبويب "الإنذارات والمخالفات" */
-const WARNING_CATEGORIES = ["غياب بدون عذر", "تأخر متكرر عن الدوام", "خروج مبكر بدون إذن", "مخالفة سلوكية", "مخالفة بزي العمل والمظهر", "إهمال في العمل", "أخرى"];
+const WARNING_CATEGORIES = ["غياب بدون عذر", "تأخر متكرر عن الدوام", "خروج مبكر بدون إذن", "التحايل على نظام تسجيل الحضور", "مخالفة سلوكية", "مخالفة بزي العمل والمظهر", "إهمال في العمل", "أخرى"];
 const WARNING_CATEGORIES_EN = {
   "غياب بدون عذر": "Unauthorized Absence",
   "تأخر متكرر عن الدوام": "Repeated Lateness",
   "خروج مبكر بدون إذن": "Unauthorized Early Leave",
+  "التحايل على نظام تسجيل الحضور": "Attendance Check-in Fraud",
   "مخالفة سلوكية": "Behavioral Violation",
   "مخالفة بزي العمل والمظهر": "Uniform/Appearance Violation",
   "إهمال في العمل": "Work Negligence",
@@ -11379,6 +11380,29 @@ function AdvanceRequestForm({ onSubmit, t }) {
    (خطأ 503)، بينما jsdelivr مصمم بالظبط لتوزيع نفس ملفات مستودعات GitHub بشكل موثوق */
 const FACE_MODELS_URL = "https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights/";
 const FACE_MATCH_THRESHOLD = 0.5;
+/* حد أدنى للفرق في "نسبة موضع الأنف" بين اللقطة الأمامية ولقطة الالتفاتة — دليل حركة رأس حقيقية
+   (صورة ثابتة معروضة على شاشة جوال ثاني لا يمكن أن "تلتفت"، فيفشل هذا الفحص ويكشف التحايل) */
+const LIVENESS_POSE_CHANGE_THRESHOLD = 0.14;
+/* نسبة موضع الأنف أفقيًا بين طرفي الفك (0 = عند أقصى الفك من جهة، 1 = من الجهة الأخرى، 0.5 تقريبًا = وجه مواجه للكاميرا مباشرة).
+   دالة مستقلة وبسيطة (بدون أي اعتماد على الكاميرا) عشان تكون قابلة للاختبار الآلي */
+function noseOffsetRatio(landmarks) {
+  if (!landmarks || !landmarks.getJawOutline || !landmarks.getNose) return 0.5;
+  const jaw = landmarks.getJawOutline();
+  const nose = landmarks.getNose();
+  if (!jaw || jaw.length < 17 || !nose || nose.length < 1) return 0.5;
+  const xA = jaw[0].x;
+  const xB = jaw[16].x;
+  const width = Math.abs(xB - xA);
+  if (!width) return 0.5;
+  const noseTip = nose[nose.length - 1];
+  return (noseTip.x - Math.min(xA, xB)) / width;
+}
+function isLivenessPoseChangeValid(baseRatio, turnedRatio, threshold) {
+  const th = threshold == null ? LIVENESS_POSE_CHANGE_THRESHOLD : threshold;
+  if (typeof baseRatio !== "number" || typeof turnedRatio !== "number") return false;
+  if (Number.isNaN(baseRatio) || Number.isNaN(turnedRatio)) return false;
+  return Math.abs(turnedRatio - baseRatio) >= th;
+}
 let __faceModelsPromise = null;
 function loadFaceModels() {
   if (!__faceModelsPromise) {
@@ -11400,6 +11424,13 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [attempts, setAttempts] = useState(0);
+  /* خطوة إضافية بعد التقاط الصورة الأمامية: نطلب من الموظف الالتفات لجهة عشوائية (يمين/يسار) للتأكد إنه
+     واقف فعليًا أمام الكاميرا وليس ماسك صورة معروضة على جوال ثاني — صورة ثابتة لا يمكنها "الالتفات" */
+  const [step, setStep] = useState("center");
+  const [turnAttempts, setTurnAttempts] = useState(0);
+  const [challengeDir] = useState(() => (Math.random() < 0.5 ? "يمين" : "يسار"));
+  const pendingRef = useRef(null);
+  const baseRatioRef = useRef(0.5);
 
   useEffect(() => {
     let cancelled = false;
@@ -11467,24 +11498,28 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
       const photo = canvas.toDataURL("image/jpeg", 0.55);
 
       if (isRegister) {
-        onVerified({ photo, descriptor: Array.from(detection.descriptor), matched: true });
-        return;
+        pendingRef.current = { photo, descriptor: Array.from(detection.descriptor), matched: true };
+      } else {
+        const stored = new Float32Array(employee.faceDescriptor);
+        const distance = faceapi.euclideanDistance(detection.descriptor, stored);
+        if (distance >= FACE_MATCH_THRESHOLD) {
+          const nextAttempts = attempts + 1;
+          setAttempts(nextAttempts);
+          setBusy(false);
+          setError(
+            nextAttempts >= 3
+              ? t("الوجه لا يطابق البصمة المسجّلة بعد عدة محاولات. تواصل مع الإدارة إذا استمرت المشكلة.", "Face doesn't match the registered profile after several attempts. Contact management if this continues.")
+              : t("الوجه غير مطابق للبصمة المسجّلة — حاول مرة أخرى.", "Face doesn't match the registered profile — try again.")
+          );
+          return;
+        }
+        pendingRef.current = { photo, descriptor: null, matched: true };
       }
 
-      const stored = new Float32Array(employee.faceDescriptor);
-      const distance = faceapi.euclideanDistance(detection.descriptor, stored);
-      if (distance < FACE_MATCH_THRESHOLD) {
-        onVerified({ photo, descriptor: null, matched: true });
-        return;
-      }
-      const nextAttempts = attempts + 1;
-      setAttempts(nextAttempts);
+      /* نجحت المطابقة — قبل الاعتماد النهائي، ننتقل لخطوة تأكيد الحركة (مقاومة التحايل بصورة ثابتة) */
+      baseRatioRef.current = noseOffsetRatio(detection.landmarks);
+      setStep("turn");
       setBusy(false);
-      setError(
-        nextAttempts >= 3
-          ? t("الوجه لا يطابق البصمة المسجّلة بعد عدة محاولات. تواصل مع الإدارة إذا استمرت المشكلة.", "Face doesn't match the registered profile after several attempts. Contact management if this continues.")
-          : t("الوجه غير مطابق للبصمة المسجّلة — حاول مرة أخرى.", "Face doesn't match the registered profile — try again.")
-      );
     } catch (e) {
       setError(
         e && e.message === "timeout"
@@ -11495,14 +11530,69 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
     }
   };
 
+  const confirmTurn = async () => {
+    if (!videoRef.current || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const detectionPromise = faceapi
+        .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+        .withFaceLandmarks();
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 20000));
+      const detection = await Promise.race([detectionPromise, timeoutPromise]);
+      if (!detection) {
+        setBusy(false);
+        setError(t("تأكد إن وجهك ما زال ظاهرًا بوضوح في الكاميرا وحاول مرة أخرى.", "Make sure your face is still clearly visible to the camera and try again."));
+        return;
+      }
+      const turnedRatio = noseOffsetRatio(detection.landmarks);
+      if (!isLivenessPoseChangeValid(baseRatioRef.current, turnedRatio)) {
+        const nextTurnAttempts = turnAttempts + 1;
+        setTurnAttempts(nextTurnAttempts);
+        setBusy(false);
+        setError(
+          nextTurnAttempts >= 3
+            ? t(
+                "لم يتم رصد حركة رأس حقيقية بعد عدة محاولات — هذه الخطوة تمنع تسجيل الحضور بصورة ثابتة بدل الوقوف أمام الكاميرا مباشرة. تواصل مع الإدارة إذا استمرت المشكلة.",
+                "No real head movement detected after several attempts — this step blocks checking in with a still photo instead of standing live in front of the camera. Contact management if this continues."
+              )
+            : t(
+                `ما رصدنا حركة كافية للرأس — التفت بوضوح ناحية ${challengeDir} وحاول مرة أخرى.`,
+                `We didn't detect enough head movement — clearly turn your head to the ${challengeDir === "يمين" ? "right" : "left"} and try again.`
+              )
+        );
+        return;
+      }
+      const pending = pendingRef.current;
+      setBusy(false);
+      if (pending) onVerified(pending);
+    } catch (e) {
+      setBusy(false);
+      setError(
+        e && e.message === "timeout"
+          ? t("استغرق التحقق من الحركة وقتًا طويلاً جدًا — حاول مرة أخرى.", "The movement check took too long — try again.")
+          : t("حدث خطأ أثناء التحقق من حركة الرأس — حاول مرة أخرى.", "Something went wrong while checking the head movement — try again.")
+      );
+    }
+  };
+
   return (
     <div style={{ position: "fixed", inset: 0, background: "rgba(20,14,8,0.72)", zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
       <div style={{ background: "#fff", borderRadius: 14, padding: 20, width: "100%", maxWidth: 380, textAlign: "center" }}>
         <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso, marginBottom: 4 }}>
-          {isRegister ? t("تسجيل الوجه لأول مرة", "First-time Face Registration") : t("تحقّق من الوجه", "Face Verification")}
+          {step === "turn"
+            ? t("خطوة أخيرة: تأكيد الحركة", "Final Step: Confirm Movement")
+            : isRegister
+            ? t("تسجيل الوجه لأول مرة", "First-time Face Registration")
+            : t("تحقّق من الوجه", "Face Verification")}
         </div>
         <div style={{ fontSize: 12, color: "#8a7a63", marginBottom: 12 }}>
-          {isRegister
+          {step === "turn"
+            ? t(
+                `التفت بوضوح ناحية ${challengeDir} ثم اضغط "تأكيد الحركة" — هذه الخطوة تمنع تسجيل الحضور بصورة معروضة على جوال بدل الوقوف أمام الكاميرا فعليًا.`,
+                `Clearly turn your head to the ${challengeDir === "يمين" ? "right" : "left"} then press "Confirm Movement" — this step prevents checking in with a photo shown on a phone instead of standing live in front of the camera.`
+              )
+            : isRegister
             ? t(
                 "هذه أول مرة تستخدم فيها تسجيل الحضور بالوجه — التقط صورتك الآن وسيتم اعتمادها تلقائيًا في كل مرة قادمة.",
                 "This is your first time using face attendance — take a photo now and it will be used automatically every time after."
@@ -11519,9 +11609,15 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
         )}
         <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
           <Btn tone="secondary" onClick={onCancel} disabled={busy}>{t("إلغاء", "Cancel")}</Btn>
-          <Btn onClick={capture} disabled={!ready || busy}>
-            {busy ? t("جارِ التحقق...", "Checking...") : t("📸 التقاط", "📸 Capture")}
-          </Btn>
+          {step === "turn" ? (
+            <Btn onClick={confirmTurn} disabled={!ready || busy}>
+              {busy ? t("جارِ التحقق...", "Checking...") : t("✔ تأكيد الحركة", "✔ Confirm Movement")}
+            </Btn>
+          ) : (
+            <Btn onClick={capture} disabled={!ready || busy}>
+              {busy ? t("جارِ التحقق...", "Checking...") : t("📸 التقاط", "📸 Capture")}
+            </Btn>
+          )}
         </div>
       </div>
     </div>
