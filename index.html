@@ -2518,7 +2518,13 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           shortfallMinutes = workedMinutes < requiredMinutes ? requiredMinutes - workedMinutes : 0;
           overtimeHours = workedMinutes > requiredMinutes ? Math.min(12, Math.round(((workedMinutes - requiredMinutes) / 60) * 2) / 2) : 0;
         } else {
-          const shiftInfo = effectiveShift(myEmployee, JS_DAY_INDEX_TO_AR[new Date().getDay()]);
+          /* مهم: نستخدم يوم بداية الدوام الفعلي (workDayName، المشتق من تاريخ سجل الحضور rec.date)
+             مش يوم التقويم الحالي وقت الضغط على "انصراف" — لأن الدوام الليلي يبدأ في يوم وينتهي
+             (وبالتالي يُسجَّل الانصراف) في اليوم التالي فعليًا. قبل هذا الإصلاح كان الكود يجيب دوام
+             "اليوم" الحالي (يوم الانصراف) بدل يوم الحضور الأصلي، فلو كان دوام الموظف يختلف من يوم
+             لآخر (useDaySchedules) أو كان يوم الانصراف نفسه يوم إجازته الأسبوعية، كان بيحسب خروج
+             مبكر/إضافي بأرقام غلط تمامًا (زي 719 دقيقة خروج مبكر لموظف دوامه الليلي طبيعي) */
+          const shiftInfo = effectiveShift(myEmployee, workDayName);
           const shiftStartRaw = shiftInfo.start || "08:00";
           /* دوام ليلي (وقت النهاية أصغر من أو يساوي وقت البداية، زي 16:00 → 00:00 أو 17:00 → 03:00)
              يمتد فعليًا لليوم التالي — نضيف 24 ساعة لوقت النهاية عشان الفرق يُحسب صح مقابل وقت
