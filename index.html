@@ -47,6 +47,21 @@
     /* لو فيه نافذة طباعة منبثقة مفتوحة (قسيمة راتب، إقرار خصم/سلفة، شهادة موظف...)، نطبع هي بس —
        نخفي أي "قسم طباعة" تاني في نفس الصفحة (زي جدول الرواتب الكامل) كان ظاهر جواها بالخلفية */
     body:has(.print-section-modal) .print-section:not(.print-section-modal) { visibility: hidden !important; }
+    /* إصلاح "تقرير الطباعة ينقطع/يتراكب بعد أول شاشة تقريبًا" — النافذة المنبثقة (مودال) نفسها
+       مبنية بـ position:fixed (تغطية الشاشة) + صندوق داخلي عنده overflow:auto وارتفاع محدود (92vh)
+       عشان يظهر بشريط تمرير على الشاشة. المشكلة إن position:fixed بالذات بيخلي المتصفح يحسب طول
+       صفحة الطباعة على أساس شاشة واحدة بس مهما طال التقرير الفعلي، فبيقص أي محتوى بعدها بدل ما
+       يكمله في صفحة تانية — فلازم وقت الطباعة نلغي كل ده ونخلي المحتوى يتدفّق بشكل طبيعي عبر كل
+       الصفحات المطلوبة (نفس مبدأ .print-section نفسها أسفل، لكن مطبَّق على العنصرين الأب والجد له) */
+    body:has(.print-section-modal) div:has(> .print-section-modal) {
+      position: static !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }
+    body:has(.print-section-modal) div:has(> div > .print-section-modal) {
+      position: static !important;
+      inset: auto !important;
+    }
     .print-section {
       position: absolute;
       left: 0;
@@ -1051,9 +1066,12 @@ function Stamp({ children, tone = "gold" }) {
   );
 }
 
-function ReceiptCard({ label, value, sub, tone }) {
+function ReceiptCard({ label, value, sub, tone, onClick }) {
+  const { t } = useLang();
   return (
     <div
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
       style={{
         background: "#fff",
         border: `1px dashed ${COLORS.line}`,
@@ -1063,6 +1081,7 @@ function ReceiptCard({ label, value, sub, tone }) {
         boxShadow: "0 1px 0 rgba(59,42,29,0.04)",
         flex: "1 1 200px",
         minWidth: 180,
+        cursor: onClick ? "pointer" : "default",
       }}
     >
       <div style={{ fontSize: 12, color: COLORS.coffee, fontWeight: 600, marginBottom: 6 }}>{label}</div>
@@ -1070,6 +1089,7 @@ function ReceiptCard({ label, value, sub, tone }) {
         {value}
       </div>
       {sub && <div style={{ fontSize: 11, color: "#8a7a63", marginTop: 4 }}>{sub}</div>}
+      {onClick && <div style={{ fontSize: 10.5, color: COLORS.coffee, marginTop: 6, textDecoration: "underline" }}>{t("اضغط لعرض التفاصيل", "Click to view details")}</div>}
     </div>
   );
 }
@@ -3118,6 +3138,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             employees={scopedEmployees}
             leaves={scopedLeaves}
             vehicles={scopedVehicles}
+            attendance={scopedAttendance}
             branchName={branchName}
             entityName={entityName}
           />
@@ -3335,13 +3356,30 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 }
 
 /* ============ لوحة التحكم ============ */
-function Dashboard({ entities, branches, employees, leaves, vehicles, branchName, entityName }) {
+function Dashboard({ entities, branches, employees, leaves, vehicles, attendance, branchName, entityName }) {
   const { t } = useLang();
   const [alertSearch, setAlertSearch] = useState("");
+  const [showAbsentModal, setShowAbsentModal] = useState(false);
   const activeCount = employees.filter((e) => e.status === "نشط").length;
   const totalSalaries = employees.filter((e) => e.status === "نشط").reduce((s, e) => s + Number(e.salary || 0), 0);
   const today = new Date().toISOString().slice(0, 10);
   const onLeaveToday = leaves.filter((l) => l.from <= today && l.to >= today).length;
+
+  /* الغائبون اليوم: موظف نشط، معيَّن فعلًا (تاريخ التعيين ما بعد اليوم)، اليوم مو إجازته الأسبوعية،
+     وما هو في إجازة معتمدة، وإما مسجَّل "غائب" يدويًا أو ما له أي سجل حضور اليوم لسه (نفس مبدأ
+     الغياب التلقائي المستخدم في الرواتب ومراقبة الالتزام، لكن مطبَّق على يوم اليوم بالذات) */
+  const todayDayName = JS_DAY_INDEX_TO_AR[new Date().getDay()];
+  const absentEmployeesToday = employees.filter((e) => {
+    if (e.status !== "نشط") return false;
+    if (e.joinDate && e.joinDate > today) return false;
+    const offDays = getOffDays(e);
+    if (offDays.includes(todayDayName)) return false;
+    const onLeave = (leaves || []).some((l) => l.employeeId === e.id && l.from <= today && l.to >= today);
+    if (onLeave) return false;
+    const rec = (attendance || []).find((a) => a.employeeId === e.id && a.date === today);
+    if (rec && rec.status !== "غائب") return false;
+    return true;
+  });
 
   /* تنبيهات عاجلة: أي ترخيص أو إقامة أو تأمين منتهي أو هينتهي خلال 7 أيام — تشمل الموظفين والفروع والسيارات */
   const isUrgent = (dateStr) => {
@@ -3405,7 +3443,62 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, branchName
         <ReceiptCard label={t("إجمالي الرواتب الشهرية", "Total Monthly Salaries")} value={`${fmt(totalSalaries)} ﷼`} tone={COLORS.coffee} />
         <ReceiptCard label={t("عدد الفروع", "Number of Branches")} value={fmt(branches.length)} sub={t(`عبر ${fmt(entities.length)} كيانات`, `across ${fmt(entities.length)} entities`)} />
         <ReceiptCard label={t("في إجازة اليوم", "On Leave Today")} value={fmt(onLeaveToday)} tone={onLeaveToday > 0 ? COLORS.brick : COLORS.green} />
+        <ReceiptCard
+          label={t("غائبون اليوم", "Absent Today")}
+          value={fmt(absentEmployeesToday.length)}
+          tone={absentEmployeesToday.length > 0 ? COLORS.brick : COLORS.green}
+          onClick={() => setShowAbsentModal(true)}
+        />
       </div>
+
+      {showAbsentModal && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 65, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => setShowAbsentModal(false)}
+        >
+          <div
+            style={{ background: "#fff", borderRadius: 12, maxWidth: 560, width: "100%", maxHeight: "80vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.35)" }}
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <div
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: `1px solid ${COLORS.line}`, position: "sticky", top: 0, background: "#fff", zIndex: 2, borderRadius: "12px 12px 0 0" }}
+            >
+              <div style={{ fontWeight: 700, color: COLORS.espresso }}>
+                {t(`الغائبون اليوم (${fmt(absentEmployeesToday.length)})`, `Absent Today (${fmt(absentEmployeesToday.length)})`)}
+              </div>
+              <Btn small tone="secondary" onClick={() => setShowAbsentModal(false)}>{t("إغلاق ✕", "Close ✕")}</Btn>
+            </div>
+            <div style={{ padding: absentEmployeesToday.length ? 0 : 24 }}>
+              {absentEmployeesToday.length === 0 && <Empty text={t("ما فيه أي موظف غائب اليوم 🎉", "No employees are absent today 🎉")} />}
+              {absentEmployeesToday.map((e, i) => {
+                const rec = (attendance || []).find((a) => a.employeeId === e.id && a.date === today);
+                return (
+                  <div
+                    key={e.id}
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      padding: "11px 20px",
+                      borderTop: i > 0 ? `1px dashed ${COLORS.line}` : "none",
+                      flexWrap: "wrap",
+                      gap: 8,
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: COLORS.espresso }}>{e.name}</div>
+                      <div style={{ fontSize: 11, color: "#8a7a63" }}>{branchName(e.branchId)}</div>
+                    </div>
+                    <Stamp tone="brick">
+                      {rec && rec.status === "غائب" ? t("مسجَّل غياب", "Marked Absent") : t("لم يسجّل حضوره بعد", "Hasn't Checked In")}
+                    </Stamp>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
 
       {totalAlertsCount > 0 && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
