@@ -1503,6 +1503,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [syncError, setSyncError] = useState("");
+  /* لو انقطع الاستماع اللحظي لبيانات النظام (خطأ شبكة مؤقت، أو الجهاز رجع من وضع السكون بعد ما
+     كان التطبيق مفتوح فترة طويلة بدون تفاعل...) كان البرنامج يفضل "عالق" على رسالة الخطأ للأبد
+     من غير أي محاولة تانية، لحد ما المستخدم يسوي تحديث يدوي للصفحة بنفسه — نجبر إعادة محاولة
+     الاتصال تلقائيًا بدل الانتظار منه */
+  const [dataRetryTick, setDataRetryTick] = useState(0);
+  const retryTimerRef = useRef(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const isMobile = useIsMobile();
   const [navOpen, setNavOpen] = useState(false);
@@ -1633,10 +1639,19 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       (err) => {
         setSyncError("تعذر الاتصال بقاعدة البيانات المشتركة — تحقّق من اتصال الإنترنت");
         setLoaded(true);
+        /* الاستماع مات فعليًا بعد هذا الخطأ ولن يعاود إرسال أي تحديثات من نفسه — بدل ما نسيب
+           البرنامج عالق على هذه الرسالة للأبد وتوقف كل المزامنة (بما فيها الحفظ اليدوي، لأن زر
+           الحفظ بيتعطّل وقت وجود syncError)، نجرّب إعادة الاشتراك تلقائيًا بعد 10 ثواني. لو
+           رجعت الشبكة/الصلاحية تظبط هيتعافى بصمت من نفسه، ولو المشكلة مستمرة هيستمر يحاول
+           بهدوء في الخلفية بدل ما يحتاج المستخدم يسوي تحديث يدوي للصفحة */
+        retryTimerRef.current = setTimeout(() => setDataRetryTick((n) => n + 1), 10000);
       }
     );
-    return () => unsub();
-  }, []);
+    return () => {
+      unsub();
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, [dataRetryTick]);
 
   /* تعقّب التعديلات: بمجرد أي تغيير في البيانات (موظف، حضور، راتب...) نعلّمه "غير محفوظ".
      لصفحة الموظف الذاتية (دور "employee"): الحفظ تلقائي زي الأول — التعديل بيتزامن مع القاعدة
@@ -9740,6 +9755,7 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
   const [branchFilter, setBranchFilter] = useState("");
   const [commentDrafts, setCommentDrafts] = useState({});
   const [photoBusy, setPhotoBusy] = useState({});
+  const [photoError, setPhotoError] = useState({});
   const [videoBusy, setVideoBusy] = useState({});
   const [videoError, setVideoError] = useState({});
   const [lightbox, setLightbox] = useState(null);
@@ -9749,6 +9765,7 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
   const handlePhotoUpload = async (taskId, files) => {
     if (!files || files.length === 0) return;
     setPhotoBusy((p) => ({ ...p, [taskId]: true }));
+    setPhotoError((p) => ({ ...p, [taskId]: "" }));
     try {
       /* نضغط الصورة محليًا الأول، وبعدين نرفعها على Storage (مش نخزّنها base64 داخل Firestore)
          عشان ما تتسبّبش في تضخيم مستند البيانات المشترك مع الوقت */
@@ -9756,7 +9773,7 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
       const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `taskPhotos/${taskId}`)));
       onAddTaskPhotos && onAddTaskPhotos(taskId, urls);
     } catch (err) {
-      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+      setPhotoError((p) => ({ ...p, [taskId]: t("تعذّر رفع الصورة — تأكد من اتصال الإنترنت أو نوع الملف وحاول مرة أخرى.", "Couldn't upload the photo — check your internet connection or file type, then try again.") }));
     }
     setPhotoBusy((p) => ({ ...p, [taskId]: false }));
   };
@@ -9967,6 +9984,7 @@ function TasksTab({ employees, branches, tasks, onAddTask, onUpdateTaskStatus, o
                   }}
                 />
                 {photoBusy[ts.id] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+                {photoError[ts.id] && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4, fontWeight: 700 }}>{photoError[ts.id]}</div>}
               </div>
 
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
@@ -10108,6 +10126,7 @@ function MaintenanceTab({
   const [eqForm, setEqForm] = useState({ ...EMPTY_EQUIPMENT, branchId: defaultBranchId || "" });
   const [woForm, setWoForm] = useState({ ...EMPTY_WORK_ORDER, branchId: defaultBranchId || "" });
   const [photoBusy, setPhotoBusy] = useState({});
+  const [photoError, setPhotoError] = useState({});
   const [videoBusy, setVideoBusy] = useState({});
   const [videoError, setVideoError] = useState({});
   const [lightbox, setLightbox] = useState(null);
@@ -10146,13 +10165,14 @@ function MaintenanceTab({
     if (!files || files.length === 0) return;
     const key = `${kind}_${id}`;
     setPhotoBusy((p) => ({ ...p, [key]: true }));
+    setPhotoError((p) => ({ ...p, [key]: "" }));
     try {
       const compressed = await Promise.all(Array.from(files).slice(0, 3).map((f) => compressImage(f, 900, 0.7)));
       const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `${kind === "eq" ? "equipmentPhotos" : "workOrderPhotos"}/${id}`)));
       if (kind === "eq") onAddEquipmentPhotos(id, urls);
       else onAddWorkOrderPhotos(id, urls);
     } catch (err) {
-      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+      setPhotoError((p) => ({ ...p, [key]: t("تعذّر رفع الصورة — تأكد من اتصال الإنترنت أو نوع الملف وحاول مرة أخرى.", "Couldn't upload the photo — check your internet connection or file type, then try again.") }));
     }
     setPhotoBusy((p) => ({ ...p, [key]: false }));
   };
@@ -10307,6 +10327,7 @@ function MaintenanceTab({
                       onChange={(e) => { handlePhotoUpload("eq", eq.id, e.target.files); e.target.value = ""; }} />
                   )}
                   {photoBusy[busyKey] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+                  {photoError[busyKey] && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4, fontWeight: 700 }}>{photoError[busyKey]}</div>}
                 </div>
               </div>
             );
@@ -10416,6 +10437,7 @@ function MaintenanceTab({
                 <input type="file" accept="image/*" multiple disabled={!!photoBusy[`wo_${wo.id}`]} className="no-print" style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5, maxWidth: 240 }}
                   onChange={(e) => { handlePhotoUpload("wo", wo.id, e.target.files); e.target.value = ""; }} />
                 {photoBusy[`wo_${wo.id}`] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+                {photoError[`wo_${wo.id}`] && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4, fontWeight: 700 }}>{photoError[`wo_${wo.id}`]}</div>}
               </div>
 
               <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
@@ -10497,6 +10519,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
   const [fillNote, setFillNote] = useState("");
   const [fillPhotos, setFillPhotos] = useState([]);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState("");
   const [templateFilter, setTemplateFilter] = useState("");
   const [lightbox, setLightbox] = useState(null);
   const [expandedSub, setExpandedSub] = useState({});
@@ -10520,6 +10543,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
     setFillResults(tpl.items.map((it) => ({ item: it, pass: true })));
     setFillNote("");
     setFillPhotos([]);
+    setPhotoError("");
   };
 
   const toggleResult = (idx, pass) => {
@@ -10545,12 +10569,13 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
     if (!files || files.length === 0) return;
     if (fillPhotos.length >= 3) return;
     setPhotoBusy(true);
+    setPhotoError("");
     try {
       const compressed = await Promise.all(Array.from(files).slice(0, 3 - fillPhotos.length).map((f) => compressImage(f, 900, 0.7)));
       const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `qualityPhotos/${fillingTemplate?.id || "misc"}`)));
       setFillPhotos((prev) => [...prev, ...urls]);
     } catch (err) {
-      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+      setPhotoError(t("تعذّر رفع الصورة — تأكد من اتصال الإنترنت أو نوع الملف وحاول مرة أخرى.", "Couldn't upload the photo — check your internet connection or file type, then try again."));
     }
     setPhotoBusy(false);
   };
@@ -10695,6 +10720,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
                 <input type="file" accept="image/*" multiple disabled={photoBusy} style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5 }} onChange={(e) => { handleFillPhotoUpload(e.target.files); e.target.value = ""; }} />
               )}
               {photoBusy && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+              {photoError && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4, fontWeight: 700 }}>{photoError}</div>}
             </div>
             <div style={{ display: "flex", gap: 10, marginTop: 16 }}>
               <Btn tone="secondary" onClick={() => setFillingTemplate(null)}>{t("إلغاء", "Cancel")}</Btn>
@@ -10796,18 +10822,20 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
   const [searchQuery, setSearchQuery] = useState("");
   const [printItem, setPrintItem] = useState(null);
   const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoError, setPhotoError] = useState("");
   const [lightbox, setLightbox] = useState(null);
 
   const handlePhotoUpload = async (files) => {
     if (!files || files.length === 0) return;
     if (form.photos.length >= 3) return;
     setPhotoBusy(true);
+    setPhotoError("");
     try {
       const compressed = await Promise.all(Array.from(files).slice(0, 3 - form.photos.length).map((f) => compressImage(f, 900, 0.7)));
       const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `warningPhotos/${form.employeeId || "misc"}`)));
       setForm((f) => ({ ...f, photos: [...(f.photos || []), ...urls] }));
     } catch (err) {
-      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+      setPhotoError(t("تعذّر رفع الصورة — تأكد من اتصال الإنترنت، أو أن نوع الملف صورة مدعومة (JPG/PNG)، وحاول مرة أخرى.", "Couldn't upload the photo — check your internet connection and that the file is a supported image type (JPG/PNG), then try again."));
     }
     setPhotoBusy(false);
   };
@@ -10830,6 +10858,7 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
     setForm({ ...EMPTY_WARNING });
     setApplyDeduction(false);
     setShowForm(false);
+    setPhotoError("");
   };
 
   /* أكثر الموظفين حصولًا على إنذارات — نظرة إدارية سريعة تساعد على رصد الحالات المتكررة */
@@ -10941,10 +10970,13 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
                 ))}
               </div>
             )}
-            {form.photos.length < 3 && (
+            {form.photos.length < 3 ? (
               <input type="file" accept="image/*" multiple disabled={photoBusy} style={{ ...inputStyle, padding: "6px 8px", fontSize: 11.5 }} onChange={(e) => { handlePhotoUpload(e.target.files); e.target.value = ""; }} />
+            ) : (
+              <div style={{ fontSize: 11, color: "#a3927a" }}>{t("تم الوصول للحد الأقصى (3 صور) — احذف صورة لإضافة غيرها.", "Reached the maximum (3 photos) — remove one to add another.")}</div>
             )}
             {photoBusy && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+            {photoError && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4, fontWeight: 700 }}>{photoError}</div>}
           </div>
           <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, cursor: "pointer" }}>
@@ -11565,6 +11597,19 @@ function isLivenessPoseChangeValid(baseRatio, turnedRatio, threshold) {
   if (Number.isNaN(baseRatio) || Number.isNaN(turnedRatio)) return false;
   return Math.abs(turnedRatio - baseRatio) >= th;
 }
+/* عدد اللقطات وتوقيتها أثناء خطوة "تأكيد الحركة" — بدل الاعتماد على لقطة واحدة بس (ممكن تتأثر
+   بضجيج لحظي في كشف نقاط الوجه، خصوصًا لو جزء من محيط الفك مش واضح تمامًا للكاميرا — غطاء رأس،
+   زاوية كاميرا، إضاءة...)، نجمع عدة لقطات متتالية ونقبل الحركة لو ولو لقطة وحدة منها سجّلت فرقًا
+   كافيًا. صورة ثابتة معروضة على جوال ثاني هتفضل قريبة من نفس القيمة في كل اللقطات (مفيش حركة
+   حقيقية تتغيّر مع الوقت) فمفيش أي فايدة من "الحظ" في تعدد اللقطات — يفضل الفحص يكشفها */
+const LIVENESS_TURN_SAMPLE_COUNT = 5;
+const LIVENESS_BASE_SAMPLE_COUNT = 3;
+const LIVENESS_SAMPLE_INTERVAL_MS = 180;
+const LIVENESS_SAMPLE_TIMEOUT_MS = 4000;
+function bestLivenessPoseChange(baseRatio, sampleRatios, threshold) {
+  if (!Array.isArray(sampleRatios) || sampleRatios.length === 0) return false;
+  return sampleRatios.some((r) => isLivenessPoseChangeValid(baseRatio, r, threshold));
+}
 let __faceModelsPromise = null;
 function loadFaceModels() {
   if (!__faceModelsPromise) {
@@ -11629,6 +11674,27 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
     // eslint-disable-next-line
   }, []);
 
+  /* يلتقط عدة لقطات متتالية (بمجرد نقاط الوجه، بدون بصمة) ويرجّع نسب موضع الأنف الناجحة منها فقط —
+     تُستخدم لحساب لقطة مرجعية أكثر ثباتًا (خطوة "المواجهة") ولتأكيد الحركة (خطوة "الالتفاتة") معًا،
+     بدل الاعتماد على لقطة واحدة عرضة للضجيج اللحظي */
+  const sampleNoseRatios = async (count) => {
+    const ratios = [];
+    for (let i = 0; i < count; i++) {
+      try {
+        const detectionPromise = faceapi
+          .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
+          .withFaceLandmarks();
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), LIVENESS_SAMPLE_TIMEOUT_MS));
+        const detection = await Promise.race([detectionPromise, timeoutPromise]);
+        if (detection) ratios.push(noseOffsetRatio(detection.landmarks));
+      } catch (e) {
+        /* تجاهل لقطة فردية فشلت (لحظة عابرة بدون وجه واضح) — طالما باقي اللقطات كافية */
+      }
+      if (i < count - 1) await new Promise((r) => setTimeout(r, LIVENESS_SAMPLE_INTERVAL_MS));
+    }
+    return ratios;
+  };
+
   const capture = async () => {
     if (!videoRef.current || busy) return;
     setBusy(true);
@@ -11678,8 +11744,11 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
         pendingRef.current = { photo, descriptor: null, matched: true };
       }
 
-      /* نجحت المطابقة — قبل الاعتماد النهائي، ننتقل لخطوة تأكيد الحركة (مقاومة التحايل بصورة ثابتة) */
-      baseRatioRef.current = noseOffsetRatio(detection.landmarks);
+      /* نجحت المطابقة — قبل الاعتماد النهائي، ننتقل لخطوة تأكيد الحركة (مقاومة التحايل بصورة ثابتة).
+         نحسب اللقطة المرجعية (وش مواجه الكاميرا) كمتوسط عدة لقطات سريعة بدل لقطة واحدة، عشان ما
+         يبنيش الفحص كله على قياس عرضي غير دقيق لحظة معيّنة */
+      const baseSamples = [noseOffsetRatio(detection.landmarks), ...(await sampleNoseRatios(LIVENESS_BASE_SAMPLE_COUNT - 1))];
+      baseRatioRef.current = baseSamples.reduce((s, r) => s + r, 0) / baseSamples.length;
       setStep("turn");
       setBusy(false);
     } catch (e) {
@@ -11697,18 +11766,17 @@ function FaceCheckModal({ employee, onVerified, onCancel }) {
     setBusy(true);
     setError("");
     try {
-      const detectionPromise = faceapi
-        .detectSingleFace(videoRef.current, new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }))
-        .withFaceLandmarks();
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 20000));
-      const detection = await Promise.race([detectionPromise, timeoutPromise]);
-      if (!detection) {
+      /* نجمع عدة لقطات متتالية أثناء الالتفاتة (مش لقطة واحدة بس) ونقبل لو أي لقطة منها سجّلت حركة
+         كافية — يقلّل الرفض الخاطئ لموظفين حقيقيين بسبب ضجيج لحظي في كشف نقاط الوجه (غطاء رأس،
+         زاوية كاميرا، إضاءة) مع الاحتفاظ بنفس مقاومة التحايل بصورة ثابتة (اللي مفيش عندها أي حركة
+         تتغيّر بمرور الوقت أصلًا، فمفيش أي فايدة من تعدد اللقطات للمحتال) */
+      const sampleRatios = await sampleNoseRatios(LIVENESS_TURN_SAMPLE_COUNT);
+      if (sampleRatios.length === 0) {
         setBusy(false);
         setError(t("تأكد إن وجهك ما زال ظاهرًا بوضوح في الكاميرا وحاول مرة أخرى.", "Make sure your face is still clearly visible to the camera and try again."));
         return;
       }
-      const turnedRatio = noseOffsetRatio(detection.landmarks);
-      if (!isLivenessPoseChangeValid(baseRatioRef.current, turnedRatio)) {
+      if (!bestLivenessPoseChange(baseRatioRef.current, sampleRatios, LIVENESS_POSE_CHANGE_THRESHOLD)) {
         const nextTurnAttempts = turnAttempts + 1;
         setTurnAttempts(nextTurnAttempts);
         setBusy(false);
@@ -11799,6 +11867,7 @@ function EmployeeSelfView({
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [taskCommentDrafts, setTaskCommentDrafts] = useState({});
   const [taskPhotoBusy, setTaskPhotoBusy] = useState({});
+  const [taskPhotoError, setTaskPhotoError] = useState({});
   const [taskVideoBusy, setTaskVideoBusy] = useState({});
   const [taskVideoError, setTaskVideoError] = useState({});
   const [taskLightbox, setTaskLightbox] = useState(null);
@@ -11813,12 +11882,13 @@ function EmployeeSelfView({
   const handleTaskPhotoUpload = async (taskId, files) => {
     if (!files || files.length === 0) return;
     setTaskPhotoBusy((p) => ({ ...p, [taskId]: true }));
+    setTaskPhotoError((p) => ({ ...p, [taskId]: "" }));
     try {
       const compressed = await Promise.all(Array.from(files).map((f) => compressImage(f, 900, 0.7)));
       const urls = await Promise.all(compressed.map((dataUrl) => uploadPhotoToStorage(dataUrl, `taskPhotos/${taskId}`)));
       onAddTaskPhotos && onAddTaskPhotos(taskId, urls);
     } catch (err) {
-      /* تجاهل الأخطاء الفردية لملفات غير صالحة */
+      setTaskPhotoError((p) => ({ ...p, [taskId]: t("تعذّر رفع الصورة — تأكد من اتصال الإنترنت أو نوع الملف وحاول مرة أخرى.", "Couldn't upload the photo — check your internet connection or file type, then try again.") }));
     }
     setTaskPhotoBusy((p) => ({ ...p, [taskId]: false }));
   };
@@ -12245,6 +12315,7 @@ function EmployeeSelfView({
                       }}
                     />
                     {taskPhotoBusy[ts.id] && <div style={{ fontSize: 11, color: "#a3927a", marginTop: 4 }}>{t("جارِ رفع الصور...", "Uploading photos...")}</div>}
+                    {taskPhotoError[ts.id] && <div style={{ fontSize: 11, color: COLORS.brick, marginTop: 4, fontWeight: 700 }}>{taskPhotoError[ts.id]}</div>}
                   </div>
 
                   <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px dashed ${COLORS.line}` }}>
@@ -13210,6 +13281,10 @@ function Root() {
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
   const [authSyncError, setAuthSyncError] = useState("");
+  /* نفس مبدأ إعادة المحاولة التلقائية لاستماع بيانات النظام أدناه — هذا الاستماع بالذات لو فشل
+     بيمنع تسجيل الدخول بالكامل (شاشة حمراء + زر "تحديث الصفحة" فقط)، فأولى بمحاولة تلقائية */
+  const [usersRetryTick, setUsersRetryTick] = useState(0);
+  const usersRetryTimerRef = useRef(null);
   const lastSyncedUsersRef = useRef("");
   const [activityLog, setActivityLog] = useState([]);
   const [logLoaded, setLogLoaded] = useState(false);
@@ -13257,10 +13332,16 @@ function Root() {
         /* فشل الاتصال/القراءة — نعرض خطأ واضح ونبقي usersLoaded=false عمدًا، عشان تأثير المزامنة العكسية
            ما يشتغلش أبدًا ببيانات افتراضية ناقصة ويكتب فوق البيانات الحقيقية */
         setAuthSyncError("تعذر الاتصال بقاعدة البيانات المشتركة — تحقّق من اتصال الإنترنت وحاول تحديث الصفحة");
+        /* بدل ما نسيب المستخدم عالق على شاشة حمراء لازم يضغط "تحديث الصفحة" بنفسه، نحاول نعيد
+           الاشتراك تلقائيًا بعد 10 ثواني — لو رجعت الشبكة يدخل من نفسه بصمت بدون أي تدخل منه */
+        usersRetryTimerRef.current = setTimeout(() => setUsersRetryTick((n) => n + 1), 10000);
       }
     );
-    return () => unsub();
-  }, [fbUser]);
+    return () => {
+      unsub();
+      if (usersRetryTimerRef.current) clearTimeout(usersRetryTimerRef.current);
+    };
+  }, [fbUser, usersRetryTick]);
 
   /* بعد إعادة فتح الصفحة، لو فيه جلسة Firebase محفوظة وقائمة المستخدمين وصلت، نربط الحساب المطابق تلقائيًا.
      نتجاهل هذا الربط التلقائي أثناء عملية تسجيل خروج جارية (loggingOutRef) حتى لا يعيد تسجيل الدخول
