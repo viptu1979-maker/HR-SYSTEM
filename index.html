@@ -12507,8 +12507,15 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
     const created = [];
     const skippedNoId = [];
     const skippedDup = [];
+    const skippedTerminated = [];
     employees.forEach((e) => {
       if (linkedEmployeeIds.has(e.id)) return; /* عنده حساب مرتبط بيه بالفعل */
+      /* موظف منتهي الخدمة: ما ننشئ له حساب دخول جديد أبدًا — حتى لو حذفتِ حسابه القديم يدويًا،
+         "توليد الحسابات" ما يرجع يعيد إنشاءه، لنفس سبب استبعادهم من ترحيل Firebase Authentication أعلاه */
+      if (e.status === "منتهي الخدمة") {
+        skippedTerminated.push(e.name || e.id);
+        return;
+      }
       const uname = (e.nationalId || "").trim();
       if (!uname) {
         skippedNoId.push(e.name || e.id);
@@ -12538,7 +12545,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
       setUsers((prev) => [...prev, ...created]);
       logActivity && logActivity("توليد حسابات جماعي للموظفين", "users", `${created.length} حساب`);
     }
-    setBulkResult({ created: created.length, skippedNoId, skippedDup });
+    setBulkResult({ created: created.length, skippedNoId, skippedDup, skippedTerminated });
   };
 
   const submit = async () => {
@@ -12713,6 +12720,14 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
                 {t(
                   `تم تخطي ${bulkResult.skippedNoId.length} موظف لعدم وجود رقم هوية مسجَّل: ${bulkResult.skippedNoId.join("، ")}`,
                   `Skipped ${bulkResult.skippedNoId.length} employee(s) with no National ID on file: ${bulkResult.skippedNoId.join(", ")}`
+                )}
+              </div>
+            )}
+            {bulkResult.skippedTerminated && bulkResult.skippedTerminated.length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                {t(
+                  `تم تخطي ${bulkResult.skippedTerminated.length} موظف منتهي الخدمة (ما يُنشأ له حساب دخول): ${bulkResult.skippedTerminated.join("، ")}`,
+                  `Skipped ${bulkResult.skippedTerminated.length} terminated employee(s) — no login account created: ${bulkResult.skippedTerminated.join(", ")}`
                 )}
               </div>
             )}
