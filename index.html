@@ -7648,10 +7648,18 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         .filter((l) => l.employeeId === e.id && l.type === "بدون راتب")
         .reduce((s, l) => s + daysOverlapInMonth(l.from, l.to, month), 0);
 
+      /* الإجازة السنوية تُصرف مستحقاتها للموظف مقدَّمًا (دفعة منفصلة قبل سفره)، فلا يصح احتسابها
+         مرة ثانية كراتب كامل ضمن رواتب الشهر العادي — نستقطع أيام الإجازة السنوية اللي تقع في هذا
+         الشهر من الراتب الأساسي، ونوضّحها كبند مستقل بقسيمة الراتب حتى ما تلتبس بخصم "بدون راتب" */
+      const annualLeaveDays = leaves
+        .filter((l) => l.employeeId === e.id && l.type === "سنوية")
+        .reduce((s, l) => s + daysOverlapInMonth(l.from, l.to, month), 0);
+
       const absentDeduction = absentDays * dailyRate;
       const lateDeduction = totalDeductibleMinutes * perMinuteRate;
       const unpaidLeaveDeduction = unpaidLeaveDays * dailyRate;
-      const attendanceDeduction = absentDeduction + lateDeduction + unpaidLeaveDeduction;
+      const annualLeaveDeduction = annualLeaveDays * dailyRate;
+      const attendanceDeduction = absentDeduction + lateDeduction + unpaidLeaveDeduction + annualLeaveDeduction;
 
       /* الوقت الإضافي: ساعات الإضافي المسجّلة هذا الشهر × سعر الساعة (وفق ساعات دوامه الفعلية) × 1٫5 (وفق نظام العمل السعودي) */
       const hourlyRate = dailyRate / dailyHours;
@@ -7678,6 +7686,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         lateDeduction,
         unpaidLeaveDays,
         unpaidLeaveDeduction,
+        annualLeaveDays,
+        annualLeaveDeduction,
         attendanceDeduction,
         overtimeHours,
         overtimePay,
@@ -7866,6 +7876,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   { label: t("خصم التأخير", "Lateness Deduction") },
                   { label: t("أيام إجازة بدون راتب", "Unpaid Leave Days") },
                   { label: t("خصم الإجازة", "Leave Deduction") },
+                  { label: t("أيام إجازة سنوية (مدفوعة مقدمًا)", "Annual Leave Days (Prepaid)") },
+                  { label: t("خصم الإجازة السنوية", "Annual Leave Deduction") },
                   { label: t("إجمالي خصومات الحضور", "Total Attendance Deductions") },
                   { label: t("ساعات إضافي", "Overtime Hours") },
                   { label: t("قيمة الإضافي", "Overtime Pay") },
@@ -7923,6 +7935,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("خصم التأخير", "Lateness Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.lateDeduction)}</td>
                   <td data-label={t("أيام إجازة بدون راتب", "Unpaid Leave Days")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.unpaidLeaveDays)}</td>
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
+                  <td data-label={t("أيام إجازة سنوية (مدفوعة مقدمًا)", "Annual Leave Days (Prepaid)")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.annualLeaveDays)}</td>
+                  <td data-label={t("خصم الإجازة السنوية", "Annual Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.annualLeaveDeduction)}</td>
                   <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
                   <td
                     data-label={t("ساعات إضافي", "Overtime Hours")}
@@ -8174,6 +8188,12 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                     <td style={{ padding: "6px 12px" }}>{t(`خصم إجازة بدون راتب (${fmt(payslip.unpaidLeaveDays)} يوم)`, `Unpaid Leave Deduction (${fmt(payslip.unpaidLeaveDays)} days)`)}</td>
                     <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.unpaidLeaveDeduction)} ﷼</td>
                   </tr>
+                  {payslip.annualLeaveDays > 0 && (
+                    <tr>
+                      <td style={{ padding: "6px 12px" }}>{t(`خصم إجازة سنوية — مدفوعة مقدمًا (${fmt(payslip.annualLeaveDays)} يوم)`, `Annual Leave Deduction — Prepaid (${fmt(payslip.annualLeaveDays)} days)`)}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.annualLeaveDeduction)} ﷼</td>
+                    </tr>
+                  )}
                   <tr>
                     <td style={{ padding: "6px 12px" }}>{t("السلف", "Advances")}</td>
                     <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.advances)} ﷼</td>
