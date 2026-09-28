@@ -2384,7 +2384,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       const y = new Date();
       y.setDate(y.getDate() - 1);
       const yesterdayISO = y.toISOString().slice(0, 10);
-      const openYesterday = attendance.find((a) => a.employeeId === empId && a.date === yesterdayISO && !a.checkOutTime);
+      /* لازم checkInTime يكون فعلاً موجود عشان يُعتبر دوام ليلي مفتوح فعليًا — وإلا سجل أمس (زي سجل
+         "حاضر" مُضاف يدويًا أو جماعيًا بدون وقت حضور) هيتفهم غلط إنه دوام ليلي متواصل لحد النهاردة */
+      const openYesterday = attendance.find((a) => a.employeeId === empId && a.date === yesterdayISO && a.checkInTime && !a.checkOutTime);
       return openYesterday || null;
     };
     /* يحوّل وقت الانصراف لدقائق مع مراعاة عبوره منتصف الليل (لو أصغر رقميًا من وقت الحضور، معناه
@@ -2443,9 +2445,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       };
     };
 
-    /* تحديد المرحلة الحالية للحضور/الانصراف اليوم: حضور1/انصراف1/حضور2(دوامين)/انصراف2/تم */
+    /* تحديد المرحلة الحالية للحضور/الانصراف اليوم: حضور1/انصراف1/حضور2(دوامين)/انصراف2/تم.
+       مهم: سجل موجود بدون checkInTime (زي سجل "تسجيل حضور جماعي" أو إضافة يدوية من سجل الحضور
+       اليومي — كلاهما ينشئ السجل بدون وقت حضور فعلي) لازم يتعامل معه زي ما مفيش سجل أصلًا، وإلا
+       الموظف يفضل "عالق" في مرحلة انصراف لأبد وما يقدرش يسجّل حضوره الفعلي بنفسه من صفحته */
     const attendanceStage = (rec, emp) => {
-      if (!rec) return "in1";
+      if (!rec || !rec.checkInTime) return "in1";
       if (!rec.checkOutTime) return "out1";
       if (!emp?.twoShifts) return "done";
       if (!rec.checkInTime2) return "in2";
@@ -2481,8 +2486,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         const shiftStart = effectiveShift(myEmployee, todayDayName).start;
         const diff = (myEmployee.flexibleSchedule || isOffDayToday) ? 0 : minutesOf(timeStr) - minutesOf(shiftStart);
         const lateMinutes = diff > LATE_EARLY_GRACE_MINUTES ? diff : 0;
+        /* لو already موجود هنا (سجل "حاضر" مُضاف يدويًا أو جماعيًا لنفس اليوم لكن بدون وقت حضور فعلي)،
+           نكمّل عليه بنفس الـ id بدل ما ننشئ سجل تاني منفصل — وإلا يتكرر سجل الحضور مرتين لنفس اليوم
+           ويتأثر أي تقرير/حساب راتب يفترض سجل واحد بس لكل موظف/يوم */
         const rec = {
-          id: uid(),
+          id: already ? already.id : uid(),
           employeeId: myEmployee.id,
           date: todayISO,
           status: lateMinutes > 0 ? "متأخر" : "حاضر",
@@ -2496,7 +2504,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           checkInLocation: sanitizeLocation(check),
           checkInPhoto: uploadedPhotoUrl,
         };
-        setAttendance((prev) => [...prev, rec]);
+        if (already) {
+          setAttendance((prev) => prev.map((a) => (a.id === already.id ? rec : a)));
+        } else {
+          setAttendance((prev) => [...prev, rec]);
+        }
         logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
       } else {
         const shiftStart2 = myEmployee.workShift2?.start || "17:00";
@@ -7763,11 +7775,22 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         .filter((l) => l.employeeId === e.id && l.type === "سنوية")
         .reduce((s, l) => s + daysOverlapInMonth(l.from, l.to, month), 0);
 
+      /* لو انضم الموظف خلال نفس شهر احتساب الراتب هذا، الأيام قبل تاريخ تعيينه الفعلي (من أول الشهر
+         لحد يوم قبل التعيين) مايستحقش عنها راتب أصلاً — تُخصم من الراتب الأساسي بدل ما يُصرف له
+         راتب الشهر كامل عن أيام ماكانش معيَّن فيها فعليًا (بلاغ المستخدمة: موظف بدأ الشغل يوم 10
+         من الشهر واستلم راتب شهر كامل رغم إنه ما اشتغلش أول 9 أيام) */
+      let joinProrationDays = 0;
+      if (e.joinDate && e.joinDate > monthStart && e.joinDate <= monthEnd) {
+        const msPerDay = 24 * 60 * 60 * 1000;
+        joinProrationDays = Math.round((new Date(e.joinDate + "T00:00:00") - new Date(monthStart + "T00:00:00")) / msPerDay);
+      }
+
       const absentDeduction = absentDays * dailyRate;
       const lateDeduction = totalDeductibleMinutes * perMinuteRate;
       const unpaidLeaveDeduction = unpaidLeaveDays * dailyRate;
       const annualLeaveDeduction = annualLeaveDays * dailyRate;
-      const attendanceDeduction = absentDeduction + lateDeduction + unpaidLeaveDeduction + annualLeaveDeduction;
+      const joinProrationDeduction = joinProrationDays * dailyRate;
+      const attendanceDeduction = absentDeduction + lateDeduction + unpaidLeaveDeduction + annualLeaveDeduction + joinProrationDeduction;
 
       /* الوقت الإضافي: ساعات الإضافي المسجّلة هذا الشهر × سعر الساعة (وفق ساعات دوامه الفعلية) × 1٫5 (وفق نظام العمل السعودي) */
       const hourlyRate = dailyRate / dailyHours;
@@ -7796,6 +7819,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
         unpaidLeaveDeduction,
         annualLeaveDays,
         annualLeaveDeduction,
+        joinProrationDays,
+        joinProrationDeduction,
         attendanceDeduction,
         overtimeHours,
         overtimePay,
@@ -7986,6 +8011,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   { label: t("خصم الإجازة", "Leave Deduction") },
                   { label: t("أيام إجازة سنوية (مدفوعة مقدمًا)", "Annual Leave Days (Prepaid)") },
                   { label: t("خصم الإجازة السنوية", "Annual Leave Deduction") },
+                  { label: t("أيام قبل التعيين هذا الشهر", "Days Before Hire This Month") },
+                  { label: t("خصم التعيين الجزئي", "Partial-Month Hire Deduction") },
                   { label: t("إجمالي خصومات الحضور", "Total Attendance Deductions") },
                   { label: t("ساعات إضافي", "Overtime Hours") },
                   { label: t("قيمة الإضافي", "Overtime Pay") },
@@ -8045,6 +8072,8 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td data-label={t("أيام إجازة سنوية (مدفوعة مقدمًا)", "Annual Leave Days (Prepaid)")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.annualLeaveDays)}</td>
                   <td data-label={t("خصم الإجازة السنوية", "Annual Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.annualLeaveDeduction)}</td>
+                  <td data-label={t("أيام قبل التعيين هذا الشهر", "Days Before Hire This Month")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.joinProrationDays)}</td>
+                  <td data-label={t("خصم التعيين الجزئي", "Partial-Month Hire Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.joinProrationDeduction)}</td>
                   <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
                   <td
                     data-label={t("ساعات إضافي", "Overtime Hours")}
@@ -8300,6 +8329,12 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                     <tr>
                       <td style={{ padding: "6px 12px" }}>{t(`خصم إجازة سنوية — مدفوعة مقدمًا (${fmt(payslip.annualLeaveDays)} يوم)`, `Annual Leave Deduction — Prepaid (${fmt(payslip.annualLeaveDays)} days)`)}</td>
                       <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.annualLeaveDeduction)} ﷼</td>
+                    </tr>
+                  )}
+                  {payslip.joinProrationDays > 0 && (
+                    <tr>
+                      <td style={{ padding: "6px 12px" }}>{t(`خصم أيام قبل التعيين هذا الشهر (${fmt(payslip.joinProrationDays)} يوم)`, `Days Before Hire This Month Deduction (${fmt(payslip.joinProrationDays)} days)`)}</td>
+                      <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.joinProrationDeduction)} ﷼</td>
                     </tr>
                   )}
                   <tr>
@@ -11960,10 +11995,16 @@ function EmployeeSelfView({
       const y = new Date();
       y.setDate(y.getDate() - 1);
       const yesterdayISO = y.toISOString().slice(0, 10);
-      return attendance.find((a) => a.employeeId === employee.id && a.date === yesterdayISO && !a.checkOutTime);
+      /* لازم checkInTime يكون موجود فعلاً عشان يُعتبر دوام ليلي مفتوح — وإلا سجل أمس (زي سجل "حاضر"
+         مُضاف يدويًا أو جماعيًا بدون وقت حضور) هيتفهم غلط إنه دوام متواصل لحد النهاردة */
+      return attendance.find((a) => a.employeeId === employee.id && a.date === yesterdayISO && a.checkInTime && !a.checkOutTime);
     })();
-  /* مرحلة الحضور/الانصراف الحالية — تدعم دوامين لبعض الموظفين */
-  const attStage = !todayAtt
+  /* مرحلة الحضور/الانصراف الحالية — تدعم دوامين لبعض الموظفين.
+     مهم: سجل موجود بدون checkInTime (سجل "تسجيل حضور جماعي" أو إضافة يدوية من سجل الحضور اليومي —
+     كلاهما ينشئ السجل بدون وقت حضور فعلي) لازم يتعامل معه زي ما مفيش سجل أصلًا، وإلا يفضل زر
+     "تسجيل حضور" مقفول للأبد على الموظف مع إن ما سجّلش حضوره بنفسه فعليًا لحد الآن (بلاغ المستخدمة:
+     "خانة الحضور مقفلة" رغم إن وقت الحضور والانصراف ظاهرين فاضيين) */
+  const attStage = !todayAtt || !todayAtt.checkInTime
     ? "in1"
     : !todayAtt.checkOutTime
     ? "out1"
