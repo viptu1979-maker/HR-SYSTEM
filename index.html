@@ -336,6 +336,30 @@ function resolveFieldForSave(key, localValue, server, baselineJson) {
   }
   return localValue;
 }
+/* إصلاح جوهري لحماية البيانات: "حركة تسجّل بس ما تظهرش بعدين حتى بعد تحديث الصفحة" — كان الحفظ (تلقائي
+   للموظف، ويدوي للأدمن) بيعمل قراءة (DATA_DOC.get) ثم دمج محلي ثم كتابة (DATA_DOC.set) كخطوتين منفصلتين
+   بدون أي ضمان ذرّية بينهم. لو موظفين اتنين (أو موظف وأدمن) حفظوا في نفس اللحظة تقريبًا (زي بداية
+   دوام الشفت لما أكتر من موظف يبصموا حضور خلال ثوانٍ من بعض)، كان يحصل "Lost Update": جهاز B يقرأ
+   نسخة الخادم *قبل* ما كتابة جهاز A توصل، يدمج حركته هو بس فوقها، ثم يكتبها بعد جهاز A — فتُمحى حركة
+   A بالكامل من القاعدة بصمت (رغم إنها ظهرت محليًا عند صاحبها للحظة، وده اللي كان يفسّر ليه سجل النشاط
+   يُظهر إن الموظف بصم، لكن سجل الحضور الفعلي ما يعرضش حركته بعد ريفرش الصفحة). الحل: نستخدم معاملة
+   Firestore حقيقية (runTransaction) بدل get()+set() منفصلين — فالقراءة والكتابة تتم بشكل ذرّي، ولو
+   تعارضت مع كتابة تانية في نفس اللحظة، Firestore نفسه بيعيد تنفيذ المعاملة تلقائيًا بالبيانات الأحدث
+   بدل ما يخلّي أي طرف يكتب فوق التاني بالغلط */
+function saveDataDocTransactional(payload, lastSyncedFieldsRef) {
+  return db.runTransaction((transaction) =>
+    transaction.get(DATA_DOC).then((snap) => {
+      const server = snap.data() || {};
+      const merged = {};
+      Object.keys(payload).forEach((key) => {
+        const baselineJson = lastSyncedFieldsRef.current[key];
+        merged[key] = resolveFieldForSave(key, payload[key], server, baselineJson);
+      });
+      transaction.set(DATA_DOC, JSON.parse(JSON.stringify(merged)));
+      return merged;
+    })
+  );
+}
 
 /* ============ Firebase Authentication — الأساس الحقيقي للحماية ============
    أسماء المستخدمين عندنا مو إيميلات (أرقام هوية/إقامة غالبًا)، فنحوّلها لصيغة إيميل داخلية صناعية
@@ -1744,17 +1768,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
          وده بالظبط اللي كان قادر يمسح موظفين حقيقيين لو جهاز موظف واحد بس كانت نسخته المحلية قديمة
          وعمل أي حركة بسيطة (تسجيل حضور مثلاً). دلوقتي: قبل الحفظ مباشرة، نجيب أحدث نسخة من الخادم،
          ونستخدمها لأي قسم إحنا (الجلسة دي تحديدًا) ما عدّلناهوش محليًا، ونحافظ على نسختنا المحلية بس
-         للأقسام اللي فعلاً عدّلنا عليها (زي الحضور نفسه) — فمفيش أي قسم تاني ينمسح بالغلط أبدًا */
-      DATA_DOC.get()
-        .then((snap) => {
-          const server = snap.data() || {};
-          const merged = {};
-          Object.keys(payload).forEach((key) => {
-            const baselineJson = lastSyncedFieldsRef.current[key];
-            merged[key] = resolveFieldForSave(key, payload[key], server, baselineJson);
-          });
-          return DATA_DOC.set(JSON.parse(JSON.stringify(merged))).then(() => merged);
-        })
+         للأقسام اللي فعلاً عدّلنا عليها (زي الحضور نفسه) — فمفيش أي قسم تاني ينمسح بالغلط أبدًا.
+         القراءة والدمج والكتابة بقت جوه معاملة Firestore ذرّية (saveDataDocTransactional) بدل
+         get()+set() منفصلين — عشان لو موظف تاني (أو الأدمن) حفظ في نفس اللحظة بالظبط، محدش يكتب
+         فوق حركة التاني بالغلط (راجع شرح الإصلاح فوق تعريف الدالة) */
+      saveDataDocTransactional(payload, lastSyncedFieldsRef)
         .then((merged) => {
           lastSyncedRef.current = JSON.stringify(merged);
           refreshFieldBaselines(merged);
@@ -1980,17 +1998,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     setSyncError("");
     /* نفس منطق الحماية المستخدم في الحفظ التلقائي للموظف: نجيب أحدث نسخة من الخادم أولًا، ونحافظ
        على قيمتها لأي قسم ما عدّلناهوش محليًا في هذه الجلسة (لو مثلاً الجلسة فضلت مفتوحة فترة طويلة
-       وفاتها تحديثات من أجهزة تانية) — بدل ما نكتب فوقها بنسخة محلية قديمة بالغلط */
-    DATA_DOC.get()
-      .then((snap) => {
-        const server = snap.data() || {};
-        const merged = {};
-        Object.keys(payload).forEach((key) => {
-          const baselineJson = lastSyncedFieldsRef.current[key];
-          merged[key] = resolveFieldForSave(key, payload[key], server, baselineJson);
-        });
-        return DATA_DOC.set(JSON.parse(JSON.stringify(merged))).then(() => merged);
-      })
+       وفاتها تحديثات من أجهزة تانية) — بدل ما نكتب فوقها بنسخة محلية قديمة بالغلط. القراءة والدمج
+       والكتابة بقت جوه معاملة Firestore ذرّية (saveDataDocTransactional) بدل get()+set() منفصلين —
+       عشان لو موظف حفظ (تسجيل حضور مثلاً) في نفس لحظة ضغط الأدمن على "حفظ"، محدش يكتب فوق حركة
+       التاني بالغلط */
+    saveDataDocTransactional(payload, lastSyncedFieldsRef)
       .then((merged) => {
         lastSyncedRef.current = JSON.stringify(merged);
         refreshFieldBaselines(merged);
