@@ -44,23 +44,34 @@
 
     body * { visibility: hidden; }
     .print-section, .print-section * { visibility: visible; }
-    /* لو فيه نافذة طباعة منبثقة مفتوحة (قسيمة راتب، إقرار خصم/سلفة، شهادة موظف...)، نطبع هي بس —
-       نخفي أي "قسم طباعة" تاني في نفس الصفحة (زي جدول الرواتب الكامل) كان ظاهر جواها بالخلفية */
-    body:has(.print-section-modal) .print-section:not(.print-section-modal) { visibility: hidden !important; }
+    /* لو فيه نافذة طباعة منبثقة مفتوحة (قسيمة راتب، إقرار خصم/سلفة، شهادة موظف، تقرير دوامات الفروع...)،
+       نطبع هي بس — نخفي أي "قسم طباعة" تاني في نفس الصفحة (زي جدول الموظفين الكامل اللي كان مفتوح
+       خلفها) كان ظاهر جواها بالخلفية. الاعتماد على :has() بس مش كافٍ: (أ) بعض المتصفحات ما تدعمهوش،
+       و(ب) حتى لو مدعوم، مجرد وجود قسم طباعة تاني طويل في نفس الصفحة (حتى لو مخفي بـ visibility:hidden
+       بس لسه واخد مساحته) بيلخبط حساب المتصفح لعدد الصفحات فيطلع تكرار/تراكب غريب بعد أول صفحة أو
+       صفحتين. عشان كده لازم نشيله من "تدفّق الصفحة" تمامًا (display:none) مش بس نخفيه — وده بيتم عن
+       طريق class بديل (has-print-section-modal) يُضاف على body تلقائيًا بجافاسكريبت بمجرد ما أي نافذة
+       طباعة منبثقة تُفتح، بدون أي اعتماد على أي CSS selector حديث — يشتغل في كل المتصفحات بلا استثناء */
+    body:has(.print-section-modal) .print-section:not(.print-section-modal),
+    body.has-print-section-modal .print-section:not(.print-section-modal) {
+      visibility: hidden !important;
+      display: none !important;
+    }
     /* إصلاح "تقرير الطباعة ينقطع/يتراكب بعد أول شاشة تقريبًا" — النافذة المنبثقة (مودال) نفسها
        مبنية بـ position:fixed (تغطية الشاشة) + صندوق داخلي عنده overflow:auto وارتفاع محدود (92vh)
        عشان يظهر بشريط تمرير على الشاشة. المشكلة إن position:fixed بالذات بيخلي المتصفح يحسب طول
        صفحة الطباعة على أساس شاشة واحدة بس مهما طال التقرير الفعلي، فبيقص أي محتوى بعدها بدل ما
        يكمله في صفحة تانية — فلازم وقت الطباعة نلغي كل ده ونخلي المحتوى يتدفّق بشكل طبيعي عبر كل
-       الصفحات المطلوبة (نفس مبدأ .print-section نفسها أسفل، لكن مطبَّق على العنصرين الأب والجد له) */
-    body:has(.print-section-modal) div:has(> .print-section-modal) {
-      position: static !important;
-      max-height: none !important;
-      overflow: visible !important;
-    }
-    body:has(.print-section-modal) div:has(> div > .print-section-modal) {
+       الصفحات المطلوبة (نفس مبدأ .print-section نفسها أسفل، لكن مطبَّق على العنصرين الأب والجد له).
+       هنا برضه :has() مش مضمون في كل المتصفحات، فنفس الجافاسكريبت اللي بيضيف has-print-section-modal
+       بيحط كمان class (print-section-modal-ancestor) على العنصرين الأب والجد فعليًا — بديل مضمون. */
+    body:has(.print-section-modal) div:has(> .print-section-modal),
+    body:has(.print-section-modal) div:has(> div > .print-section-modal),
+    .print-section-modal-ancestor {
       position: static !important;
       inset: auto !important;
+      max-height: none !important;
+      overflow: visible !important;
     }
     .print-section {
       position: absolute;
@@ -75,6 +86,18 @@
       overflow: visible !important;
     }
     .print-section table { overflow: visible !important; }
+    /* إصلاح "عمود الاسم ينفصل عن الجدول عند الطباعة ويطلع كشريط عائم لوحده": بعض الجداول (زي جدول
+       الموظفين) بتخلي عمود الاسم "ثابت" أثناء التمرير على الشاشة (position: sticky) عشان يفضل ظاهر
+       وانت تسحب الجدول يمين/شمال. الـ sticky ده مفيد على الشاشة بس، لكن عند الطباعة مفيش "تمرير"
+       أصلًا، وبعض المتصفحات بتفشل تحسب مكانه الصحيح فيطلع منفصل تمامًا عن باقي عمود صفه. نلغي أي
+       position ثابت/لاصق/عائم على أي خلية جدول جوه قسم الطباعة، ونضمن كل خلية تتطبع في مكانها
+       الطبيعي جوه صفها بس */
+    .print-section td, .print-section th {
+      position: static !important;
+      inset: auto !important;
+      z-index: auto !important;
+      box-shadow: none !important;
+    }
     .no-print { display: none !important; }
 
     /* رأس التقرير المطبوع: يحل محل شريط المتصفح (بدون رابط/تاريخ/رقم صفحة تلقائي) */
@@ -206,6 +229,37 @@ const db = window.__hrDb;
 const auth = window.__hrAuth;
 const secondaryAuth = window.__hrSecondaryAuth;
 const storage = window.__hrStorage;
+/* إصلاح "خطأ في صفحة الطباعة" (تقرير دوامات الفروع بيطلع عمود الاسم منفصل/متكرر وملخبط): بنعتمد
+   أساسًا على CSS (:has()) عشان (أ) نخفي أي "قسم طباعة" تاني وقت ما نافذة طباعة منبثقة تكون مفتوحة،
+   و(ب) نلغي position:fixed/overflow:auto بتاع صندوق النافذة المنبثقة نفسها عشان الطباعة تتدفق بشكل
+   طبيعي عبر كل الصفحات. لكن ده مش مضمون في كل المتصفحات/طرق الطباعة. هنا نضيف طريقة بديلة تشتغل في
+   أي متصفح: نراقب الصفحة بـ MutationObserver، وبمجرد ما أي نافذة طباعة منبثقة (className تحتوي
+   print-section-modal) تظهر في الصفحة: (1) نضيف class اسمه has-print-section-modal على body — الـ
+   CSS فوق بيستخدمه كبديل مضمون لإخفاء أي قسم طباعة تاني تمامًا من تدفّق الصفحة (display:none، مش
+   بس visibility:hidden) عشان ما يأثرش على حساب عدد صفحات الطباعة أصلًا ويسبب تكرار/تراكب؛
+   (2) نحط class اسمه print-section-modal-ancestor على العنصرين الأب والجد الفعليين للنافذة (بدل
+   الاعتماد على :has() لايجادهم) عشان نلغي position:fixed/overflow:auto بتاعهم بنفس الطريقة. والعكس
+   لما النافذة تتقفل — نشيل الكلاسات دي كلها. */
+if (typeof document !== "undefined" && typeof MutationObserver !== "undefined") {
+  const PRINT_MODAL_ANCESTOR_CLASS = "print-section-modal-ancestor";
+  const syncPrintModalBodyClass = () => {
+    document.querySelectorAll("." + PRINT_MODAL_ANCESTOR_CLASS).forEach((el) => el.classList.remove(PRINT_MODAL_ANCESTOR_CLASS));
+    const modalEl = document.querySelector(".print-section-modal");
+    document.body.classList.toggle("has-print-section-modal", !!modalEl);
+    if (modalEl) {
+      const parent = modalEl.parentElement;
+      const grandparent = parent && parent.parentElement;
+      if (parent) parent.classList.add(PRINT_MODAL_ANCESTOR_CLASS);
+      if (grandparent) grandparent.classList.add(PRINT_MODAL_ANCESTOR_CLASS);
+    }
+  };
+  const startPrintModalObserver = () => {
+    syncPrintModalBodyClass();
+    new MutationObserver(syncPrintModalBodyClass).observe(document.body, { childList: true, subtree: true });
+  };
+  if (document.body) startPrintModalObserver();
+  else document.addEventListener("DOMContentLoaded", startPrintModalObserver);
+}
 const DATA_DOC = db.collection("hrSystem").doc("data");
 const USERS_DOC = db.collection("hrSystem").doc("users");
 const LOG_DOC = db.collection("hrSystem").doc("activityLog");
