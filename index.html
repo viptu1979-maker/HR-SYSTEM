@@ -2467,6 +2467,13 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     const [geoError, setGeoError] = useState("");
     /* "in" أو "out" أثناء انتظار تحقق الوجه، أو null لو الشاشة مقفولة */
     const [faceModal, setFaceModal] = useState(null);
+    /* قفل مزامنة (ref مش state) يمنع تنفيذ clockIn/clockOut أكتر من مرة في نفس اللحظة — لو الموظف
+       ضغط زر الحضور أكتر من مرة بسرعة (ضغطتين/3 متتاليات، أو الشاشة اتأخرت في الاستجابة)، كل استدعاء
+       زيادة كان بيقرأ "already" (هل فيه سجل حضور اليوم) بنسخة قديمة لسه ما اتحدّثتش، فيضيف سجل حضور
+       جديد منفصل بدل ما يتجاهل الضغطة الزيادة — ده اللي كان بيسبب "تسجيل حضور 3 مرات" لنفس الموظف
+       ولا نفس اليوم. state (useState) مش كافي هنا لأن تحديثه مش فوري/متزامن، فاستخدمنا ref بدل كده
+       عشان القفل يتفعّل فورًا من أول سطر قبل أي await */
+    const clockActionBusyRef = useRef(false);
 
     /* لموظفين يشتغلوا على أكتر من فرع: بيتفحص موقعهم مقابل كل فروعهم (الأساسي + الإضافية)،
        وبينجح التسجيل لو كانوا داخل نطاق أي فرع منهم — مع تسجيل الفرع الفعلي اللي سجّلوا منه */
@@ -2526,9 +2533,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 
     const clockIn = async (facePhoto) => {
       if (!myEmployee) return;
+      if (clockActionBusyRef.current) return;
       const already = findOpenAttendanceRecord(myEmployee.id);
       const stage = attendanceStage(already, myEmployee);
       if (stage !== "in1" && stage !== "in2") return;
+      clockActionBusyRef.current = true;
+      try {
       setGeoError("");
       setGeoBusy(true);
       const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
@@ -2589,14 +2599,20 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         );
         logActivity && logActivity("تسجيل حضور - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
       }
+      } finally {
+        clockActionBusyRef.current = false;
+      }
     };
 
     const clockOut = async (facePhoto) => {
       if (!myEmployee) return;
+      if (clockActionBusyRef.current) return;
       const rec = findOpenAttendanceRecord(myEmployee.id);
       if (!rec) return;
       const stage = attendanceStage(rec, myEmployee);
       if (stage !== "out1" && stage !== "out2") return;
+      clockActionBusyRef.current = true;
+      try {
       setGeoError("");
       setGeoBusy(true);
       const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
@@ -2622,10 +2638,18 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         if (isOffDayWork) {
           const workedMinutes = checkoutMinutesAdj - minutesOf(rec.checkInTime || timeStr);
           overtimeHours = workedMinutes > 0 ? Math.min(12, Math.round((workedMinutes / 60) * 2) / 2) : 0;
+        } else if (myEmployee.flexibleSchedule && myEmployee.twoShifts) {
+          /* دوام حر مقسوم لفترتين (صباحية ومسائية): انصراف الفترة الصباحية هنا مش نهاية يومه الفعلية —
+             لسه هيرجع يبصم حضور المسائية ويكمّل باقي ساعاته. لو احتسبنا "نقص ساعات" هنا بناءً على
+             فترة الصباح لوحدها، هيظهر نقص وهمي حتى لو الموظف كمّل 8 الساعات كاملة آخر يومه بعد
+             الفترة المسائية. فبنأجّل احتساب النقص/الإضافي النهائي لحد انصراف الفترة المسائية (out2)
+             اللي فيها بنجمع ساعات الفترتين مع بعض ونقارنها بـ 8 الساعات المطلوبة دفعة واحدة */
+          shortfallMinutes = 0;
+          overtimeHours = 0;
         } else if (myEmployee.flexibleSchedule) {
-          /* دوام حر: نحسب إجمالي الساعات الفعلية بين الحضور والانصراف — أي نقص عن عدد ساعات دوامه
-             المطلوبة فعليًا (8 أو 10 أو 12 ساعة حسب وقت دوامه المسجَّل في ملفه) يُخصم، وأي زيادة تُحتسب
-             وقت إضافي */
+          /* دوام حر بفترة واحدة فقط: نحسب إجمالي الساعات الفعلية بين الحضور والانصراف — أي نقص عن عدد
+             ساعات دوامه المطلوبة فعليًا (8 أو 10 أو 12 ساعة حسب وقت دوامه المسجَّل في ملفه) يُخصم، وأي
+             زيادة تُحتسب وقت إضافي */
           const requiredMinutes = dailyWorkHours(myEmployee) * 60;
           const workedMinutes = checkoutMinutesAdj - minutesOf(rec.checkInTime || timeStr);
           shortfallMinutes = workedMinutes < requiredMinutes ? requiredMinutes - workedMinutes : 0;
@@ -2675,9 +2699,24 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         const checkoutMinutesAdj2 = minutesOfCheckoutAdjusted(timeStr, rec.checkInTime2 || rec.checkInTime);
         let overtimeHours2 = 0;
         let earlyLeaveMinutes2 = 0;
+        let shortfallMinutesFinal = 0;
         if (isOffDayWork2) {
           const workedMinutes2 = checkoutMinutesAdj2 - minutesOf(rec.checkInTime2 || rec.checkInTime || timeStr);
           overtimeHours2 = workedMinutes2 > 0 ? Math.min(12, Math.round((workedMinutes2 / 60) * 2) / 2) : 0;
+        } else if (myEmployee.flexibleSchedule) {
+          /* نهاية يوم الدوام الحر المقسوم لفترتين فعليًا (out2) — هنا بس بنعرف إجمالي ساعات يومه
+             الحقيقي، فبنجمع ساعات الفترة الصباحية (rec.checkInTime→rec.checkOutTime، المحفوظة من
+             انصراف الفترة الأولى) مع ساعات الفترة المسائية الحالية، ونقارن المجموع بعدد الساعات
+             المطلوبة يوميًا (8 مثلاً) دفعة واحدة — بدل ما نحكم على كل فترة لوحدها زي قبل الإصلاح */
+          const period1Minutes =
+            rec.checkInTime && rec.checkOutTime
+              ? minutesOfCheckoutAdjusted(rec.checkOutTime, rec.checkInTime) - minutesOf(rec.checkInTime)
+              : 0;
+          const period2Minutes = checkoutMinutesAdj2 - minutesOf(rec.checkInTime2 || rec.checkInTime || timeStr);
+          const totalWorkedMinutes = period1Minutes + period2Minutes;
+          const requiredMinutes = dailyWorkHours(myEmployee) * 60;
+          shortfallMinutesFinal = totalWorkedMinutes < requiredMinutes ? requiredMinutes - totalWorkedMinutes : 0;
+          overtimeHours2 = totalWorkedMinutes > requiredMinutes ? Math.min(12, Math.round(((totalWorkedMinutes - requiredMinutes) / 60) * 2) / 2) : 0;
         } else {
           const shiftStart2Raw = myEmployee.workShift2?.start || "17:00";
           const shiftEnd2 = myEmployee.workShift2?.end || "22:00";
@@ -2690,11 +2729,22 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === rec.id
-              ? { ...a, checkOutTime2: timeStr, overtimeHours2, earlyLeaveMinutes2, checkOutLocation2: sanitizeLocation(check), checkOutPhoto2: uploadedPhotoUrl }
+              ? {
+                  ...a,
+                  checkOutTime2: timeStr,
+                  overtimeHours2,
+                  earlyLeaveMinutes2,
+                  ...(myEmployee.flexibleSchedule ? { shortfallMinutes: shortfallMinutesFinal } : {}),
+                  checkOutLocation2: sanitizeLocation(check),
+                  checkOutPhoto2: uploadedPhotoUrl,
+                }
               : a
           )
         );
         logActivity && logActivity("تسجيل انصراف - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+      }
+      } finally {
+        clockActionBusyRef.current = false;
       }
     };
 
@@ -3776,6 +3826,10 @@ function Empty({ text }) {
 /* ============ الموظفون ============ */
 const EMPTY_EMP = {
   name: "",
+  /* اسم الموظف بالإنجليزي (اختياري) — يُعرض جنب/تحت الاسم الأساسي في قوائم الموظفين وسجل الحضور
+     وتقاريرهما، عشان الأدمن يقدر يشوف الاسمين مع بعض (مفيد خصوصًا للموظفين غير السعوديين اللي
+     أوراقهم الرسمية أحيانًا بالإنجليزي فقط، أو العكس) */
+  nameEn: "",
   photo: "",
   nationalId: "",
   nationality: "سعودي",
@@ -4421,6 +4475,9 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           <Field label={t("الاسم الكامل", "Full Name")} required>
             <input style={inputStyle} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
+          <Field label={t("الاسم بالإنجليزي (اختياري)", "Name in English (optional)")}>
+            <input style={inputStyle} value={form.nameEn} onChange={(e) => setForm({ ...form, nameEn: e.target.value })} />
+          </Field>
           <Field label={t("رقم الهوية / الإقامة", "National ID / Iqama No.")} required>
             <input style={inputStyle} value={form.nationalId} onChange={(e) => setForm({ ...form, nationalId: e.target.value })} />
           </Field>
@@ -4640,6 +4697,9 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
                     title={t("عرض الملف الكامل", "View full profile")}
                   >
                     {e.name}
+                    {e.nameEn && (
+                      <div style={{ fontWeight: 400, fontSize: 11, color: "#8a7a63", textDecoration: "none" }}>{e.nameEn}</div>
+                    )}
                   </td>
                   <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px" }}>
                     {branches.find((b) => b.id === e.branchId)?.name || "—"}
@@ -5100,7 +5160,12 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
               </div>
             )}
             <div>
-              <div style={{ fontWeight: 800, color: COLORS.espresso, fontSize: 15 }}>{emp.name}</div>
+              <div style={{ fontWeight: 800, color: COLORS.espresso, fontSize: 15 }}>
+                {emp.name}
+                {emp.nameEn && (
+                  <span style={{ fontWeight: 400, fontSize: 12, color: "#a3927a" }}> ({emp.nameEn})</span>
+                )}
+              </div>
               <div style={{ fontSize: 11.5, color: "#a3927a" }}>{emp.position} — {branchName}</div>
             </div>
           </div>
@@ -7186,6 +7251,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
     : employees;
 
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
+  const empNameEn = (id) => employees.find((e) => e.id === id)?.nameEn || "";
   const branchNameOf = (id) => branches.find((b) => b.id === id)?.name || "";
 
   const addAtt = () => {
@@ -7367,6 +7433,9 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
                 title={t("تقرير الحضور والانصراف", "Attendance & departure report")}
               >
                 {empName(a.employeeId)}
+                {empNameEn(a.employeeId) && (
+                  <span style={{ fontWeight: 400, fontSize: 11, color: "#8a7a63", textDecoration: "none" }}> ({empNameEn(a.employeeId)})</span>
+                )}
               </b>{" "}
               — {a.date}
               {dayNameOfDate(a.date, t) && (
@@ -7421,6 +7490,9 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
               )}
               {Number(a.earlyLeaveMinutes2 || 0) > 0 && (
                 <Stamp tone="brick">{t(`خروج مبكر ف2 ${a.earlyLeaveMinutes2} د`, `Left early S2 ${a.earlyLeaveMinutes2}m`)}</Stamp>
+              )}
+              {Number(a.shortfallMinutes || 0) > 0 && (
+                <Stamp tone="brick">{t(`خروج مبكر (دوام حر) ${a.shortfallMinutes} د`, `Left early (flexible) ${a.shortfallMinutes}m`)}</Stamp>
               )}
               <Btn small tone="secondary" onClick={() => (editingId === a.id ? cancelEdit() : startEdit(a))}>
                 {editingId === a.id ? t("إلغاء", "Cancel") : t("✏️ تعديل", "✏️ Edit")}
