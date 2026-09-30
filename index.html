@@ -3855,6 +3855,8 @@ const EMPTY_EMP = {
   salary: "",
   joinDate: "",
   phone: "",
+  /* طريقة استلام الراتب المعتادة للموظف (نقدًا أو تحويل بنكي) — تُعرض كعمود في جدول الرواتب */
+  paymentMethod: "تحويل بنكي",
   status: "نشط",
   iqamaExpiry: "",
   iqamaProfession: "",
@@ -4518,6 +4520,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           </Field>
           <Field label={t("الراتب الأساسي (﷼)", "Basic Salary (SAR)")} required>
             <input type="number" style={inputStyle} value={form.salary} onChange={(e) => setForm({ ...form, salary: e.target.value })} />
+          </Field>
+          <Field label={t("طريقة استلام الراتب", "Salary Payment Method")}>
+            <select style={inputStyle} value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value })}>
+              <option value="تحويل بنكي">{t("تحويل بنكي", "Bank Transfer")}</option>
+              <option value="نقدًا">{t("نقدًا", "Cash")}</option>
+            </select>
           </Field>
           <Field label={t("تاريخ التعيين", "Hire Date")} required>
             <DateField style={inputStyle} value={form.joinDate} onChange={(v) => setForm({ ...form, joinDate: v })} />
@@ -8159,6 +8167,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   { label: t("الفرع", "Branch") },
                   { label: t("الجنسية", "Nationality") },
                   { label: t("الراتب الأساسي", "Basic Salary") },
+                  { label: t("طريقة الاستلام", "Payment Method") },
                   { label: t("حصة الموظف GOSI", "Employee GOSI Share"), hidePrint: true },
                   { label: t("أيام غياب", "Absent Days") },
                   { label: t("خصم الغياب", "Absence Deduction") },
@@ -8206,6 +8215,9 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td data-label={t("الراتب الأساسي", "Basic Salary")} style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
+                  <td data-label={t("طريقة الاستلام", "Payment Method")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
+                    {t(r.paymentMethod || "تحويل بنكي", (r.paymentMethod || "تحويل بنكي") === "نقدًا" ? "Cash" : "Bank Transfer")}
+                  </td>
                   <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} className="no-print" style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
                   <td
                     data-label={t("أيام غياب", "Absent Days")}
@@ -8431,6 +8443,7 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                 <div><b>{t("الجنسية", "Nationality")}:</b> {trLabel(t, NATIONALITY_LABELS_EN, payslip.nationality)}</div>
                 <div><b>{t("الفرع", "Branch")}:</b> {branches.find((b) => b.id === payslip.branchId)?.name || "—"}</div>
                 <div><b>{t("تاريخ التعيين", "Hire Date")}:</b> {payslip.joinDate || "—"}</div>
+                <div><b>{t("طريقة استلام الراتب", "Payment Method")}:</b> {t(payslip.paymentMethod || "تحويل بنكي", (payslip.paymentMethod || "تحويل بنكي") === "نقدًا" ? "Cash" : "Bank Transfer")}</div>
               </div>
 
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 14 }}>
@@ -8737,6 +8750,7 @@ function EOSTab({ employees }) {
   const [empId, setEmpId] = useState("");
   const [endDate, setEndDate] = useState(new Date().toISOString().slice(0, 10));
   const [reason, setReason] = useState("استقالة الموظف");
+  const [paymentMethod, setPaymentMethod] = useState("نقدًا");
 
   const emp = employees.find((e) => e.id === empId);
   const years = emp ? yearsBetween(emp.joinDate, endDate) : 0;
@@ -8791,6 +8805,12 @@ function EOSTab({ employees }) {
               ))}
             </select>
           </Field>
+          <Field label={t("طريقة استلام المستحقات", "Payment Method")}>
+            <select style={inputStyle} value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
+              <option value="نقدًا">{t("نقدًا", "Cash")}</option>
+              <option value="تحويل بنكي">{t("تحويل بنكي", "Bank Transfer")}</option>
+            </select>
+          </Field>
         </div>
         {emp && (
           <div style={{ marginTop: 10, fontSize: 12, color: "#8a7a63" }}>
@@ -8833,6 +8853,13 @@ function EOSTab({ employees }) {
               <div><b>{t("سبب انتهاء الخدمة", "Reason")}:</b> {trLabel(t, EOS_REASON_LABELS_EN, reason)}</div>
               <div><b>{t("الراتب الأساسي", "Basic Salary")}:</b> {fmt(salary)} ﷼</div>
               <div><b>{t("المكافأة المستحقة", "Bonus Due")}:</b> {fmt(result.adjusted)} ﷼</div>
+              <div><b>{t("طريقة استلام المستحقات", "Payment Method")}:</b> {t(paymentMethod, paymentMethod === "نقدًا" ? "Cash" : "Bank Transfer")}</div>
+            </div>
+            <div style={{ marginTop: 20, fontSize: 12.5 }}>
+              {t(
+                `أقرّ أنا الموظف الموضح اسمه أعلاه باستلامي كامل مستحقاتي المالية الموضحة في هذا المستند ${paymentMethod === "نقدًا" ? "نقدًا" : "عن طريق تحويل بنكي"}، ولا يحق لي أي مطالبة مستقبلية تجاه المنشأة بخصوص هذه المستحقات.`,
+                `I, the employee named above, acknowledge receiving my full financial dues stated in this document ${paymentMethod === "نقدًا" ? "in cash" : "via bank transfer"}, and I have no future claim against the establishment regarding these dues.`
+              )}
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
               <div style={{ textAlign: "center", width: "45%" }}>
