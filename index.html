@@ -271,6 +271,10 @@ const BACKUP_RETENTION_DAYS = 14;
    ما يُحتسب تأخير ولا خروج مبكر إطلاقًا (سماحية كاملة، مش خصم جزء منها) — لو تجاوز الفرق السماحية، يُحتسب
    كامل الفرق الفعلي زي ما هو، مش الفرق ناقص السماحية */
 const LATE_EARLY_GRACE_MINUTES = 10;
+/* أقل فترة راحة حقيقية (بالدقائق) لازم تمر بعد انصراف الفترة الصباحية قبل ما يقدر الموظف صاحب الدوامين
+   (صباحي ومسائي) يسجّل حضور الفترة المسائية — يمنع تسجيل انصراف وحضور بفارق دقيقة أو دقيقتين بدون أي
+   استراحة فعلية بينهم (بلاغ المستخدمة) */
+const MIN_BREAK_BETWEEN_SHIFTS_MINUTES = 30;
 
 /* ============ دمج آمن لأقسام البيانات وقت الحفظ (يمنع تعارض عمل شخصين في نفس الوقت) ============
    الأقسام دي كلها "قوائم سجلات" (كل سجل له id فريد) — لو شخصين شغالين وقت واحد وكل واحد لمس نفس
@@ -2547,12 +2551,39 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return "done";
     };
 
+    /* عدد الدقائق اللي مرّت من تاريخ/وقت معيّن (مثل انصراف الفترة الصباحية) لحد دلوقتي — بنستخدم
+       تاريخ ووقت حقيقيين (مش مجرد فرق دقائق اليوم) عشان يبقى صحيح حتى لو الانصراف كان قريب من
+       منتصف الليل */
+    const minutesSinceDateTime = (dateStr, timeStr) => {
+      if (!dateStr || !timeStr) return Infinity;
+      const [h, m] = timeStr.split(":").map(Number);
+      const then = new Date(dateStr + "T00:00:00");
+      then.setHours(h, m, 0, 0);
+      return Math.round((Date.now() - then.getTime()) / 60000);
+    };
+
     const clockIn = async (facePhoto) => {
       if (!myEmployee) return;
       if (clockActionBusyRef.current) return;
       const already = findOpenAttendanceRecord(myEmployee.id);
       const stage = attendanceStage(already, myEmployee);
       if (stage !== "in1" && stage !== "in2") return;
+      /* دوامين في اليوم: لازم تمر فترة راحة حقيقية بعد انصراف الفترة الصباحية قبل ما يقدر يسجّل حضور
+         الفترة المسائية — يمنع تسجيل انصراف وحضور بفارق دقيقة واحدة بدون أي استراحة فعلية (بلاغ
+         المستخدمة: موظف سجّل الفترتين بفارق دقيقة واحدة بس) */
+      if (stage === "in2" && already) {
+        const minutesSinceBreakStart = minutesSinceDateTime(already.date, already.checkOutTime);
+        if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
+          const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
+          setGeoError(
+            t(
+              `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل بعد انصراف الفترة الصباحية قبل ما تقدر تسجّل حضور الفترة المسائية — باقي ${remaining} دقيقة تقريبًا.`,
+              `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break after your morning check-out before you can check in for the evening shift — about ${remaining} more minute(s) to go.`
+            )
+          );
+          return;
+        }
+      }
       clockActionBusyRef.current = true;
       try {
       setGeoError("");
@@ -2773,6 +2804,21 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       const already = findOpenAttendanceRecord(myEmployee.id);
       const stage = attendanceStage(already, myEmployee);
       if (stage !== "in1" && stage !== "in2") return;
+      /* نفس شرط فترة الراحة الدنيا بين الفترتين — نتحقق منه هنا كمان قبل ما نفتح شاشة التحقق من
+         الوجه، عشان ما نضيّعش وقت الموظف في خطوات التحقق لو أصلًا لسه ما خلصتش راحته */
+      if (stage === "in2" && already) {
+        const minutesSinceBreakStart = minutesSinceDateTime(already.date, already.checkOutTime);
+        if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
+          const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
+          setGeoError(
+            t(
+              `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل بعد انصراف الفترة الصباحية قبل ما تقدر تسجّل حضور الفترة المسائية — باقي ${remaining} دقيقة تقريبًا.`,
+              `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break after your morning check-out before you can check in for the evening shift — about ${remaining} more minute(s) to go.`
+            )
+          );
+          return;
+        }
+      }
       if (myEmployee.faceAttendanceEnabled === false) {
         clockIn();
         return;
@@ -3519,6 +3565,7 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
   const { t } = useLang();
   const [alertSearch, setAlertSearch] = useState("");
   const [showAbsentModal, setShowAbsentModal] = useState(false);
+  const [showForgottenModal, setShowForgottenModal] = useState(false);
   const activeCount = employees.filter((e) => e.status === "نشط").length;
   const totalSalaries = employees.filter((e) => e.status === "نشط").reduce((s, e) => s + Number(e.salary || 0), 0);
   const today = new Date().toISOString().slice(0, 10);
@@ -3539,6 +3586,28 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
     if (rec && rec.status !== "غائب") return false;
     return true;
   });
+
+  /* موظفون نسوا يسجّلوا انصرافهم: سجل حضور ليوم سابق (مش اليوم، عشان ما نحكمش على شفت لسه شغال)
+     فيه وقت حضور فعلي بدون وقت انصراف — سواء الفترة الصباحية كلها أو الفترة المسائية لموظف عنده
+     دوامين. بنحصرها في آخر 14 يوم بس عشان التنبيه يفضل مركَّز وعملي (بلاغ المستخدمة: زر الانصراف
+     بيفضل شغال للأبد لو الموظف نسي يسجّله، وده محتاج تنبيه للإدارة بدل ما يتنسى) */
+  const forgottenCheckoutWindowStart = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 14);
+    return d.toISOString().slice(0, 10);
+  })();
+  const forgottenCheckouts = [];
+  employees
+    .filter((e) => e.status === "نشط")
+    .forEach((e) => {
+      (attendance || [])
+        .filter((a) => a.employeeId === e.id && a.date < today && a.date >= forgottenCheckoutWindowStart && a.checkInTime)
+        .forEach((rec) => {
+          if (!rec.checkOutTime) forgottenCheckouts.push({ emp: e, rec, missing: "out1" });
+          else if (e.twoShifts && rec.checkInTime2 && !rec.checkOutTime2) forgottenCheckouts.push({ emp: e, rec, missing: "out2" });
+        });
+    });
+  forgottenCheckouts.sort((a, b) => (a.rec.date < b.rec.date ? 1 : -1));
 
   /* تنبيهات عاجلة: أي ترخيص أو إقامة أو تأمين منتهي أو هينتهي خلال 7 أيام — تشمل الموظفين والفروع والسيارات */
   const isUrgent = (dateStr) => {
@@ -3608,6 +3677,13 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
           tone={absentEmployeesToday.length > 0 ? COLORS.brick : COLORS.green}
           onClick={() => setShowAbsentModal(true)}
         />
+        <ReceiptCard
+          label={t("نسوا تسجيل الانصراف", "Forgot to Check Out")}
+          value={fmt(forgottenCheckouts.length)}
+          sub={t("آخر 14 يوم", "Last 14 days")}
+          tone={forgottenCheckouts.length > 0 ? COLORS.brick : COLORS.green}
+          onClick={() => setShowForgottenModal(true)}
+        />
       </div>
 
       {showAbsentModal && (
@@ -3654,6 +3730,54 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showForgottenModal && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 65, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+          onClick={() => setShowForgottenModal(false)}
+        >
+          <div
+            style={{ background: "#fff", borderRadius: 12, maxWidth: 560, width: "100%", maxHeight: "80vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.35)" }}
+            onClick={(ev) => ev.stopPropagation()}
+          >
+            <div
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: `1px solid ${COLORS.line}`, position: "sticky", top: 0, background: "#fff", zIndex: 2, borderRadius: "12px 12px 0 0" }}
+            >
+              <div style={{ fontWeight: 700, color: COLORS.espresso }}>
+                {t(`نسوا تسجيل الانصراف (${fmt(forgottenCheckouts.length)})`, `Forgot to Check Out (${fmt(forgottenCheckouts.length)})`)}
+              </div>
+              <Btn small tone="secondary" onClick={() => setShowForgottenModal(false)}>{t("إغلاق ✕", "Close ✕")}</Btn>
+            </div>
+            <div style={{ padding: forgottenCheckouts.length ? 0 : 24 }}>
+              {forgottenCheckouts.length === 0 && <Empty text={t("ما فيه أي سجل ناقص انصراف خلال آخر 14 يوم 🎉", "No missing check-outs in the last 14 days 🎉")} />}
+              {forgottenCheckouts.map((f, i) => (
+                <div
+                  key={f.rec.id + f.missing}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "11px 20px",
+                    borderTop: i > 0 ? `1px dashed ${COLORS.line}` : "none",
+                    flexWrap: "wrap",
+                    gap: 8,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: COLORS.espresso }}>{f.emp.name}</div>
+                    <div style={{ fontSize: 11, color: "#8a7a63" }}>
+                      {branchName(f.emp.branchId)} · {f.rec.date} · {t("حضور", "Check-in")}: {f.missing === "out1" ? f.rec.checkInTime : f.rec.checkInTime2}
+                    </div>
+                  </div>
+                  <Stamp tone="brick">
+                    {f.missing === "out1" ? t("بدون انصراف", "No check-out") : t("بدون انصراف (الفترة المسائية)", "No check-out (evening)")}
+                  </Stamp>
+                </div>
+              ))}
             </div>
           </div>
         </div>
