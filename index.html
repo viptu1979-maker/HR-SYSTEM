@@ -3486,6 +3486,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         {tab === "payroll" && (
           <PayrollTab
             employees={scopedEmployees}
+            setEmployees={setEmployees}
             branches={scopedBranches}
             entities={entities}
             entityOfBranch={entityOfBranch}
@@ -7887,7 +7888,7 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
 }
 
 
-function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, attendance, setAttendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
+function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranch, gosiRates, attendance, setAttendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -8016,6 +8017,14 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
   };
   const removeItem = (id) => setPayrollItems((prev) => prev.filter((p) => p.id !== id));
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
+  /* تبديل سريع بين "نقدًا" و"تحويل بنكي" بضغطة واحدة على خانة طريقة الاستلام في جدول الرواتب —
+     بدل ما تحتاجي تفتحي ملف الموظف كل مرة عشان تغيّريها (بلاغ المستخدمة) */
+  const togglePaymentMethod = (empId) => {
+    if (!setEmployees) return;
+    setEmployees((prev) =>
+      prev.map((e) => (e.id === empId ? { ...e, paymentMethod: (e.paymentMethod || "تحويل بنكي") === "نقدًا" ? "تحويل بنكي" : "نقدًا" } : e))
+    );
+  };
 
   const q = searchQuery.trim().toLowerCase();
   const rows = employees
@@ -8347,7 +8356,12 @@ function PayrollTab({ employees, branches, entities, entityOfBranch, gosiRates, 
                   <td data-label={t("الفرع", "Branch")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{branches.find((b) => b.id === r.branchId)?.name || "—"}</td>
                   <td data-label={t("الجنسية", "Nationality")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{trLabel(t, NATIONALITY_LABELS_EN, r.nationality)}</td>
                   <td data-label={t("الراتب الأساسي", "Basic Salary")} style={{ padding: "9px 12px" }}>{fmt(r.salary)}</td>
-                  <td data-label={t("طريقة الاستلام", "Payment Method")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>
+                  <td
+                    data-label={t("طريقة الاستلام", "Payment Method")}
+                    onClick={() => togglePaymentMethod(r.id)}
+                    title={t("اضغط للتبديل بين نقدًا وتحويل بنكي", "Click to switch between Cash and Bank Transfer")}
+                    style={{ padding: "9px 12px", fontFamily: "inherit", cursor: "pointer", textDecoration: "underline dotted" }}
+                  >
                     {t(r.paymentMethod || "تحويل بنكي", (r.paymentMethod || "تحويل بنكي") === "نقدًا" ? "Cash" : "Bank Transfer")}
                   </td>
                   <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} className="no-print" style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
