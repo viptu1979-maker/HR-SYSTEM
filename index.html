@@ -3587,13 +3587,21 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
     return true;
   });
 
-  /* موظفون نسوا يسجّلوا انصرافهم: سجل حضور ليوم سابق (مش اليوم، عشان ما نحكمش على شفت لسه شغال)
-     فيه وقت حضور فعلي بدون وقت انصراف — سواء الفترة الصباحية كلها أو الفترة المسائية لموظف عنده
-     دوامين. بنحصرها في آخر 14 يوم بس عشان التنبيه يفضل مركَّز وعملي (بلاغ المستخدمة: زر الانصراف
-     بيفضل شغال للأبد لو الموظف نسي يسجّله، وده محتاج تنبيه للإدارة بدل ما يتنسى) */
+  /* موظفون نسوا يسجّلوا انصرافهم: سجل حضور ليوم سابق فيه وقت حضور فعلي بدون وقت انصراف — سواء
+     الفترة الصباحية كلها أو الفترة المسائية لموظف عنده دوامين. بنستبعد يوم أمس بالذات (مش بس
+     اليوم) لأن ده نفس هامش السماح اللي النظام أصلًا بيستخدمه للدوام الليلي المتواصل (موظف بصم
+     حضور قبل منتصف الليل ولسه ما بصمش انصرافه لحد الصبح أو خلال يومه الحالي) — فلو حكمنا عليه
+     من أول يوم واحد بس، هيظهر "ناسي" وهو لسه في فترة سماح طبيعية وهيسجّل انصرافه عادي خلال يومه
+     (بلاغ المستخدمة: موظف ظهر في القائمة وهو فعليًا سجّل انصرافه في اليوم التالي زي المتوقع).
+     بنحصرها في آخر 14 يوم (غير يوم أمس) بس عشان التنبيه يفضل مركَّز وعملي */
   const forgottenCheckoutWindowStart = (() => {
     const d = new Date();
     d.setDate(d.getDate() - 14);
+    return d.toISOString().slice(0, 10);
+  })();
+  const yesterdayISO = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
     return d.toISOString().slice(0, 10);
   })();
   const forgottenCheckouts = [];
@@ -3601,7 +3609,7 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
     .filter((e) => e.status === "نشط")
     .forEach((e) => {
       (attendance || [])
-        .filter((a) => a.employeeId === e.id && a.date < today && a.date >= forgottenCheckoutWindowStart && a.checkInTime)
+        .filter((a) => a.employeeId === e.id && a.date < yesterdayISO && a.date >= forgottenCheckoutWindowStart && a.checkInTime)
         .forEach((rec) => {
           if (!rec.checkOutTime) forgottenCheckouts.push({ emp: e, rec, missing: "out1" });
           else if (e.twoShifts && rec.checkInTime2 && !rec.checkOutTime2) forgottenCheckouts.push({ emp: e, rec, missing: "out2" });
