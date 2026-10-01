@@ -30,6 +30,8 @@
 <!-- Leaflet: خريطة مجانية (OpenStreetMap) بدون مفتاح API — لتحديد موقع الفرع بالنقر على الخريطة -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- SheetJS (xlsx): لتصدير مسيرة الرواتب الشهرية كملف إكسل حقيقي مباشرة من المتصفح -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   html, body { margin: 0; padding: 0; }
   * { box-sizing: border-box; }
@@ -959,6 +961,10 @@ const ADVANCE_REQUEST_STATUS_LABELS_EN = {
   "مرفوض": "Rejected",
 };
 const ATTENDANCE_STATUS_LABELS_EN = { "حاضر": "Present", "غائب": "Absent", "متأخر": "Late", "إجازة": "Leave" };
+/* طريقة استلام الراتب — 3 خيارات: تحويل بنكي عادي، نقدًا، أو عن طريق منصة "مدد" (منصة وزارة الموارد
+   البشرية لحماية الأجور WPS) */
+const PAYMENT_METHOD_LABELS_EN = { "تحويل بنكي": "Bank Transfer", "نقدًا": "Cash", "مدد": "Mudad" };
+const PAYMENT_METHODS = ["تحويل بنكي", "نقدًا", "مدد"];
 const PAYROLL_ITEM_TYPE_LABELS_EN = { "سلفة": "Advance", "خصم": "Deduction", "حافز": "Incentive" };
 /* أنواع مخالفات الموظفين ودرجات الإنذار — تُستخدم في تبويب "الإنذارات والمخالفات" */
 const WARNING_CATEGORIES = ["غياب بدون عذر", "تأخر متكرر عن الدوام", "خروج مبكر بدون إذن", "التحايل على نظام تسجيل الحضور", "مخالفة سلوكية", "مخالفة بزي العمل والمظهر", "إهمال في العمل", "أخرى"];
@@ -4869,8 +4875,9 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           </Field>
           <Field label={t("طريقة استلام الراتب", "Salary Payment Method")}>
             <select style={inputStyle} value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value })}>
-              <option value="تحويل بنكي">{t("تحويل بنكي", "Bank Transfer")}</option>
-              <option value="نقدًا">{t("نقدًا", "Cash")}</option>
+              {PAYMENT_METHODS.map((pm) => (
+                <option key={pm} value={pm}>{trLabel(t, PAYMENT_METHOD_LABELS_EN, pm)}</option>
+              ))}
             </select>
           </Field>
           <Field label={t("تاريخ التعيين", "Hire Date")} required>
@@ -8226,6 +8233,144 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
 }
 
 
+/* تصدير مسيرة الرواتب الشهرية كملف إكسل حقيقي مباشرة من المتصفح (عبر مكتبة SheetJS/XLSX) — صف لكل
+   موظف: الراتب الأساسي، البدلات (نفس حقل "الحوافز" الموجود)، الوقت الإضافي، الخصومات (تأمينات
+   GOSI + خصومات الغياب/التأخير + خصومات أخرى مجمّعة في رقم واحد)، السلف، طريقة الاستلام، وصافي
+   المستحق — بالإضافة لصف إجمالي في الآخر. جاهز يُرفَع للبنك أو يُسلَّم للمحاسب (بلاغ المستخدمة) */
+function exportPayrollSheetExcel(rows, month, branches, t) {
+  if (!window.XLSX) {
+    window.alert(
+      t(
+        "تعذّر تحميل مكتبة تصدير الإكسل — تأكد من اتصال الإنترنت وحاول مرة أخرى.",
+        "Couldn't load the Excel export library — check your internet connection and try again."
+      )
+    );
+    return;
+  }
+  const branchNameOf = (id) => branches.find((b) => b.id === id)?.name || "—";
+  const combinedDeductions = (r) => Number(r.empShare || 0) + Number(r.attendanceDeduction || 0) + Number(r.extraDeductions || 0);
+  const header = [
+    t("الموظف", "Employee"),
+    t("الفرع", "Branch"),
+    t("الراتب الأساسي", "Basic Salary"),
+    t("البدلات", "Allowances"),
+    t("الوقت الإضافي", "Overtime"),
+    t("الخصومات", "Deductions"),
+    t("السلف", "Advances"),
+    t("طريقة الاستلام", "Payment Method"),
+    t("صافي المستحق", "Net Pay"),
+  ];
+  const dataRows = rows.map((r) => [
+    r.name,
+    branchNameOf(r.branchId),
+    Number(r.salary || 0),
+    Number(r.incentives || 0),
+    Number(r.overtimePay || 0),
+    combinedDeductions(r),
+    Number(r.advances || 0),
+    trLabel(t, PAYMENT_METHOD_LABELS_EN, r.paymentMethod || "تحويل بنكي"),
+    Number(r.net || 0),
+  ]);
+  const totalsRow = [
+    t("الإجمالي", "Total"),
+    "",
+    rows.reduce((s, r) => s + Number(r.salary || 0), 0),
+    rows.reduce((s, r) => s + Number(r.incentives || 0), 0),
+    rows.reduce((s, r) => s + Number(r.overtimePay || 0), 0),
+    rows.reduce((s, r) => s + combinedDeductions(r), 0),
+    rows.reduce((s, r) => s + Number(r.advances || 0), 0),
+    "",
+    rows.reduce((s, r) => s + Number(r.net || 0), 0),
+  ];
+  const ws = window.XLSX.utils.aoa_to_sheet([header, ...dataRows, totalsRow]);
+  ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 14 }];
+  const wb = window.XLSX.utils.book_new();
+  window.XLSX.utils.book_append_sheet(wb, ws, t("مسيرة الرواتب", "Payroll Sheet"));
+  window.XLSX.writeFile(wb, `${t("مسيرة_الرواتب", "Payroll_Sheet")}_${month}.xlsx`);
+}
+
+/* نافذة مسيرة الرواتب الشهرية الكاملة — عرض كل الموظفين دفعة واحدة، قابلة للطباعة/الحفظ كـ PDF
+   مباشرة من المتصفح (🖶 طباعة ← حفظ كـ PDF) */
+function PayrollSheetModal({ rows, totals, month, branches, onClose }) {
+  const { t } = useLang();
+  const branchNameOf = (id) => branches.find((b) => b.id === id)?.name || "—";
+  const combinedDeductions = (r) => Number(r.empShare || 0) + Number(r.attendanceDeduction || 0) + Number(r.extraDeductions || 0);
+  const totalDeductions = Number(totals.empShare || 0) + Number(totals.attendanceDeduction || 0) + Number(totals.extraDeductions || 0);
+  return (
+    <div
+      style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 65, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+      onClick={onClose}
+    >
+      <div
+        style={{ background: "#fff", borderRadius: 12, maxWidth: 980, width: "100%", maxHeight: "92vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.35)" }}
+        onClick={(ev) => ev.stopPropagation()}
+      >
+        <div
+          className="no-print"
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "14px 20px", borderBottom: `1px solid ${COLORS.line}`, position: "sticky", top: 0, background: "#fff", zIndex: 2, borderRadius: "12px 12px 0 0", flexWrap: "wrap", gap: 10 }}
+        >
+          <div style={{ fontWeight: 700, color: COLORS.espresso }}>{t(`مسيرة الرواتب الشهرية — ${month}`, `Monthly Payroll Sheet — ${month}`)}</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn small onClick={() => window.print()}>{t("🖶 طباعة / PDF", "🖶 Print / PDF")}</Btn>
+            <Btn small tone="secondary" onClick={onClose}>{t("إغلاق ✕", "Close ✕")}</Btn>
+          </div>
+        </div>
+        <div className="print-section print-section-modal" style={{ padding: 24 }}>
+          <div style={{ textAlign: "center", marginBottom: 16, borderBottom: `2px solid ${COLORS.gold}`, paddingBottom: 12 }}>
+            <div style={{ fontSize: 15, fontWeight: 800, color: COLORS.espresso }}>{t("مسيرة الرواتب الشهرية", "Monthly Payroll Sheet")}</div>
+            <div style={{ fontSize: 12, color: "#a3927a", marginTop: 4, fontFamily: "Consolas, monospace" }}>{month}</div>
+          </div>
+          {rows.length === 0 && <Empty text={t("لا يوجد موظفون", "No employees")} />}
+          {rows.length > 0 && (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+              <thead>
+                <tr style={{ background: COLORS.paper }}>
+                  <th style={{ padding: "8px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("الموظف", "Employee")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("الفرع", "Branch")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "end", fontWeight: 700, color: COLORS.coffee }}>{t("الراتب", "Salary")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "end", fontWeight: 700, color: COLORS.coffee }}>{t("البدلات", "Allowances")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "end", fontWeight: 700, color: COLORS.coffee }}>{t("الإضافي", "Overtime")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "end", fontWeight: 700, color: COLORS.coffee }}>{t("الخصومات", "Deductions")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "end", fontWeight: 700, color: COLORS.coffee }}>{t("السلف", "Advances")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "start", fontWeight: 700, color: COLORS.coffee }}>{t("طريقة الاستلام", "Payment")}</th>
+                  <th style={{ padding: "8px 10px", textAlign: "end", fontWeight: 700, color: COLORS.coffee }}>{t("الصافي", "Net")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} style={{ borderTop: `1px dashed ${COLORS.line}` }}>
+                    <td style={{ padding: "7px 10px" }}>{r.name}</td>
+                    <td style={{ padding: "7px 10px", color: "#8a7a63" }}>{branchNameOf(r.branchId)}</td>
+                    <td style={{ padding: "7px 10px", textAlign: "end", fontFamily: "Consolas, monospace" }}>{fmt(r.salary)}</td>
+                    <td style={{ padding: "7px 10px", textAlign: "end", fontFamily: "Consolas, monospace" }}>{fmt(r.incentives)}</td>
+                    <td style={{ padding: "7px 10px", textAlign: "end", fontFamily: "Consolas, monospace" }}>{fmt(r.overtimePay)}</td>
+                    <td style={{ padding: "7px 10px", textAlign: "end", fontFamily: "Consolas, monospace", color: COLORS.brick }}>{fmt(combinedDeductions(r))}</td>
+                    <td style={{ padding: "7px 10px", textAlign: "end", fontFamily: "Consolas, monospace", color: COLORS.brick }}>{fmt(r.advances)}</td>
+                    <td style={{ padding: "7px 10px" }}>{trLabel(t, PAYMENT_METHOD_LABELS_EN, r.paymentMethod || "تحويل بنكي")}</td>
+                    <td style={{ padding: "7px 10px", textAlign: "end", fontFamily: "Consolas, monospace", fontWeight: 700, color: COLORS.green }}>{fmt(r.net)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr style={{ borderTop: `2px solid ${COLORS.gold}`, fontWeight: 700 }}>
+                  <td style={{ padding: "8px 10px" }} colSpan={2}>{t("الإجمالي", "Total")}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "end", fontFamily: "Consolas, monospace" }}>{fmt(totals.salary)}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "end", fontFamily: "Consolas, monospace" }}>{fmt(totals.incentives)}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "end", fontFamily: "Consolas, monospace" }}>{fmt(totals.overtimePay)}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "end", fontFamily: "Consolas, monospace", color: COLORS.brick }}>{fmt(totalDeductions)}</td>
+                  <td style={{ padding: "8px 10px", textAlign: "end", fontFamily: "Consolas, monospace", color: COLORS.brick }}>{fmt(totals.advances)}</td>
+                  <td></td>
+                  <td style={{ padding: "8px 10px", textAlign: "end", fontFamily: "Consolas, monospace", color: COLORS.green }}>{fmt(totals.net)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranch, gosiRates, attendance, setAttendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
@@ -8234,6 +8379,10 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
   const [itemForm, setItemForm] = useState({ employeeId: "", type: "سلفة", amount: "", date: new Date().toISOString().slice(0, 10), month: new Date().toISOString().slice(0, 7), note: "", repayment: "دفعة واحدة", installments: 2 });
   const [payslip, setPayslip] = useState(null);
   const [printItem, setPrintItem] = useState(null);
+  /* مسيرة الرواتب الشهرية: جدول كامل لكل الموظفين (راتب، بدلات/حوافز، وقت إضافي، خصومات، سلف،
+     طريقة الاستلام، الصافي) لشهر معيّن — قابل للطباعة/حفظ PDF أو تصدير مباشر كملف إكسل، عشان
+     ترفَع للبنك أو تتسلَّم للمحاسب (بلاغ المستخدمة) */
+  const [showPayrollSheet, setShowPayrollSheet] = useState(false);
 
   /* تصحيح غياب/تأخير يوم بعينه مباشرة من جدول الرواتب — للحالات اللي الموظف ما قدر يسجّل
      دخوله فيها عن طريق النظام (تطبيق/بصمة وجه) فتظهر غياب أو تأخير، ونحتاج نثبّت وقت دوامه
@@ -8355,12 +8504,17 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
   };
   const removeItem = (id) => setPayrollItems((prev) => prev.filter((p) => p.id !== id));
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
-  /* تبديل سريع بين "نقدًا" و"تحويل بنكي" بضغطة واحدة على خانة طريقة الاستلام في جدول الرواتب —
-     بدل ما تحتاجي تفتحي ملف الموظف كل مرة عشان تغيّريها (بلاغ المستخدمة) */
+  /* تبديل سريع بين طرق الاستلام الثلاث (تحويل بنكي ← نقدًا ← مدد ← ...) بضغطة واحدة على خانة طريقة
+     الاستلام في جدول الرواتب — بدل ما تحتاجي تفتحي ملف الموظف كل مرة عشان تغيّريها (بلاغ المستخدمة) */
   const togglePaymentMethod = (empId) => {
     if (!setEmployees) return;
     setEmployees((prev) =>
-      prev.map((e) => (e.id === empId ? { ...e, paymentMethod: (e.paymentMethod || "تحويل بنكي") === "نقدًا" ? "تحويل بنكي" : "نقدًا" } : e))
+      prev.map((e) => {
+        if (e.id !== empId) return e;
+        const current = e.paymentMethod || "تحويل بنكي";
+        const nextIdx = (PAYMENT_METHODS.indexOf(current) + 1) % PAYMENT_METHODS.length;
+        return { ...e, paymentMethod: PAYMENT_METHODS[nextIdx] };
+      })
     );
   };
 
@@ -8500,11 +8654,17 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
     <div>
       <Header title={t("الرواتب واشتراكات التأمينات (GOSI)", "Payroll & GOSI Contributions")} subtitle={t("النسب افتراضية وقابلة للتعديل من تبويب الإعدادات — تحقق من النسبة الرسمية المعتمدة وقت الاحتساب", "Rates are defaults and editable from the Settings tab — verify the official rate at calculation time")} />
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "flex-end", marginBottom: 16 }} className="no-print">
         <Field label={t("شهر احتساب الغياب والتأخير", "Attendance Calculation Month")}>
           <input type="month" style={inputStyle} value={month} onChange={(e) => setMonth(e.target.value)} />
         </Field>
+        <Btn tone="secondary" onClick={() => setShowPayrollSheet(true)}>{t("📑 مسيرة الرواتب الشهرية", "📑 Monthly Payroll Sheet")}</Btn>
+        <Btn tone="secondary" onClick={() => exportPayrollSheetExcel(rows, month, branches, t)}>{t("⬇ تصدير إكسل", "⬇ Export Excel")}</Btn>
       </div>
+
+      {showPayrollSheet && (
+        <PayrollSheetModal rows={rows} totals={totals} month={month} branches={branches} onClose={() => setShowPayrollSheet(false)} />
+      )}
 
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 }}>
         <ReceiptCard label={t("إجمالي الرواتب الأساسية", "Total Basic Salaries")} value={`${fmt(totals.salary)} ﷼`} />
@@ -8697,10 +8857,10 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
                   <td
                     data-label={t("طريقة الاستلام", "Payment Method")}
                     onClick={() => togglePaymentMethod(r.id)}
-                    title={t("اضغط للتبديل بين نقدًا وتحويل بنكي", "Click to switch between Cash and Bank Transfer")}
+                    title={t("اضغط للتبديل بين تحويل بنكي / نقدًا / مدد", "Click to cycle between Bank Transfer / Cash / Mudad")}
                     style={{ padding: "9px 12px", fontFamily: "inherit", cursor: "pointer", textDecoration: "underline dotted" }}
                   >
-                    {t(r.paymentMethod || "تحويل بنكي", (r.paymentMethod || "تحويل بنكي") === "نقدًا" ? "Cash" : "Bank Transfer")}
+                    {trLabel(t, PAYMENT_METHOD_LABELS_EN, r.paymentMethod || "تحويل بنكي")}
                   </td>
                   <td data-label={t("حصة الموظف GOSI", "Employee GOSI Share")} className="no-print" style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.empShare)}</td>
                   <td
@@ -8927,7 +9087,7 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
                 <div><b>{t("الجنسية", "Nationality")}:</b> {trLabel(t, NATIONALITY_LABELS_EN, payslip.nationality)}</div>
                 <div><b>{t("الفرع", "Branch")}:</b> {branches.find((b) => b.id === payslip.branchId)?.name || "—"}</div>
                 <div><b>{t("تاريخ التعيين", "Hire Date")}:</b> {payslip.joinDate || "—"}</div>
-                <div><b>{t("طريقة استلام الراتب", "Payment Method")}:</b> {t(payslip.paymentMethod || "تحويل بنكي", (payslip.paymentMethod || "تحويل بنكي") === "نقدًا" ? "Cash" : "Bank Transfer")}</div>
+                <div><b>{t("طريقة استلام الراتب", "Payment Method")}:</b> {trLabel(t, PAYMENT_METHOD_LABELS_EN, payslip.paymentMethod || "تحويل بنكي")}</div>
               </div>
 
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5, marginBottom: 14 }}>
@@ -9291,8 +9451,9 @@ function EOSTab({ employees }) {
           </Field>
           <Field label={t("طريقة استلام المستحقات", "Payment Method")}>
             <select style={inputStyle} value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value)}>
-              <option value="نقدًا">{t("نقدًا", "Cash")}</option>
-              <option value="تحويل بنكي">{t("تحويل بنكي", "Bank Transfer")}</option>
+              {PAYMENT_METHODS.map((pm) => (
+                <option key={pm} value={pm}>{trLabel(t, PAYMENT_METHOD_LABELS_EN, pm)}</option>
+              ))}
             </select>
           </Field>
         </div>
@@ -9337,12 +9498,12 @@ function EOSTab({ employees }) {
               <div><b>{t("سبب انتهاء الخدمة", "Reason")}:</b> {trLabel(t, EOS_REASON_LABELS_EN, reason)}</div>
               <div><b>{t("الراتب الأساسي", "Basic Salary")}:</b> {fmt(salary)} ﷼</div>
               <div><b>{t("المكافأة المستحقة", "Bonus Due")}:</b> {fmt(result.adjusted)} ﷼</div>
-              <div><b>{t("طريقة استلام المستحقات", "Payment Method")}:</b> {t(paymentMethod, paymentMethod === "نقدًا" ? "Cash" : "Bank Transfer")}</div>
+              <div><b>{t("طريقة استلام المستحقات", "Payment Method")}:</b> {trLabel(t, PAYMENT_METHOD_LABELS_EN, paymentMethod)}</div>
             </div>
             <div style={{ marginTop: 20, fontSize: 12.5 }}>
               {t(
-                `أقرّ أنا الموظف الموضح اسمه أعلاه باستلامي كامل مستحقاتي المالية الموضحة في هذا المستند ${paymentMethod === "نقدًا" ? "نقدًا" : "عن طريق تحويل بنكي"}، ولا يحق لي أي مطالبة مستقبلية تجاه المنشأة بخصوص هذه المستحقات.`,
-                `I, the employee named above, acknowledge receiving my full financial dues stated in this document ${paymentMethod === "نقدًا" ? "in cash" : "via bank transfer"}, and I have no future claim against the establishment regarding these dues.`
+                `أقرّ أنا الموظف الموضح اسمه أعلاه باستلامي كامل مستحقاتي المالية الموضحة في هذا المستند ${paymentMethod === "نقدًا" ? "نقدًا" : paymentMethod === "مدد" ? "عن طريق منصة مدد" : "عن طريق تحويل بنكي"}، ولا يحق لي أي مطالبة مستقبلية تجاه المنشأة بخصوص هذه المستحقات.`,
+                `I, the employee named above, acknowledge receiving my full financial dues stated in this document ${paymentMethod === "نقدًا" ? "in cash" : paymentMethod === "مدد" ? "via the Mudad platform" : "via bank transfer"}, and I have no future claim against the establishment regarding these dues.`
               )}
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", marginTop: 40 }}>
