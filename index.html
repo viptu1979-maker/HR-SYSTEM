@@ -2503,7 +2503,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       logActivity && logActivity("تقديم طلب سلفة", "advanceRequests", `${myEmployee?.name || ""}: ${fmt(req.amount)} ﷼`);
     };
 
-    const todayISO = new Date().toISOString().slice(0, 10);
+    /* لازم تكون دالة (تُستدعى وقت الحاجة الفعلية) مش قيمة ثابتة محسوبة مرة واحدة وقت الـ render —
+       لو الموظف سايب صفحة تسجيل الحضور مفتوحة من يوم سابق (تابلت مشترك عند الباب مثلًا) من غير ما
+       تحصل أي إعادة render للصفحة من نص الليل، أي كود جوه closure بصمّ على القيمة القديمة لـ"اليوم"
+       لحد ما يحصل render جديد، حتى لو ضغط الموظف فعليًا بعد منتصف الليل بساعات. ده بالظبط كان بيسبب
+       حفظ تسجيل حضور بتاريخ "أمس" بدل اليوم الفعلي، رغم إن وقت الحضور (نفسه محسوب بدالة nowTimeStr
+       فعلًا وقت الاستدعاء) كان صحيحًا — بلاغ المستخدمة: موظفة سجّلت حضورها الساعة 7:47 صباحًا لكن
+       انحفظ السجل بتاريخ أمس */
+    const todayISO = () => new Date().toISOString().slice(0, 10);
     const nowTimeStr = () => {
       const d = new Date();
       return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -2535,7 +2542,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return !!(rec.checkInTime && !rec.checkOutTime);
     };
     const findOpenAttendanceRecord = (empId) => {
-      const todayRec = attendance.find((a) => a.employeeId === empId && a.date === todayISO);
+      const todayRec = attendance.find((a) => a.employeeId === empId && a.date === todayISO());
       if (todayRec) return todayRec;
       const y = new Date();
       y.setDate(y.getDate() - 1);
@@ -2694,7 +2701,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
               {
                 id: uid(),
                 employeeId: myEmployee.id,
-                date: todayISO,
+                date: todayISO(),
                 status: "حاضر",
                 lateMinutes: 0,
                 overtimeHours: 0,
@@ -2758,7 +2765,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         const rec = {
           id: already ? already.id : uid(),
           employeeId: myEmployee.id,
-          date: todayISO,
+          date: todayISO(),
           status: lateMinutes > 0 ? "متأخر" : "حاضر",
           lateMinutes,
           overtimeHours: 0,
@@ -2824,7 +2831,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
              بنحسبه كدوام حر دايمًا (مفيش وقت دخول/خروج ثابت لأي فترة من فترات موظف متعدد الدوامات) */
           const segMinutes = (s) => (s.checkInTime && s.checkOutTime ? minutesOfCheckoutAdjusted(s.checkOutTime, s.checkInTime) - minutesOf(s.checkInTime) : 0);
           const totalWorkedMinutes = updatedSegs.reduce((sum, s) => sum + segMinutes(s), 0);
-          const workDayName = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO) + "T00:00:00").getDay()];
+          const workDayName = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO()) + "T00:00:00").getDay()];
           const isOffDayWork = getOffDays(myEmployee).includes(workDayName);
           let shortfallMinutes = 0;
           let overtimeHours = 0;
@@ -2867,7 +2874,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         const checkoutMinutesAdj = minutesOfCheckoutAdjusted(timeStr, rec.checkInTime);
         /* لو داوم في يوم إجازته الأسبوعية (يوم مو مطلوب منه يشتغل فيه أصلاً)، كل الوقت اللي شغله يُحتسب
            وقت إضافي بالكامل — بدون تأخير ولا خروج مبكر، لأنه مالوش وقت دوام محدد أصلاً هذا اليوم */
-        const workDayName = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO) + "T00:00:00").getDay()];
+        const workDayName = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO()) + "T00:00:00").getDay()];
         const isOffDayWork = getOffDays(myEmployee).includes(workDayName);
         if (isOffDayWork) {
           const workedMinutes = checkoutMinutesAdj - minutesOf(rec.checkInTime || timeStr);
@@ -2928,7 +2935,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         );
         logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
       } else {
-        const workDayName2 = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO) + "T00:00:00").getDay()];
+        const workDayName2 = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO()) + "T00:00:00").getDay()];
         const isOffDayWork2 = getOffDays(myEmployee).includes(workDayName2);
         const checkoutMinutesAdj2 = minutesOfCheckoutAdjusted(timeStr, rec.checkInTime2 || rec.checkInTime);
         let overtimeHours2 = 0;
@@ -7518,9 +7525,16 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   const [logSearch, setLogSearch] = useState("");
   /* السجل يفتح افتراضيًا على سجلات "اليوم" بس (مش كل السجلات من كل الموظفين وكل الأيام مخلوطة مع
      بعض زي قبل) — مع خانة تاريخ سهلة تقدر الأدمن تغيّرها لو بغت تشوف يوم تاني، وزر لعرض كل الأيام
-     لو احتاجت ترجع للسلوك القديم (تصفّح/بحث عبر كل التاريخ) */
+     لو احتاجت ترجع للسلوك القديم (تصفّح/بحث عبر كل التاريخ).
+     مهم: الوضع الافتراضي لازم يتابع "اليوم الفعلي" ديناميكيًا، مش يتجمّد على تاريخ ثابت اتحسب لحظة
+     أول فتح للشاشة — لو الأدمن سايبة هذا التبويب مفتوح من يوم سابق (من غير ما تسكّر المتصفح)، وقت
+     منتصف الليل يعدّي، لازم القائمة ترجع لوحدها تعرض سجلات اليوم الجديد بمجرد أي تحديث للشاشة، بدل ما
+     تفضل عالقة على تاريخ أمس القديم لحد ما تعمل تحديث كامل للمتصفح. السينتينل "TODAY" يحل هذا: يفضل
+     يتابع تاريخ اليوم الحقيقي تلقائيًا في كل مرة تُعاد فيها قراءة الشاشة، ومايثبتش على قيمة قديمة إلا
+     لو الأدمن بنفسها اختارت تاريخ معيّن من الخانة */
   const todayISO = new Date().toISOString().slice(0, 10);
-  const [logDate, setLogDate] = useState(todayISO);
+  const [logDate, setLogDate] = useState("TODAY");
+  const effectiveLogDate = logDate === "TODAY" ? todayISO : logDate;
   const [notifyResult, setNotifyResult] = useState("");
   /* تسجيل حضور جماعي: تحديد كل الموظفين (أو نطاق كيان/فرع معيّن حسب فلتر النموذج أعلاه) "حاضر"
      ليوم معيّن دفعة واحدة — بدل تسجيلهم يدويًا واحدًا واحدًا. نتجاوز أي موظف عنده سجل حضور بالفعل
@@ -7719,10 +7733,11 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
   const removeAtt = (id) => setAttendance((prev) => prev.filter((a) => a.id !== id));
 
   /* بحث في سجل الحضور اليومي: بالاسم، رقم الهوية/الإقامة، أو التاريخ — إضافةً لفلتر التاريخ
-     (logDate) اللي يحدّد افتراضيًا يوم "اليوم" بس. لو logDate فاضي (ضغطت "عرض كل الأيام")، يرجع
-     يشتغل البحث عبر كل السجلات زي قبل */
+     (effectiveLogDate) اللي يحدّد افتراضيًا يوم "اليوم" بس (ويتابعه ديناميكيًا طول ما logDate
+     لسه على وضع "TODAY"). لو logDate فاضي (ضغطت "عرض كل الأيام")، يرجع يشتغل البحث عبر كل السجلات
+     زي قبل */
   const filteredAttendance = attendance.filter((a) => {
-    if (logDate && a.date !== logDate) return false;
+    if (effectiveLogDate && a.date !== effectiveLogDate) return false;
     if (!logSearch.trim()) return true;
     const q = logSearch.trim().toLowerCase();
     const emp = employees.find((e) => e.id === a.employeeId);
@@ -7857,9 +7872,9 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 12, alignItems: "center" }} className="no-print">
         <Field label={t("عرض سجلات يوم", "Showing records for")}>
-          <DateField style={inputStyle} value={logDate} onChange={setLogDate} />
+          <DateField style={inputStyle} value={effectiveLogDate} onChange={setLogDate} />
         </Field>
-        <Btn small tone="secondary" onClick={() => setLogDate(todayISO)}>{t("اليوم", "Today")}</Btn>
+        <Btn small tone="secondary" onClick={() => setLogDate("TODAY")}>{t("اليوم", "Today")}</Btn>
         <Btn small tone="secondary" onClick={() => setLogDate("")}>{t("عرض كل الأيام", "Show all days")}</Btn>
         <input
           style={{ ...inputStyle, maxWidth: 260 }}
@@ -7877,8 +7892,8 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
         {attendance.length > 0 && filteredAttendance.length === 0 && (
           <Empty
             text={
-              logDate
-                ? t(`لا توجد سجلات حضور ليوم ${logDate} — جرّبي "عرض كل الأيام" أو غيّري التاريخ`, `No attendance records for ${logDate} — try "Show all days" or pick another date`)
+              effectiveLogDate
+                ? t(`لا توجد سجلات حضور ليوم ${effectiveLogDate} — جرّبي "عرض كل الأيام" أو غيّري التاريخ`, `No attendance records for ${effectiveLogDate} — try "Show all days" or pick another date`)
                 : t("لا توجد نتائج مطابقة للبحث", "No matching results")
             }
           />
