@@ -985,7 +985,11 @@ const WARNING_SEVERITY_LEVELS_EN = {
   "إنذار كتابي ثاني": "Second Written Warning",
   "إنذار نهائي": "Final Warning",
 };
-const EMPTY_WARNING = { employeeId: "", branchId: "", category: WARNING_CATEGORIES[0], severity: WARNING_SEVERITY_LEVELS[1], date: new Date().toISOString().slice(0, 10), description: "", descriptionEn: "", deductionAmount: "", photos: [] };
+/* دالة مش قيمة ثابتة (const) — لو كانت const، new Date() كانت هتتحسب مرة واحدة بس وقت تحميل الصفحة
+   وتفضل محفوظة طول عمر الصفحة، فلو الجهاز فضل فاتح من يوم سابق (نفس خلل "التاريخ المتجمّد" اللي
+   اتصلح قبل كذا في شاشات الحضور)، أي إنذار جديد كان هيتسجل بتاريخ اليوم اللي فُتحت فيه الصفحة أول
+   مرة، مش تاريخ اليوم الفعلي وقت تسجيل الإنذار */
+const makeEmptyWarning = () => ({ employeeId: "", branchId: "", category: WARNING_CATEGORIES[0], severity: WARNING_SEVERITY_LEVELS[1], date: fmtISODate(new Date()), description: "", descriptionEn: "", deductionAmount: "", photos: [] });
 const TASK_STATUS_LABELS_EN = { "قيد التنفيذ": "In Progress", "مكتملة": "Completed", "متأخرة": "Overdue" };
 /* نفس أسباب انتهاء الخدمة الموجودة في حاسبة مكافأة نهاية الخدمة الرسمية على منصة قوى (بالنص الحرفي) */
 const EOS_REASON_LABELS_EN = {
@@ -2426,44 +2430,64 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     logActivity && logActivity("حذف إنذار", "warnings", `${employees.find((e) => e.id === w?.employeeId)?.name || ""}`);
   };
 
+  /* قفل مزامنة (ref مش state) يمنع تنفيذ نفس إجراء الموافقة/الرفض أكتر من مرة لنفس الطلب في نفس
+     اللحظة — بدون هذا، دبل-كليك سريع (تاتش-باد بطيء، أو ضغطتين لأن الواجهة حسّت إنها ما استجابتش)
+     كان ينفّذ نفس الدالة مرتين على نفس بيانات الطلب القديمة (قبل ما الـ state يتحدّث فعليًا)، فيضيف
+     سجل إجازة مكرر أو قيد سلفة مكرر في كشف الرواتب لنفس الطلب الموافَق عليه مرة واحدة فقط */
+  const approvalBusyRef = useRef(new Set());
+  const withApprovalGuard = (reqId, fn) => {
+    if (approvalBusyRef.current.has(reqId)) return;
+    approvalBusyRef.current.add(reqId);
+    try {
+      fn();
+    } finally {
+      setTimeout(() => approvalBusyRef.current.delete(reqId), 800);
+    }
+  };
+
   /* دورة اعتماد طلبات الإجازة: موافقة مبدئية من "المسؤول العام" (دور manager)، ثم موافقة نهائية من الأدمن —
      والأدمن نفسه يقدر يعتمد الموافقة المبدئية مباشرة أيضًا (بالإضافة لصلاحيته في الاعتماد النهائي)،
      بدون الحاجة لانتظار المسؤول العام */
-  const preliminaryApproveLeaveRequest = (reqId) => {
-    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة مبدئية", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
-    logActivity && logActivity("موافقة مبدئية على طلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
-  };
-  const preliminaryRejectLeaveRequest = (reqId) => {
-    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوضة مبدئيًا", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
-    logActivity && logActivity("رفض مبدئي لطلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
-  };
-  const finalApproveLeaveRequest = (reqId) => {
-    const req = leaveRequests.find((r) => r.id === reqId);
-    if (!req) return;
-    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة نهائية", finalApprovedBy: currentUser.name, finalApprovedAt: new Date().toISOString() } : r)));
-    setLeaves((prev) => [...prev, { id: uid(), employeeId: req.employeeId, type: req.type, from: req.from, to: req.to, note: req.note || "", leaveRequestId: req.id }]);
-    logActivity && logActivity("موافقة نهائية على طلب إجازة", "leaveRequests", employees.find((e) => e.id === req.employeeId)?.name || "");
-  };
-  const finalRejectLeaveRequest = (reqId) => {
-    setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوضة نهائيًا", finalApprovedBy: currentUser.name, finalApprovedAt: new Date().toISOString() } : r)));
-    logActivity && logActivity("رفض نهائي لطلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
-  };
+  const preliminaryApproveLeaveRequest = (reqId) =>
+    withApprovalGuard(reqId, () => {
+      setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة مبدئية", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
+      logActivity && logActivity("موافقة مبدئية على طلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
+    });
+  const preliminaryRejectLeaveRequest = (reqId) =>
+    withApprovalGuard(reqId, () => {
+      setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوضة مبدئيًا", entityApprovedBy: currentUser.name, entityApprovedAt: new Date().toISOString() } : r)));
+      logActivity && logActivity("رفض مبدئي لطلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
+    });
+  const finalApproveLeaveRequest = (reqId) =>
+    withApprovalGuard(reqId, () => {
+      const req = leaveRequests.find((r) => r.id === reqId);
+      if (!req || req.status === "موافقة نهائية") return;
+      setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة نهائية", finalApprovedBy: currentUser.name, finalApprovedAt: new Date().toISOString() } : r)));
+      setLeaves((prev) => [...prev, { id: uid(), employeeId: req.employeeId, type: req.type, from: req.from, to: req.to, note: req.note || "", leaveRequestId: req.id }]);
+      logActivity && logActivity("موافقة نهائية على طلب إجازة", "leaveRequests", employees.find((e) => e.id === req.employeeId)?.name || "");
+    });
+  const finalRejectLeaveRequest = (reqId) =>
+    withApprovalGuard(reqId, () => {
+      setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوضة نهائيًا", finalApprovedBy: currentUser.name, finalApprovedAt: new Date().toISOString() } : r)));
+      logActivity && logActivity("رفض نهائي لطلب إجازة", "leaveRequests", employees.find((e) => e.id === leaveRequests.find((r) => r.id === reqId)?.employeeId)?.name || "");
+    });
 
   /* دورة اعتماد طلبات السلف: خطوة واحدة — موافقة أو رفض من الأدمن/المسؤول العام/مدير الكيان.
      عند الموافقة، بيتسجّل تلقائيًا كقيد "سلفة" في كشف رواتب الشهر الحالي فيتخصم من صافي الموظف */
-  const approveAdvanceRequest = (reqId) => {
-    const req = advanceRequests.find((r) => r.id === reqId);
-    if (!req) return;
-    setAdvanceRequests((prev) =>
-      prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة", decidedBy: currentUser.name, decidedAt: new Date().toISOString() } : r))
-    );
-    const month = new Date().toISOString().slice(0, 7);
-    setPayrollItems((prev) => [
-      ...prev,
-      { id: uid(), employeeId: req.employeeId, type: "سلفة", amount: req.amount, month, note: req.reason || "", advanceRequestId: req.id },
-    ]);
-    logActivity && logActivity("موافقة على طلب سلفة", "advanceRequests", `${employees.find((e) => e.id === req.employeeId)?.name || ""}: ${fmt(req.amount)} ﷼`);
-  };
+  const approveAdvanceRequest = (reqId) =>
+    withApprovalGuard(reqId, () => {
+      const req = advanceRequests.find((r) => r.id === reqId);
+      if (!req || req.status === "موافقة") return;
+      setAdvanceRequests((prev) =>
+        prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة", decidedBy: currentUser.name, decidedAt: new Date().toISOString() } : r))
+      );
+      const month = new Date().toISOString().slice(0, 7);
+      setPayrollItems((prev) => [
+        ...prev,
+        { id: uid(), employeeId: req.employeeId, type: "سلفة", amount: req.amount, month, note: req.reason || "", advanceRequestId: req.id },
+      ]);
+      logActivity && logActivity("موافقة على طلب سلفة", "advanceRequests", `${employees.find((e) => e.id === req.employeeId)?.name || ""}: ${fmt(req.amount)} ﷼`);
+    });
   const rejectAdvanceRequest = (reqId) => {
     setAdvanceRequests((prev) =>
       prev.map((r) => (r.id === reqId ? { ...r, status: "مرفوض", decidedBy: currentUser.name, decidedAt: new Date().toISOString() } : r))
@@ -2509,8 +2533,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
        لحد ما يحصل render جديد، حتى لو ضغط الموظف فعليًا بعد منتصف الليل بساعات. ده بالظبط كان بيسبب
        حفظ تسجيل حضور بتاريخ "أمس" بدل اليوم الفعلي، رغم إن وقت الحضور (نفسه محسوب بدالة nowTimeStr
        فعلًا وقت الاستدعاء) كان صحيحًا — بلاغ المستخدمة: موظفة سجّلت حضورها الساعة 7:47 صباحًا لكن
-       انحفظ السجل بتاريخ أمس */
-    const todayISO = () => new Date().toISOString().slice(0, 10);
+       انحفظ السجل بتاريخ أمس.
+       مهم إضافي: لازم تستخدم التاريخ المحلي (مش toISOString اللي يرجع تاريخ UTC) — السعودية
+       +3 ساعات عن UTC، فلو استخدمنا toISOString أي حضور بين 12:00 منتصف الليل و 3:00 فجرًا بالتوقيت
+       المحلي كان هيتسجل بتاريخ "أمس" برضو (لأن تاريخ UTC وقتها لسه ما اتغيّرش)، بالظبط نفس خلل
+       الإغلاق القديم بس بسبب مختلف. fmtISODate بيستخدم getFullYear/getMonth/getDate المحلية فعلًا */
+    const todayISO = () => fmtISODate(new Date());
     const nowTimeStr = () => {
       const d = new Date();
       return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
@@ -2546,7 +2574,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       if (todayRec) return todayRec;
       const y = new Date();
       y.setDate(y.getDate() - 1);
-      const yesterdayISO = y.toISOString().slice(0, 10);
+      const yesterdayISO = fmtISODate(y);
       /* لازم checkInTime يكون فعلاً موجود عشان يُعتبر دوام ليلي مفتوح فعليًا — وإلا سجل أمس (زي سجل
          "حاضر" مُضاف يدويًا أو جماعيًا بدون وقت حضور) هيتفهم غلط إنه دوام ليلي متواصل لحد النهاردة */
       const openYesterday = attendance.find((a) => a.employeeId === empId && a.date === yesterdayISO && hasOpenPeriod(a));
@@ -4673,6 +4701,19 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
 
   const remove = (id) => {
     const target = employees.find((e) => e.id === id);
+    /* حذف موظف إجراء نهائي وخطير (يمسح سجله بالكامل من قاعدة البيانات المشتركة بعد أول حفظ) — لازم
+       تأكيد صريح زي بقية الإجراءات الخطيرة في البرنامج (إعادة ضبط بصمة الوجه، حذف إنذار...)، خصوصًا
+       إن زر الحذف جنب زرار "تعديل" مباشرة فاحتمال الضغط عليه بالغلط وارد. ملاحظة: في الغالب الأفضل
+       تغيير حالة الموظف لـ"منتهي الخدمة" بدل الحذف النهائي لو بس سايب الشغل */
+    if (
+      !window.confirm(
+        t(
+          `متأكدة من حذف الموظف "${target?.name || ""}" نهائيًا؟ هذا الإجراء لا يمكن التراجع عنه بعد الحفظ.`,
+          `Are you sure you want to permanently delete "${target?.name || ""}"? This cannot be undone after saving.`
+        )
+      )
+    )
+      return;
     setEmployees((prev) => prev.filter((e) => e.id !== id));
     logActivity && logActivity("حذف موظف", "employees", target?.name || id);
     if (editingId === id) resetForm();
@@ -6886,6 +6927,25 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
     setEntityName("");
   };
   const removeEntity = (id) => {
+    const target = entities.find((e) => e.id === id);
+    const affectedBranches = branches.filter((b) => b.entityId === id);
+    const affectedEmployeesCount = employees.filter((e) => affectedBranches.some((b) => b.id === e.branchId)).length;
+    /* حذف كيان يمسح كل فروعه التابعة له تلقائيًا (cascading) — والموظفين المرتبطين بتلك الفروع يفقدون
+       ربطهم بفرعهم (يتيتَّموا) رغم إنهم أنفسهم ما بينحذفوش. إجراء خطير جدًا وكان بدون أي تأكيد قبل
+       هذا الإصلاح — لازم تحذير واضح يوضح حجم الأثر قبل التنفيذ */
+    if (
+      !window.confirm(
+        t(
+          `متأكدة من حذف الكيان "${target?.name || ""}"؟ هذا سيحذف أيضًا كل فروعه (${affectedBranches.length} فرع)` +
+            (affectedEmployeesCount > 0 ? ` وسيفقد ${affectedEmployeesCount} موظف ربطهم بالفرع (بدون حذفهم هم أنفسهم).` : ".") +
+            " لا يمكن التراجع عن هذا بعد الحفظ.",
+          `Are you sure you want to delete entity "${target?.name || ""}"? This will also delete all its branches (${affectedBranches.length})` +
+            (affectedEmployeesCount > 0 ? ` and ${affectedEmployeesCount} employees will lose their branch link (they will not be deleted themselves).` : ".") +
+            " This cannot be undone after saving."
+        )
+      )
+    )
+      return;
     setEntities((prev) => prev.filter((e) => e.id !== id));
     setBranches((prev) => prev.filter((b) => b.entityId !== id));
   };
@@ -6924,7 +6984,24 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
     setBranches((prev) => [...prev, { id: uid(), radius: 150, lat: null, lng: null, ...branchForm }]);
     setBranchForm({ entityId: "", name: "", city: "" });
   };
-  const removeBranch = (id) => setBranches((prev) => prev.filter((b) => b.id !== id));
+  const removeBranch = (id) => {
+    const target = branches.find((b) => b.id === id);
+    const affectedEmployeesCount = employees.filter((e) => e.branchId === id).length;
+    if (
+      !window.confirm(
+        t(
+          `متأكدة من حذف الفرع "${target?.name || ""}"؟` +
+            (affectedEmployeesCount > 0 ? ` سيفقد ${affectedEmployeesCount} موظف ربطهم بهذا الفرع (بدون حذفهم هم أنفسهم).` : "") +
+            " لا يمكن التراجع عن هذا بعد الحفظ.",
+          `Are you sure you want to delete branch "${target?.name || ""}"?` +
+            (affectedEmployeesCount > 0 ? ` ${affectedEmployeesCount} employees will lose their branch link (they will not be deleted themselves).` : "") +
+            " This cannot be undone after saving."
+        )
+      )
+    )
+      return;
+    setBranches((prev) => prev.filter((b) => b.id !== id));
+  };
 
   const captureLocation = async (branchId) => {
     setLocError("");
@@ -7128,8 +7205,15 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
                     b.lat != null && <Stamp>{t("النطاق", "Radius")}: {b.radius || 150}{t("م", "m")}</Stamp>
                   )}
                   <Stamp>{employees.filter((e) => e.branchId === b.id).length} {t("موظف", "employees")}</Stamp>
-                  <Btn small tone="secondary" onClick={() => startEditBranch(b)}>{t("تعديل", "Edit")}</Btn>
-                  <Btn small tone="danger" onClick={() => removeBranch(b.id)}>{t("حذف", "Delete")}</Btn>
+                  {/* تعديل/حذف الفرع لازم يتقيّد بنفس صلاحية إدارة الكيانات (canManageEntities) — كان
+                      ظاهر لأي دور يفتح هذا التبويب بدون أي قيد صلاحية، بخلاف إضافة/حذف الكيان نفسه
+                      اللي كانت مقيدة بالفعل فوق في نفس الملف */}
+                  {canManageEntities && (
+                    <>
+                      <Btn small tone="secondary" onClick={() => startEditBranch(b)}>{t("تعديل", "Edit")}</Btn>
+                      <Btn small tone="danger" onClick={() => removeBranch(b.id)}>{t("حذف", "Delete")}</Btn>
+                    </>
+                  )}
                 </div>
               </React.Fragment>
             )}
@@ -7531,8 +7615,11 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
      منتصف الليل يعدّي، لازم القائمة ترجع لوحدها تعرض سجلات اليوم الجديد بمجرد أي تحديث للشاشة، بدل ما
      تفضل عالقة على تاريخ أمس القديم لحد ما تعمل تحديث كامل للمتصفح. السينتينل "TODAY" يحل هذا: يفضل
      يتابع تاريخ اليوم الحقيقي تلقائيًا في كل مرة تُعاد فيها قراءة الشاشة، ومايثبتش على قيمة قديمة إلا
-     لو الأدمن بنفسها اختارت تاريخ معيّن من الخانة */
-  const todayISO = new Date().toISOString().slice(0, 10);
+     لو الأدمن بنفسها اختارت تاريخ معيّن من الخانة.
+     مهم: fmtISODate (مش toISOString) عشان يرجّع التاريخ المحلي صح — السعودية +3 عن UTC، فلو استخدمنا
+     toISOString العادي، أي حضور بين 12:00 و3:00 فجرًا بالتوقيت المحلي هيحسبه "أمس" ويختفي من فلتر
+     "اليوم" الافتراضي غلط */
+  const todayISO = fmtISODate(new Date());
   const [logDate, setLogDate] = useState("TODAY");
   const effectiveLogDate = logDate === "TODAY" ? todayISO : logDate;
   const [notifyResult, setNotifyResult] = useState("");
@@ -7625,7 +7712,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
       return h * 60 + m;
     };
     const now = new Date();
-    const todayISO = now.toISOString().slice(0, 10);
+    const todayISO = fmtISODate(now); // محلي مش UTC، نفس سبب الإصلاحات التانية لنفس الدالة في الملف
     const todayDayName = JS_DAY_INDEX_TO_AR[now.getDay()];
     const nowMinutes = now.getHours() * 60 + now.getMinutes();
     const GRACE_MINUTES = 30;
@@ -8645,7 +8732,15 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
 
       /* الوقت الإضافي: ساعات الإضافي المسجّلة هذا الشهر × سعر الساعة (وفق ساعات دوامه الفعلية) × 1٫5 (وفق نظام العمل السعودي) */
       const hourlyRate = dailyRate / dailyHours;
-      const overtimeHours = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0), 0);
+      /* لازم نجمع ساعات الإضافي بتاعة الفترة الصباحية (overtimeHours) والمسائية (overtimeHours2) معًا
+         لموظفي الدوامين — نفس المنطق المستخدم فوق بالظبط لخصم الخروج المبكر (earlyLeaveMinutes +
+         earlyLeaveMinutes2). قبل هذا الإصلاح كان إضافي الفترة المسائية يُسجَّل في النظام (يظهر في
+         تقرير أيام الغياب/التأخير) لكن يُستبعد تمامًا من حساب الراتب الفعلي — موظف دوامين يشتغل
+         إضافي مسائي كان ما يتقاضى عنه شيء إطلاقًا */
+      const overtimeHours = monthAttendance.reduce(
+        (s, a) => s + Number(a.overtimeHours || 0) + Number(a.overtimeHours2 || 0),
+        0
+      );
       const overtimePay = overtimeHours * hourlyRate * 1.5;
 
       /* السلف والخصومات والحوافز المسجّلة لهذا الموظف في الشهر المختار */
@@ -11742,7 +11837,7 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
 function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, messages, onAddWarning, onRemoveWarning }) {
   const { t, lang } = useLang();
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ ...EMPTY_WARNING });
+  const [form, setForm] = useState(() => makeEmptyWarning());
   const [applyDeduction, setApplyDeduction] = useState(false);
   const [branchFilter, setBranchFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -11781,7 +11876,7 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
   const submitWarning = () => {
     if (!form.employeeId || !form.date) return;
     onAddWarning({ ...form, deductionAmount: applyDeduction ? form.deductionAmount : "" });
-    setForm({ ...EMPTY_WARNING });
+    setForm(makeEmptyWarning());
     setApplyDeduction(false);
     setShowForm(false);
     setPhotoError("");
@@ -12877,7 +12972,7 @@ function EmployeeSelfView({
   const contractStatus = expiryStatus(employee.contractEnd, t);
   const myLeaves = leaves.filter((l) => l.employeeId === employee.id);
   const myAttendance = attendance.filter((a) => a.employeeId === employee.id).slice().reverse();
-  const todayISO = new Date().toISOString().slice(0, 10);
+  const todayISO = fmtISODate(new Date()); // محلي مش UTC (نفس سبب تاريخ الحفظ الفعلي أعلاه في هذا الملف)
   /* لو الموظف فضل شغال لحد بعد منتصف الليل، سجل أمس المفتوح (له حضور بدون انصراف) هو المعتمد لعرض
      الحالة الحالية، مش سجل اليوم (اللي لسه ما اتعملش) */
   const hasOpenPeriodSelf = (rec) => {
@@ -12893,7 +12988,7 @@ function EmployeeSelfView({
     (() => {
       const y = new Date();
       y.setDate(y.getDate() - 1);
-      const yesterdayISO = y.toISOString().slice(0, 10);
+      const yesterdayISO = fmtISODate(y);
       /* لازم checkInTime يكون موجود فعلاً عشان يُعتبر دوام ليلي مفتوح — وإلا سجل أمس (زي سجل "حاضر"
          مُضاف يدويًا أو جماعيًا بدون وقت حضور) هيتفهم غلط إنه دوام متواصل لحد النهاردة */
       return attendance.find((a) => a.employeeId === employee.id && a.date === yesterdayISO && hasOpenPeriodSelf(a));
@@ -13717,6 +13812,15 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
       setErr(t("لا يمكن حذف آخر حساب أدمن في النظام", "You cannot delete the last admin account in the system"));
       return;
     }
+    if (
+      !window.confirm(
+        t(
+          `متأكدة من حذف حساب "${target?.username || ""}"؟ لن يستطيع الدخول للنظام بعدها.`,
+          `Are you sure you want to delete the account "${target?.username || ""}"? They will no longer be able to log in.`
+        )
+      )
+    )
+      return;
     setUsers((prev) => prev.filter((u) => u.id !== id));
     if (editingId === id) resetForm();
   };
