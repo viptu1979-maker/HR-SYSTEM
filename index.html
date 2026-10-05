@@ -269,6 +269,35 @@ const LOG_DOC = db.collection("hrSystem").doc("activityLog");
    أو تعديل بالغلط سواء من داخل النظام أو من Firestore Console مباشرة */
 const BACKUPS_COLLECTION = db.collection("hrSystemBackups");
 const BACKUP_RETENTION_DAYS = 14;
+/* فهرس صغير ومنفصل: مستند لكل حساب دخول مُرحَّل لـ Firebase Authentication (authUid) يخزّن دوره الوظيفي
+   بس (admin/manager/employee...) — بدون أي اسم أو كلمة مرور أو بيانات حساسة. الهدف منه: تمكين قواعد
+   أمان Firestore من التأكد "هل الشخص اللي بيكتب أدمن فعلاً؟" بسرعة وبأمان، من غير ما تحتاج تفتح ملف
+   حسابات الدخول الكامل (اللي فيه كل كلمات المرور) عشان تعرف بس دور شخص واحد. ده الأساس اللازم لتشديد
+   صلاحيات حذف النسخ الاحتياطية ومنع أي حساب غير أدمن من ترقية نفسه لأدمن مباشرة عبر الكتابة في
+   Firestore. ملاحظة مهمة: هذا وحده ما يمنعش بعد شخص "موظف" من قراءة ملف حسابات الدخول الكامل (بما فيه
+   كلمات مرور الكل) — ده يحتاج خطوة تانية أكبر (تقسيم حسابات الدخول لملف منفصل لكل حساب) لسه ما
+   اتعملتش، وده موضّح للمستخدمة بشكل صريح */
+const USER_ROLES_COLLECTION = db.collection("userRoles");
+/* تحديث/إنشاء مستند الدور لحساب معيّن — تُستدعى فورًا كل ما يترحّل حساب لأول مرة لـ Firebase
+   Authentication، أو يتغيّر دوره الوظيفي من شاشة "المستخدمون والصلاحيات". فشل صامت (best-effort): لو
+   فشلت الكتابة هنا لأي سبب (مثلاً قبل ما تُنشر قواعد الأمان الجديدة أصلًا)، ده ما يأثرش على حفظ
+   الحساب نفسه في النظام — بس معناه إن قواعد الأمان الجديدة لسه ما هتعرفش دور هذا الحساب لحد ما تنجح
+   هذه الكتابة لاحقًا (تلقائيًا في المرة الجاية، أو لما الأدمن تفتح شاشة المستخدمين تاني) */
+const syncUserRoleDoc = (authUid, role) => {
+  if (!authUid || !role) return;
+  USER_ROLES_COLLECTION.doc(authUid)
+    .set({ role }, { merge: true })
+    .catch(() => {});
+};
+/* مسح مستند الدور عند حذف حساب دخول نهائيًا — عشان لو حصل وفضل حساب Firebase Authentication شغّال
+   (حذف حساب من هذا النظام ما بيمسحش حساب Firebase Authentication المقابل له تلقائيًا، قيد معروف)،
+   الدور المرتفع (أدمن مثلاً) ما يفضلش معترَف بيه في قواعد الأمان بعد الحذف */
+const clearUserRoleDoc = (authUid) => {
+  if (!authUid) return;
+  USER_ROLES_COLLECTION.doc(authUid)
+    .delete()
+    .catch(() => {});
+};
 /* سماحية التأخير والخروج المبكر: أي فرق دقايق (عن وقت بداية/نهاية الدوام المقرَّر) يساوي هذا الرقم أو أقل
    ما يُحتسب تأخير ولا خروج مبكر إطلاقًا (سماحية كاملة، مش خصم جزء منها) — لو تجاوز الفرق السماحية، يُحتسب
    كامل الفرق الفعلي زي ما هو، مش الفرق ناقص السماحية */
@@ -13617,6 +13646,17 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
   const [recoveryMsg, setRecoveryMsg] = useState("");
   const [recoveryErr, setRecoveryErr] = useState("");
 
+  /* "تعبئة" فهرس الأدوار (userRoles) لكل الحسابات المُرحَّلة فعلًا لـ Firebase Authentication من قبل —
+     لأن حسابات اترحّلت قبل ما هذا الفهرس يُضاف أصلًا ما عندهاش مستند فيه بعد (الكود الجديد بيحدّثه بس
+     وقت ترحيل/تعديل جديد). تشتغل مرة واحدة لما شاشة "المستخدمون والصلاحيات" تُفتح (أصلًا محصورة
+     بالأدمن)، وآمنة تمامًا تتكرر كل مرة (merge:true بس، ما بتغيّرش حاجة لو الدور نفسه موجود بالفعل) */
+  useEffect(() => {
+    users.forEach((u) => {
+      if (u.authUid && u.role) syncUserRoleDoc(u.authUid, u.role);
+    });
+    // eslint-disable-next-line
+  }, []);
+
   /* حسابات الموظفين المنتهية خدمتهم لا نعرضها للترحيل لنظام Firebase Authentication — مفيش داعي
      لإنشاء حماية حقيقية لحساب دخول لموظف خلاص ما عاد يشتغل، وده كان بيسبب ظهورهم كل مرة في قايمة
      "لسه ما اترحّلوش" ومحاولة ترحيلهم بالغلط */
@@ -13679,6 +13719,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
         const cred = await secondaryAuth.createUserWithEmailAndPassword(email, padPasswordForAuth(u.password));
         await secondaryAuth.signOut().catch(() => {});
         setUsers((prev) => prev.map((x) => (x.username === u.username ? { ...x, authUid: cred.user.uid } : x)));
+        syncUserRoleDoc(cred.user.uid, u.role);
         migrated++;
       } catch (e) {
         /* لو الحساب موجود بالفعل في Firebase (auth/email-already-in-use)، الاحتمال الأكبر إنه اترحّل
@@ -13692,6 +13733,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
             const signInCred = await secondaryAuth.signInWithEmailAndPassword(email, padPasswordForAuth(u.password));
             await secondaryAuth.signOut().catch(() => {});
             setUsers((prev) => prev.map((x) => (x.username === u.username ? { ...x, authUid: signInCred.user.uid } : x)));
+            syncUserRoleDoc(signInCred.user.uid, u.role);
             migrated++;
             continue;
           } catch (signInErr) {
@@ -13791,6 +13833,10 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
     }
     if (editingId) {
       setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...payload, id: editingId } : u)));
+      /* لو الحساب ده مُرحَّل فعلًا لـ Firebase Authentication (عنده authUid)، لازم نحدّث فهرس الأدوار
+         فورًا كل ما الدور يتغيّر من هنا — وإلا قواعد الأمان الجديدة هتفضل شايفاه بالدور القديم */
+      const editedTarget = users.find((u) => u.id === editingId);
+      if (editedTarget?.authUid) syncUserRoleDoc(editedTarget.authUid, payload.role);
       logActivity && logActivity("تعديل مستخدم", "users", payload.username);
     } else {
       setUsers((prev) => [...prev, { ...payload, id: uid() }]);
@@ -13822,6 +13868,9 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
     )
       return;
     setUsers((prev) => prev.filter((u) => u.id !== id));
+    /* مسح فهرس دور هذا الحساب فورًا — عشان حتى لو فضل حساب Firebase Authentication المقابل شغّال
+       (قيد معروف: حذف الحساب هنا ما يحذفش حساب المصادقة نفسه)، دوره المرتفع ما يفضلش معترَف بيه */
+    if (target?.authUid) clearUserRoleDoc(target.authUid);
     if (editingId === id) resetForm();
   };
 
