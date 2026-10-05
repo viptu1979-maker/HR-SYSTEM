@@ -13718,6 +13718,28 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
     // eslint-disable-next-line
   }, []);
 
+  /* ترحيل كلمات المرور القديمة (المخزّنة من قبل هذا التحديث جوه سجل الحساب نفسه في hrSystem/users)
+     لمكانها الجديد المنفصل (userCredentials) — خطوة ضرورية جدًا وإلا الإصلاح الكامل ما يتحقّقش فعليًا
+     إلا للحسابات الجديدة أو اللي تتعدّل يدويًا بعد كذا، وتفضل كل الحسابات الحالية (كل موظفيكِ) محتفظة
+     بكلمة مرورها نص صريح في المكان القديم المقروء من أي حساب. تشتغل مرة واحدة لما الشاشة تُفتح (نفس
+     مبدأ فهرس الأدوار فوق)، وآمنة تتكرر: أي حساب اترحّلت كلمة مروره فعلًا ما عندهوش حقل password
+     في المرة الجاية فتتجاهله الدالة تلقائيًا */
+  useEffect(() => {
+    const usersWithLegacyPassword = users.filter((u) => u.password !== undefined);
+    if (!usersWithLegacyPassword.length) return;
+    usersWithLegacyPassword.forEach((u) => {
+      setUserCredential(u.id, u.password).catch(() => {});
+    });
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.password === undefined) return u;
+        const { password, ...rest } = u;
+        return rest;
+      })
+    );
+    // eslint-disable-next-line
+  }, []);
+
   /* حسابات الموظفين المنتهية خدمتهم لا نعرضها للترحيل لنظام Firebase Authentication — مفيش داعي
      لإنشاء حماية حقيقية لحساب دخول لموظف خلاص ما عاد يشتغل، وده كان بيسبب ظهورهم كل مرة في قايمة
      "لسه ما اترحّلوش" ومحاولة ترحيلهم بالغلط */
