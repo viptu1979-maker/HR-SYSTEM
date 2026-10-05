@@ -10094,13 +10094,27 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
       return;
     }
     /* لو الحساب مرحّل لـ Firebase Authentication، لازم نحدّث كلمة المرور هناك كمان عشان الدخول القادم
-       يشتغل صح. لو فشل التحديث لأي سبب (مثلًا الجلسة قديمة)، نكمل نحدّث Firestore على أي حال ونعتمد
-       على إعادة تسجيل الدخول لاحقًا لمزامنتها */
+       يشتغل صح — وده المصدر الحقيقي لتسجيل الدخول فعليًا، مش مجرد نسخة مساعدة.
+       نعيد التحقق من الهوية أولًا بكلمة المرور الحالية (المتحقق منها فوق أصلًا) قبل محاولة التحديث:
+       Firebase يرفض تغيير كلمة المرور لو "جلسة الدخول" مش حديثة بما يكفي (auth/requires-recent-login)،
+       وده ممكن يحصل بسهولة لو الشخص فاتح الشاشة من بدري. لازم نتوقف فورًا لو فشلت الخطوة دي ونوضّح
+       للمستخدم إنه يسجّل خروج/دخول ويحاول تاني — بدل ما نكمل ونحفظ كلمة المرور الجديدة في المكان
+       المساعد بس (userCredentials) وهي لسه قديمة فعليًا عند Firebase، وده بالظبط اللي كان بيسبب دخول
+       بكلمة المرور الجديدة يفشل رغم رسالة "تم بنجاح" */
     if (currentUser.authUid && auth.currentUser) {
       try {
+        const cred = firebase.auth.EmailAuthProvider.credential(auth.currentUser.email, padPasswordForAuth(oldPassword));
+        await auth.currentUser.reauthenticateWithCredential(cred);
         await auth.currentUser.updatePassword(padPasswordForAuth(newPassword));
       } catch (e) {
-        /* فشل صامت — التحديث في Firestore يكمل، وممكن يحتاج تسجيل خروج/دخول تاني لو استمرت المشكلة */
+        setSaving(false);
+        setError(
+          t(
+            "تعذّر تحديث كلمة الدخول الفعلية — سجّلي خروج ثم دخول بكلمة مرورك الحالية وحاولي تغييرها مرة أخرى",
+            "Couldn't update your actual login credential — please sign out, sign back in with your current password, and try changing it again"
+          )
+        );
+        return;
       }
     }
     try {
