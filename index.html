@@ -282,11 +282,16 @@ const USER_ROLES_COLLECTION = db.collection("userRoles");
    Authentication، أو يتغيّر دوره الوظيفي من شاشة "المستخدمون والصلاحيات". فشل صامت (best-effort): لو
    فشلت الكتابة هنا لأي سبب (مثلاً قبل ما تُنشر قواعد الأمان الجديدة أصلًا)، ده ما يأثرش على حفظ
    الحساب نفسه في النظام — بس معناه إن قواعد الأمان الجديدة لسه ما هتعرفش دور هذا الحساب لحد ما تنجح
-   هذه الكتابة لاحقًا (تلقائيًا في المرة الجاية، أو لما الأدمن تفتح شاشة المستخدمين تاني) */
-const syncUserRoleDoc = (authUid, role) => {
+   هذه الكتابة لاحقًا (تلقائيًا في المرة الجاية، أو لما الأدمن تفتح شاشة المستخدمين تاني).
+   accountId (اختياري): معرّف سجل الحساب الداخلي (نفس u.id) — يُخزَّن هنا كمان عشان قواعد الأمان تقدر
+   تتأكد "هل هذا المستند في userCredentials ملك هذا الحساب نفسه؟" بدون الحاجة لفحص مصفوفة المستخدمين
+   كاملة (CEL ما يدعمش البحث داخل مصفوفة بشرط على حقل فرعي) */
+const syncUserRoleDoc = (authUid, role, accountId) => {
   if (!authUid || !role) return;
+  const payload = { role };
+  if (accountId) payload.accountId = accountId;
   USER_ROLES_COLLECTION.doc(authUid)
-    .set({ role }, { merge: true })
+    .set(payload, { merge: true })
     .catch(() => {});
 };
 /* مسح مستند الدور عند حذف حساب دخول نهائيًا — عشان لو حصل وفضل حساب Firebase Authentication شغّال
@@ -295,6 +300,30 @@ const syncUserRoleDoc = (authUid, role) => {
 const clearUserRoleDoc = (authUid) => {
   if (!authUid) return;
   USER_ROLES_COLLECTION.doc(authUid)
+    .delete()
+    .catch(() => {});
+};
+/* ============ حسابات الدخول: فصل كلمة المرور عن باقي بيانات الحساب ============
+   مستند واحد لكل حساب (مفتاحه نفس id السجل في users)، يحتوي على كلمة المرور فقط — بدون اسم أو دور أو
+   أي بيانات تانية. الهدف: قواعد الأمان تقدر تمنع أي موظف من قراءة كلمة مرور غيره (كان أي حساب مسجّل
+   دخول يقدر يقرأ ملف hrSystem/users كامل بما فيه كل كلمات المرور كنص صريح — الثغرة الأهم في التدقيق
+   الشامل). مصفوفة users في hrSystem/users بقت تحتوي بيانات الحساب العامة بس (بدون password) وتفضل
+   مقروءة من الكل زي ما هي (محتاجينها لعرض الأسماء/الأدوار في أماكن كتير بالنظام) */
+const USER_CREDENTIALS_COLLECTION = db.collection("userCredentials");
+const setUserCredential = (accountId, password) => {
+  if (!accountId) return Promise.reject(new Error("missing accountId"));
+  return USER_CREDENTIALS_COLLECTION.doc(accountId).set({ password });
+};
+const getUserCredential = (accountId) => {
+  if (!accountId) return Promise.resolve(null);
+  return USER_CREDENTIALS_COLLECTION.doc(accountId)
+    .get()
+    .then((snap) => (snap.exists ? snap.data().password : null));
+};
+/* مسح مستند كلمة المرور عند حذف الحساب نهائيًا — تنظيف، نفس مبدأ clearUserRoleDoc */
+const deleteUserCredential = (accountId) => {
+  if (!accountId) return;
+  USER_CREDENTIALS_COLLECTION.doc(accountId)
     .delete()
     .catch(() => {});
 };
@@ -944,10 +973,15 @@ const NAV_GROUPS = [
   { key: "users", standalone: true },
 ];
 
-/* ============ المستخدمون والصلاحيات ============ */
+/* ============ المستخدمون والصلاحيات ============
+   ملاحظة: مصفوفة الحسابات هنا ما بقتش تحتوي كلمة المرور إطلاقًا — دي بقت مخزّنة في مستند منفصل لكل
+   حساب (userCredentials)، شوفي التعليق فوق USER_CREDENTIALS_COLLECTION */
 const USERS_SEED = [
-  { id: "u1", username: "admin", password: "admin123", role: "admin", name: "المدير العام", branchId: "", employeeId: "" },
+  { id: "u1", username: "admin", role: "admin", name: "المدير العام", branchId: "", employeeId: "" },
 ];
+/* كلمة مرور حساب الأدمن الافتراضي — تُستخدم مرة واحدة بس، أول تشغيل حقيقي للنظام (قبل ما يوجد أي
+   مستند بيانات في Firestore أصلًا)، لزرع مستند كلمة مرور هذا الحساب في userCredentials */
+const DEFAULT_ADMIN_PASSWORD = "admin123";
 
 /* كلمة المرور الافتراضية عند توليد حسابات جماعية للموظفين — يُجبر الموظف على تغييرها أول ما يدخل بيها */
 const DEFAULT_BULK_PASSWORD = "admin@123";
@@ -2048,8 +2082,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     });
     let usersPromise = Promise.resolve();
     if (Array.isArray(bUsers) && bUsers.length) {
-      setUsers(bUsers);
-      usersPromise = USERS_DOC.set({ users: bUsers });
+      /* حماية إضافية: نسخ احتياطية قديمة (من قبل فصل كلمات المرور لمكان منفصل) ممكن لسه فيها حقل
+         password مضمّن جوه كل سجل حساب. لو استرجعناها زي ما هي هنرجّع نكتب كلمات مرور قديمة نص صريح
+         جوه hrSystem/users (المكان اللي بقى مفروض يكون خاليًا منها تمامًا) — فنشيل الحقل صراحةً هنا
+         قبل الكتابة، بغض النظر عن قواعد الأمان. كلمات المرور الفعلية الحالية (في userCredentials)
+         تفضل زي ما هي ولا تتأثر أبدًا باسترجاع نسخة بيانات قديمة */
+      const bUsersClean = bUsers.map(({ password, ...rest }) => rest);
+      setUsers(bUsersClean);
+      usersPromise = USERS_DOC.set({ users: bUsersClean });
     }
     return Promise.all([dataPromise, usersPromise])
       .then(() => {
@@ -10022,23 +10062,37 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
       setError(t("الرجاء تعبئة جميع الحقول", "Please fill in all fields"));
       return;
     }
-    if (oldPassword !== currentUser.password) {
+    setSaving(true);
+    /* كلمة المرور الحالية بقت مخزّنة في مستند منفصل (userCredentials) مش جوه سجل الحساب نفسه —
+       نجيبها هنا لحظة التحقق بدل ما تكون جاهزة مسبقًا في currentUser */
+    let storedPassword;
+    try {
+      storedPassword = await getUserCredential(currentUser.id);
+    } catch (e) {
+      setSaving(false);
+      setError(t("تعذّر التحقق من كلمة المرور الحالية — تحقّق من الإنترنت وحاول مرة أخرى", "Couldn't verify your current password — check your connection and try again"));
+      return;
+    }
+    if (oldPassword !== storedPassword) {
+      setSaving(false);
       setError(t("كلمة المرور الحالية غير صحيحة", "Current password is incorrect"));
       return;
     }
     if (newPassword.length < 4) {
+      setSaving(false);
       setError(t("كلمة المرور يجب أن تكون 4 أحرف/أرقام على الأقل", "Password must be at least 4 characters"));
       return;
     }
     if (newPassword !== confirmPassword) {
+      setSaving(false);
       setError(t("كلمة المرور الجديدة وتأكيدها غير متطابقين", "New password and confirmation do not match"));
       return;
     }
     if (newPassword === oldPassword) {
+      setSaving(false);
       setError(t("كلمة المرور الجديدة يجب أن تختلف عن الحالية", "New password must be different from the current one"));
       return;
     }
-    setSaving(true);
     /* لو الحساب مرحّل لـ Firebase Authentication، لازم نحدّث كلمة المرور هناك كمان عشان الدخول القادم
        يشتغل صح. لو فشل التحديث لأي سبب (مثلًا الجلسة قديمة)، نكمل نحدّث Firestore على أي حال ونعتمد
        على إعادة تسجيل الدخول لاحقًا لمزامنتها */
@@ -10049,7 +10103,14 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
         /* فشل صامت — التحديث في Firestore يكمل، وممكن يحتاج تسجيل خروج/دخول تاني لو استمرت المشكلة */
       }
     }
-    setUsers((prev) => prev.map((u) => (u.username === currentUser.username ? { ...u, password: newPassword, mustChangePassword: false } : u)));
+    try {
+      await setUserCredential(currentUser.id, newPassword);
+    } catch (e) {
+      setSaving(false);
+      setError(t("تعذّر حفظ كلمة المرور الجديدة — تحقّق من الإنترنت وحاول مرة أخرى", "Couldn't save the new password — check your connection and try again"));
+      return;
+    }
+    setUsers((prev) => prev.map((u) => (u.username === currentUser.username ? { ...u, mustChangePassword: false } : u)));
     logActivity && logActivity("تغيير كلمة المرور", "users", currentUser.username);
     setSuccess(true);
     setSaving(false);
@@ -13652,7 +13713,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
      بالأدمن)، وآمنة تمامًا تتكرر كل مرة (merge:true بس، ما بتغيّرش حاجة لو الدور نفسه موجود بالفعل) */
   useEffect(() => {
     users.forEach((u) => {
-      if (u.authUid && u.role) syncUserRoleDoc(u.authUid, u.role);
+      if (u.authUid && u.role) syncUserRoleDoc(u.authUid, u.role, u.id);
     });
     // eslint-disable-next-line
   }, []);
@@ -13715,11 +13776,24 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
     const failed = [];
     for (const u of unmigratedUsers) {
       const email = usernameToAuthEmail(u.username);
+      /* كلمة مرور الحساب بقت مخزّنة في userCredentials مش جوه سجل الحساب نفسه — نجيبها هنا أول حاجة.
+         الأدمن (اللي بيشغّل الترحيل) عنده صلاحية قراءة أي حساب عبر isAdmin() في قواعد الأمان */
+      let pw;
       try {
-        const cred = await secondaryAuth.createUserWithEmailAndPassword(email, padPasswordForAuth(u.password));
+        pw = await getUserCredential(u.id);
+      } catch (e) {
+        failed.push(`${u.name || u.username} (${u.username}): ${t("تعذّر قراءة كلمة مرور هذا الحساب", "Couldn't read this account's password")}`);
+        continue;
+      }
+      if (!pw) {
+        failed.push(`${u.name || u.username} (${u.username}): ${t("لا توجد كلمة مرور محفوظة لهذا الحساب", "No password is stored for this account")}`);
+        continue;
+      }
+      try {
+        const cred = await secondaryAuth.createUserWithEmailAndPassword(email, padPasswordForAuth(pw));
         await secondaryAuth.signOut().catch(() => {});
         setUsers((prev) => prev.map((x) => (x.username === u.username ? { ...x, authUid: cred.user.uid } : x)));
-        syncUserRoleDoc(cred.user.uid, u.role);
+        syncUserRoleDoc(cred.user.uid, u.role, u.id);
         migrated++;
       } catch (e) {
         /* لو الحساب موجود بالفعل في Firebase (auth/email-already-in-use)، الاحتمال الأكبر إنه اترحّل
@@ -13730,10 +13804,10 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
            Auth ويحتاج تدخل يدوي حقيقي (تغيير كلمة مرور هذا الموظف ثم محاولة الترحيل مرة ثانية) */
         if (e.code === "auth/email-already-in-use") {
           try {
-            const signInCred = await secondaryAuth.signInWithEmailAndPassword(email, padPasswordForAuth(u.password));
+            const signInCred = await secondaryAuth.signInWithEmailAndPassword(email, padPasswordForAuth(pw));
             await secondaryAuth.signOut().catch(() => {});
             setUsers((prev) => prev.map((x) => (x.username === u.username ? { ...x, authUid: signInCred.user.uid } : x)));
-            syncUserRoleDoc(signInCred.user.uid, u.role);
+            syncUserRoleDoc(signInCred.user.uid, u.role, u.id);
             migrated++;
             continue;
           } catch (signInErr) {
@@ -13790,7 +13864,6 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
       created.push({
         id: uid(),
         username: uname,
-        password: DEFAULT_BULK_PASSWORD,
         role: "employee",
         name: e.name || uname,
         branchId: "",
@@ -13805,14 +13878,21 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
     });
     if (created.length) {
       setUsers((prev) => [...prev, ...created]);
+      /* كلمة المرور الافتراضية الموحّدة تُكتب في مكانها المنفصل (userCredentials)، حساب بحساب — مش
+         جوه سجل الحساب العام نفسه */
+      created.forEach((c) => setUserCredential(c.id, DEFAULT_BULK_PASSWORD).catch(() => {}));
       logActivity && logActivity("توليد حسابات جماعي للموظفين", "users", `${created.length} حساب`);
     }
     setBulkResult({ created: created.length, skippedNoId, skippedDup, skippedTerminated });
   };
 
   const submit = async () => {
-    if (!form.username.trim() || !form.password.trim() || !form.name.trim()) {
-      setErr(t("الرجاء تعبئة الاسم واسم المستخدم وكلمة المرور", "Please fill in the name, username, and password"));
+    if (!form.username.trim() || !form.name.trim() || (!editingId && !form.password.trim())) {
+      setErr(
+        editingId
+          ? t("الرجاء تعبئة الاسم واسم المستخدم", "Please fill in the name and username")
+          : t("الرجاء تعبئة الاسم واسم المستخدم وكلمة المرور", "Please fill in the name, username, and password")
+      );
       return;
     }
     if (form.role === "custom" && !form.customRoleLabel.trim()) {
@@ -13825,7 +13905,10 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
       return;
     }
     const customizableRole = ["manager", "entity_manager", "branch_manager", "accountant", "cashier", "quality", "maintenance", "custom"].includes(form.role);
-    const payload = { ...form, username: form.username.trim(), customRoleLabel: form.role === "custom" ? form.customRoleLabel.trim() : "" };
+    /* password متعمَّد استبعاده هنا — ما يتخزّنش أبدًا جوه سجل الحساب العام (users)، بل في مستند
+       userCredentials المنفصل بالأسفل */
+    const { password: typedPassword, ...formRest } = form;
+    const payload = { ...formRest, username: form.username.trim(), customRoleLabel: form.role === "custom" ? form.customRoleLabel.trim() : "" };
     if (!customizableRole) {
       payload.customTabs = null;
     } else if (!Array.isArray(payload.customTabs)) {
@@ -13836,10 +13919,16 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
       /* لو الحساب ده مُرحَّل فعلًا لـ Firebase Authentication (عنده authUid)، لازم نحدّث فهرس الأدوار
          فورًا كل ما الدور يتغيّر من هنا — وإلا قواعد الأمان الجديدة هتفضل شايفاه بالدور القديم */
       const editedTarget = users.find((u) => u.id === editingId);
-      if (editedTarget?.authUid) syncUserRoleDoc(editedTarget.authUid, payload.role);
+      if (editedTarget?.authUid) syncUserRoleDoc(editedTarget.authUid, payload.role, editingId);
+      /* كلمة المرور هنا اختيارية وقت التعديل: اتركها فارغة لعدم التغيير، أو اكتبي كلمة جديدة لتعيينها */
+      if (typedPassword && typedPassword.trim()) {
+        setUserCredential(editingId, typedPassword.trim()).catch(() => {});
+      }
       logActivity && logActivity("تعديل مستخدم", "users", payload.username);
     } else {
-      setUsers((prev) => [...prev, { ...payload, id: uid() }]);
+      const newId = uid();
+      setUsers((prev) => [...prev, { ...payload, id: newId }]);
+      setUserCredential(newId, typedPassword.trim()).catch(() => {});
       logActivity && logActivity("إضافة مستخدم", "users", payload.username);
     }
     resetForm();
@@ -13847,7 +13936,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
 
   const edit = (u) => {
     const defaultTabs = defaultTabsForRole(u.role);
-    setForm({ ...u, customTabs: Array.isArray(u.customTabs) ? u.customTabs : defaultTabs });
+    setForm({ ...u, password: "", customTabs: Array.isArray(u.customTabs) ? u.customTabs : defaultTabs });
     setEditingId(u.id);
     setErr("");
   };
@@ -13871,6 +13960,8 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
     /* مسح فهرس دور هذا الحساب فورًا — عشان حتى لو فضل حساب Firebase Authentication المقابل شغّال
        (قيد معروف: حذف الحساب هنا ما يحذفش حساب المصادقة نفسه)، دوره المرتفع ما يفضلش معترَف بيه */
     if (target?.authUid) clearUserRoleDoc(target.authUid);
+    /* تنظيف مستند كلمة مرور هذا الحساب أيضًا — ما فيش داعي يفضل متخزّن بعد حذف الحساب نفسه */
+    deleteUserCredential(id);
     if (editingId === id) resetForm();
   };
 
@@ -14025,7 +14116,12 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
             <input style={inputStyle} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} />
           </Field>
           <Field label={t("كلمة المرور", "Password")}>
-            <input style={inputStyle} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            <input
+              style={inputStyle}
+              placeholder={editingId ? t("اتركها فارغة لعدم التغيير", "Leave blank to keep unchanged") : ""}
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+            />
           </Field>
           {editingId && users.find((u) => u.id === editingId)?.authUid && (
             <div style={{ fontSize: 11, color: COLORS.brick, marginTop: -8, marginBottom: 4 }}>
@@ -14440,6 +14536,9 @@ function Root() {
         } else {
           /* المستند غير موجود إطلاقًا (أول تشغيل حقيقي للنظام) — وقتها فقط نزرع بيانات افتراضية */
           USERS_DOC.set({ users: USERS_SEED }).catch(() => {});
+          /* أول تشغيل حقيقي للنظام — نزرع كمان كلمة مرور حساب الأدمن الافتراضي في مكانها الجديد
+             المنفصل (userCredentials)، بدل ما تتخزّن جوه hrSystem/users زي الإصدارات القديمة */
+          setUserCredential("u1", DEFAULT_ADMIN_PASSWORD).catch(() => {});
         }
       },
       (err) => {
