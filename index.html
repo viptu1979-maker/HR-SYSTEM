@@ -13720,8 +13720,6 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
   const [recoverySaving, setRecoverySaving] = useState(false);
   const [recoveryMsg, setRecoveryMsg] = useState("");
   const [recoveryErr, setRecoveryErr] = useState("");
-  const [recoveringBackupPasswords, setRecoveringBackupPasswords] = useState(false);
-  const [backupRecoveryResult, setBackupRecoveryResult] = useState(null);
 
   /* "تعبئة" فهرس الأدوار (userRoles) لكل الحسابات المُرحَّلة فعلًا لـ Firebase Authentication من قبل —
      لأن حسابات اترحّلت قبل ما هذا الفهرس يُضاف أصلًا ما عندهاش مستند فيه بعد (الكود الجديد بيحدّثه بس
@@ -13800,70 +13798,6 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
       );
     }
     setRecoverySaving(false);
-  };
-
-  /* أداة استرجاع لمرة واحدة (حادثة محددة): بسبب ترتيب نشر قواعد الأمان الجديدة في هذا التحديث، نقل
-     بعض كلمات المرور القديمة من سجل الحساب القديم إلى مكانها الجديد (userCredentials) فشل بصمت —
-     القواعد القديمة كانت ما تسمحش بالكتابة في المكان الجديد أصلاً — في حين إن حذفها من المكان القديم
-     كان مسموح فنجح. النتيجة: كلمة المرور "ضاعت" من الاثنين معًا لبعض الحسابات. تسجيل الدخول الفعلي
-     لكل الموظفين سليم 100% وغير متأثر (يعتمد بالكامل على Firebase Authentication منفصل تمامًا)؛ اللي
-     اتأثر بس هو النسخة المساعدة المستخدمة في شاشة "تغيير كلمة المرور" ولوحة الاسترجاع.
-     هذه الدالة تقرأ آخر نسخة احتياطية يومية لسه فيها كلمات المرور القديمة (قبل ما المشكلة تحصل) وتنقلها
-     لمكانها الصحيح الجديد لكل حساب لسه موجود فعليًا. آمنة تمامًا تتكرر أكتر من مرة، ومالهاش أي علاقة
-     ببيانات الموظفين أو الحضور أو الرواتب — بتلمس كلمات المرور بس */
-  const RECOVERY_BACKUP_DOC_ID = "2026-10-04";
-  const recoverPasswordsFromBackup = async () => {
-    if (recoveringBackupPasswords) return;
-    if (
-      !window.confirm(
-        t(
-          "استرجاع كلمات المرور القديمة من النسخة الاحتياطية بتاريخ 2026-10-04؟",
-          "Recover old passwords from the 2026-10-04 backup?"
-        )
-      )
-    )
-      return;
-    setRecoveringBackupPasswords(true);
-    setBackupRecoveryResult(null);
-    try {
-      const snap = await BACKUPS_COLLECTION.doc(RECOVERY_BACKUP_DOC_ID).get();
-      const backupUsers = snap.exists ? snap.data().users : null;
-      if (!Array.isArray(backupUsers)) {
-        setBackupRecoveryResult({
-          ok: false,
-          message: t("تعذّر العثور على النسخة الاحتياطية أو بياناتها", "Couldn't find the backup or its data"),
-        });
-        setRecoveringBackupPasswords(false);
-        return;
-      }
-      const currentIds = new Set(users.map((u) => u.id));
-      let recovered = 0;
-      let skipped = 0;
-      for (const bu of backupUsers) {
-        if (bu && bu.id && bu.password !== undefined && currentIds.has(bu.id)) {
-          try {
-            await setUserCredential(bu.id, bu.password);
-            recovered++;
-          } catch (e) {
-            skipped++;
-          }
-        }
-      }
-      setBackupRecoveryResult({
-        ok: true,
-        message: t(
-          `تم استرجاع ${recovered} كلمة مرور بنجاح${skipped ? ` (تعذّر استرجاع ${skipped})` : ""}.`,
-          `Successfully recovered ${recovered} password(s)${skipped ? ` (${skipped} failed)` : ""}.`
-        ),
-      });
-      logActivity && logActivity("استرجاع كلمات مرور من نسخة احتياطية", "users", `${recovered}`);
-    } catch (e) {
-      setBackupRecoveryResult({
-        ok: false,
-        message: t("حدث خطأ أثناء الاسترجاع، حاولي مرة أخرى", "An error occurred during recovery, please try again"),
-      });
-    }
-    setRecoveringBackupPasswords(false);
   };
 
   /* ترحيل حسابات الدخول الحالية إلى Firebase Authentication الحقيقي — الأساس اللازم لتشديد قواعد
@@ -14116,37 +14050,6 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
                 {onSaveNow && <Btn small onClick={onSaveNow}>{t("💾 حفظ الآن", "💾 Save Now")}</Btn>}
               </div>
             )}
-          </div>
-        )}
-      </div>
-
-      <div style={{ background: COLORS.brickBg, border: `1px solid ${COLORS.brick}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
-          <div>
-            <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.espresso }}>
-              🛟 {t("استرجاع كلمات المرور القديمة (خطوة لمرة واحدة)", "Recover old passwords (one-time step)")}
-            </div>
-            <div style={{ fontSize: 11.5, color: "#6b5a45", marginTop: 3, maxWidth: 640 }}>
-              {t(
-                "بسبب ترتيب نشر التحديث الأخير، بعض كلمات المرور القديمة اتمسحت قبل ما تتسجل في مكانها الجديد. تسجيل الدخول لكل الموظفين سليم تمامًا ومش متأثر خالص. اضغطي الزر ده مرة واحدة عشان نرجّع نسخة كلمات المرور من آخر نسخة احتياطية سليمة — آمن 100% ومالوش أي علاقة ببيانات الموظفين أو الحضور أو الرواتب.",
-                "Due to the sequencing of the last update, some old passwords were cleared before being saved to their new location. Everyone's login is completely unaffected. Click this button once to restore the password copies from the last good backup — fully safe and unrelated to employee, attendance, or payroll data."
-              )}
-            </div>
-          </div>
-          <Btn onClick={recoverPasswordsFromBackup} disabled={recoveringBackupPasswords}>
-            {recoveringBackupPasswords ? t("جارِ الاسترجاع...", "Recovering...") : t("استرجاع الآن", "Recover now")}
-          </Btn>
-        </div>
-        {backupRecoveryResult && (
-          <div
-            style={{
-              marginTop: 12,
-              fontSize: 12,
-              color: backupRecoveryResult.ok ? COLORS.espresso : COLORS.brick,
-              fontWeight: backupRecoveryResult.ok ? 400 : 700,
-            }}
-          >
-            {backupRecoveryResult.message}
           </div>
         )}
       </div>
