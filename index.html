@@ -1227,6 +1227,16 @@ function fmtISODate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/* إضافة عدد شهور لتاريخ كامل "YYYY-MM-DD" (تجديد وثيقة من تاريخ انتهائها). لو يوم الشهر الأصلي أكبر من أيام
+   الشهر الناتج (مثلاً 31 يناير + 3 شهور) نقف عند آخر يوم في الشهر الناتج (30 أبريل) */
+function addMonthsToISODate(dateStr, n) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr || "");
+  if (!m) return "";
+  const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
+  const lastDay = new Date(y, mo + n + 1, 0).getDate();
+  return fmtISODate(new Date(y, mo + n, Math.min(d, lastDay)));
+}
+
 /* إضافة عدد شهور لصيغة "YYYY-MM" وإرجاع نفس الصيغة */
 function addMonthsToStr(monthStr, n) {
   const [y, m] = monthStr.split("-").map(Number);
@@ -3196,6 +3206,16 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         .filter((e) => (e.name || "").toLowerCase().includes(globalSearchQ) || (e.nationalId || "").toLowerCase().includes(globalSearchQ))
         .slice(0, 8)
     : [];
+  /* تجديد وثيقة (إقامة/رخصة/استمارة...) من تنبيه لوحة التحكم: نحدّث حقل تاريخ الانتهاء فقط في السجل الأصلي */
+  const renewExpiry = (target, newDate, label, name) => {
+    if (!target || !newDate) return;
+    const apply = (prev) => prev.map((x) => (x.id === target.id ? { ...x, [target.field]: newDate } : x));
+    if (target.kind === "employee") setEmployees(apply);
+    else if (target.kind === "branch") setBranches(apply);
+    else if (target.kind === "vehicle") setVehicles(apply);
+    else return;
+    logActivity && logActivity(`تجديد ${label}`, "dash", `${name || ""} → ${newDate}`);
+  };
   const goToEmployee = (empId) => {
     if (!hasTab("employees")) return; /* من غير صلاحية تبويب الموظفين ما نفتح صفحة الموظف من البحث */
     setTab("employees");
@@ -4165,6 +4185,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             attendance={scopedAttendance}
             branchName={branchName}
             entityName={entityName}
+            onRenewExpiry={renewExpiry}
           />
         )}
         {tab === "employees" && hasTab("employees") && (
@@ -4387,9 +4408,36 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
 }
 
 /* ============ لوحة التحكم ============ */
-function Dashboard({ entities, branches, employees, leaves, vehicles, attendance, branchName, entityName }) {
+function Dashboard({ entities, branches, employees, leaves, vehicles, attendance, branchName, entityName, onRenewExpiry }) {
   const { t } = useLang();
   const [alertSearch, setAlertSearch] = useState("");
+  /* تجديد وثيقة من تنبيه الانتهاء: ضغطة على "+3/+6/+9/+12 شهر" تعرض تأكيدًا بالتاريخ الجديد قبل التنفيذ */
+  const [renewPending, setRenewPending] = useState(null);
+  const alertKey = (a) => (a.target ? `${a.target.kind}:${a.target.id}:${a.target.field}` : "");
+  const RenewControls = ({ a }) => {
+    if (!onRenewExpiry || !a.target || !a.expiry) return null;
+    const key = alertKey(a);
+    if (renewPending && renewPending.key === key) {
+      const newDate = addMonthsToISODate(a.expiry, renewPending.months);
+      return (
+        <div style={{ width: "100%", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: 4, fontSize: 12 }}>
+          <span>
+            {t(`تجديد ${renewPending.months} شهر — التاريخ الجديد:`, `Renew ${renewPending.months} months — new date:`)} <b style={{ fontFamily: "Consolas, monospace" }}>{newDate}</b>
+          </span>
+          <Btn small onClick={() => { onRenewExpiry(a.target, newDate, a.label, a.name); setRenewPending(null); }}>{t("✔ تأكيد التجديد", "✔ Confirm renewal")}</Btn>
+          <Btn small tone="secondary" onClick={() => setRenewPending(null)}>{t("إلغاء", "Cancel")}</Btn>
+        </div>
+      );
+    }
+    return (
+      <div style={{ width: "100%", display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
+        <span style={{ fontSize: 11, color: "#8a7a63" }}>{t("تم التجديد؟ من تاريخ الانتهاء:", "Renewed? From expiry date:")}</span>
+        {[[3, "3 شهور", "3 mo"], [6, "6 شهور", "6 mo"], [9, "9 شهور", "9 mo"], [12, "سنة", "1 yr"]].map(([m, ar, en]) => (
+          <Btn key={m} small tone="secondary" onClick={() => setRenewPending({ key, months: m })}>{`+ ${t(ar, en)}`}</Btn>
+        ))}
+      </div>
+    );
+  };
   const [showAbsentModal, setShowAbsentModal] = useState(false);
   const [showForgottenModal, setShowForgottenModal] = useState(false);
   const activeCount = employees.filter((e) => e.status === "نشط").length;
@@ -4468,21 +4516,21 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
   employees
     .filter((e) => e.status === "نشط")
     .forEach((e) => {
-      if (isUrgent(e.iqamaExpiry)) urgentAlerts.push({ label: t("إقامة", "Iqama"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.iqamaExpiry, t) });
-      if (!isSaudiNationality(e.nationality) && isUrgent(e.exitReentryExpiry)) urgentAlerts.push({ label: t("تأشيرة خروج وعودة", "Exit/Re-entry Visa"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.exitReentryExpiry, t) });
-      if (e.contractType !== "غير محدد المدة" && isUrgent(e.contractEnd)) urgentAlerts.push({ label: t("عقد عمل", "Work Contract"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.contractEnd, t) });
-      if (isUrgent(e.healthCertExpiry)) urgentAlerts.push({ label: t("شهادة صحية", "Health Certificate"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.healthCertExpiry, t) });
-      if (isUrgent(e.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين طبي", "Medical Insurance"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.insuranceExpiry, t) });
+      if (isUrgent(e.iqamaExpiry)) urgentAlerts.push({ label: t("إقامة", "Iqama"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.iqamaExpiry, t), target: { kind: "employee", id: e.id, field: "iqamaExpiry" }, expiry: e.iqamaExpiry });
+      if (!isSaudiNationality(e.nationality) && isUrgent(e.exitReentryExpiry)) urgentAlerts.push({ label: t("تأشيرة خروج وعودة", "Exit/Re-entry Visa"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.exitReentryExpiry, t), target: { kind: "employee", id: e.id, field: "exitReentryExpiry" }, expiry: e.exitReentryExpiry });
+      if (e.contractType !== "غير محدد المدة" && isUrgent(e.contractEnd)) urgentAlerts.push({ label: t("عقد عمل", "Work Contract"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.contractEnd, t), target: { kind: "employee", id: e.id, field: "contractEnd" }, expiry: e.contractEnd });
+      if (isUrgent(e.healthCertExpiry)) urgentAlerts.push({ label: t("شهادة صحية", "Health Certificate"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.healthCertExpiry, t), target: { kind: "employee", id: e.id, field: "healthCertExpiry" }, expiry: e.healthCertExpiry });
+      if (isUrgent(e.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين طبي", "Medical Insurance"), name: e.name, sub: branchName(e.branchId), status: expiryStatus(e.insuranceExpiry, t), target: { kind: "employee", id: e.id, field: "insuranceExpiry" }, expiry: e.insuranceExpiry });
     });
   branches.forEach((b) => {
-    if (isUrgent(b.crExpiry)) urgentAlerts.push({ label: t("سجل تجاري", "Commercial Register"), name: b.name, sub: entityName(b.entityId), status: expiryStatus(b.crExpiry, t) });
-    if (isUrgent(b.civilDefenseExpiry)) urgentAlerts.push({ label: t("رخصة دفاع مدني", "Civil Defense License"), name: b.name, sub: entityName(b.entityId), status: expiryStatus(b.civilDefenseExpiry, t) });
-    if (isUrgent(b.municipalityExpiry)) urgentAlerts.push({ label: t("رخصة بلدية", "Municipality License"), name: b.name, sub: entityName(b.entityId), status: expiryStatus(b.municipalityExpiry, t) });
+    if (isUrgent(b.crExpiry)) urgentAlerts.push({ label: t("سجل تجاري", "Commercial Register"), name: b.name, sub: entityName(b.entityId), status: expiryStatus(b.crExpiry, t), target: { kind: "branch", id: b.id, field: "crExpiry" }, expiry: b.crExpiry });
+    if (isUrgent(b.civilDefenseExpiry)) urgentAlerts.push({ label: t("رخصة دفاع مدني", "Civil Defense License"), name: b.name, sub: entityName(b.entityId), status: expiryStatus(b.civilDefenseExpiry, t), target: { kind: "branch", id: b.id, field: "civilDefenseExpiry" }, expiry: b.civilDefenseExpiry });
+    if (isUrgent(b.municipalityExpiry)) urgentAlerts.push({ label: t("رخصة بلدية", "Municipality License"), name: b.name, sub: entityName(b.entityId), status: expiryStatus(b.municipalityExpiry, t), target: { kind: "branch", id: b.id, field: "municipalityExpiry" }, expiry: b.municipalityExpiry });
   });
   (vehicles || []).forEach((v) => {
-    if (isUrgent(v.istimaraExpiry)) urgentAlerts.push({ label: t("استمارة سيارة", "Vehicle Registration"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.istimaraExpiry, t) });
-    if (isUrgent(v.periodicInspectionExpiry)) urgentAlerts.push({ label: t("فحص دوري", "Periodic Inspection"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.periodicInspectionExpiry, t) });
-    if (isUrgent(v.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين سيارة", "Vehicle Insurance"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.insuranceExpiry, t) });
+    if (isUrgent(v.istimaraExpiry)) urgentAlerts.push({ label: t("استمارة سيارة", "Vehicle Registration"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.istimaraExpiry, t), target: { kind: "vehicle", id: v.id, field: "istimaraExpiry" }, expiry: v.istimaraExpiry });
+    if (isUrgent(v.periodicInspectionExpiry)) urgentAlerts.push({ label: t("فحص دوري", "Periodic Inspection"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.periodicInspectionExpiry, t), target: { kind: "vehicle", id: v.id, field: "periodicInspectionExpiry" }, expiry: v.periodicInspectionExpiry });
+    if (isUrgent(v.insuranceExpiry)) urgentAlerts.push({ label: t("تأمين سيارة", "Vehicle Insurance"), name: v.plateNumber, sub: branchName(v.branchId), status: expiryStatus(v.insuranceExpiry, t), target: { kind: "vehicle", id: v.id, field: "insuranceExpiry" }, expiry: v.insuranceExpiry });
   });
   urgentAlerts.sort((a, b) => a.status.days - b.status.days);
   const alertQ = alertSearch.trim().toLowerCase();
@@ -4662,7 +4710,7 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
           <div style={{ background: "#fff", border: `2px solid ${COLORS.brick}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
             {expiredAlerts.map((a, i) => (
               <div
-                key={i}
+                key={alertKey(a) || i}
                 style={{
                   display: "flex",
                   justifyContent: "space-between",
@@ -4681,6 +4729,7 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
                   <div style={{ fontSize: 11, color: "#8a7a63" }}>{a.sub}</div>
                 </div>
                 <Stamp tone="brick">{a.status.label}</Stamp>
+                <RenewControls a={a} />
               </div>
             ))}
           </div>
@@ -4695,7 +4744,7 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
           <div style={{ background: "#fff", border: `1px solid ${COLORS.brick}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
             {expiringAlerts.map((a, i) => (
               <div
-                key={i}
+                key={alertKey(a) || i}
                 style={{
                   display: "flex",
                   justifyContent: "space-between",
@@ -4713,6 +4762,7 @@ function Dashboard({ entities, branches, employees, leaves, vehicles, attendance
                   <div style={{ fontSize: 11, color: "#8a7a63" }}>{a.sub}</div>
                 </div>
                 <Stamp tone="gold">{a.status.label}</Stamp>
+                <RenewControls a={a} />
               </div>
             ))}
           </div>
