@@ -4227,6 +4227,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             entities={scopedEntities}
             branches={scopedBranches}
             leaves={scopedLeaves}
+            leaveRequests={leaveRequests}
             onSendMessage={sendMessage}
             dirty={role !== "employee" ? dirty : false}
             onSaveNow={saveNow}
@@ -4234,6 +4235,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         )}
         {hasTab("compliance") && tab === "compliance" && (
           <ComplianceTab
+            leaveRequests={leaveRequests}
             employees={scopedEmployees}
             attendance={scopedAttendance}
             leaves={scopedLeaves}
@@ -4304,6 +4306,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         )}
         {tab === "payroll" && (
           <PayrollTab
+            leaveRequests={leaveRequests}
             employees={scopedEmployees}
             setEmployees={setEmployees}
             branches={scopedBranches}
@@ -4899,6 +4902,33 @@ function effectiveShift(emp, dayName, shiftKey = "workShift", defaults = { start
 }
 
 
+/* استئذان الخروج المبكر المعتمد (موافقة نهائية — من طلب الموظف أو تسجيل الأدمن): دقائق الخروج المبكر في ذلك اليوم
+   ما تُحسب مخالفة ولا تُخصم من الراتب، بشرط ما يخرج قبل وقت الخروج المسموح به في الاستئذان.
+   لو خرج قبل الوقت المسموح، تُحسب عليه فقط الدقائق اللي قبل وقت الاستئذان. تُرجع دالة تأخذ سجل الحضور وتُرجع الدقائق الفعلية */
+function makeEarlyMinutesFn(leaveRequests, employeeId) {
+  const byDate = {};
+  (leaveRequests || []).forEach((r) => {
+    if (r && r.employeeId === employeeId && r.type === LEAVE_EARLY_EXIT && r.status === "موافقة نهائية" && r.from) byDate[r.from] = r;
+  });
+  const toMin = (hhmm) => {
+    const [h, m] = String(hhmm || "").split(":").map(Number);
+    return isNaN(h) || isNaN(m) ? null : h * 60 + m;
+  };
+  return (rec) => {
+    const total = Number(rec?.earlyLeaveMinutes || 0) + Number(rec?.earlyLeaveMinutes2 || 0);
+    if (!total) return 0;
+    const perm = byDate[rec.date];
+    if (!perm) return total;
+    const exitMin = toMin(perm.exitTime);
+    const lastOut = toMin(rec.checkOutTime2 || rec.checkOutTime);
+    if (exitMin === null || lastOut === null) return 0; /* ما في وقت يقارن عليه: الاستئذان المعتمد يغطّي اليوم */
+    let gap = exitMin - lastOut; /* موجب = خرج قبل الوقت المسموح */
+    if (gap > 720) gap -= 1440;
+    if (gap < -720) gap += 1440;
+    return Math.min(total, Math.max(0, gap));
+  };
+}
+
 /* حساب أيام الغياب "الضمنية" لموظف خلال فترة محدَّدة (rangeStart→rangeEnd): أي يوم عمل (مو إجازته الأسبوعية،
    ومو ضمن إجازة معتمدة، ومو قبل تاريخ تعيينه، ومو يوم مستقبلي) ومالوش أي سجل حضور مسجَّل إطلاقًا (لا حضور
    ولا غياب يدوي) يُحتسب غيابًا تلقائيًا. لا يكرّر أيام الغياب المسجَّلة يدويًا أصلاً (بيتجاهلها لأنها بالفعل "لها سجل") */
@@ -4932,7 +4962,7 @@ function countMissingAttendanceDays(emp, periodAttendanceRecords, employeeApprov
 /* نفس منطق countMissingAttendanceDays لكن بيرجع قائمة الأيام نفسها (بدل عدّها فقط) — كل يوم فيه غياب
    تلقائي (بدون أي سجل حضور)، أو غياب مسجَّل يدويًا، أو تأخير — عشان تبويب الرواتب يقدر يعرضها ويتيح
    تصحيح وقت الدوام الفعلي ليوم بعينه لو الموظف ما قدر يسجّل دخوله عن طريق النظام */
-function getAttendanceIssueDays(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd) {
+function getAttendanceIssueDays(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd, earlyFn) {
   if (!emp?.joinDate) return [];
   const start = new Date(rangeStart + "T00:00:00");
   const end = new Date(rangeEnd + "T00:00:00");
@@ -4957,7 +4987,7 @@ function getAttendanceIssueDays(emp, periodAttendanceRecords, employeeApprovedLe
          (تأخير + نقص دوام حر + خروج مبكر)، عشان أي يوم يساهم في الرقم المعروض يظهر هنا ويقدر يتصحّح */
       const lateMin = rec.status === "متأخر" ? Number(rec.lateMinutes || 0) : 0;
       const shortfallMin = Number(rec.shortfallMinutes || 0);
-      const earlyMin = Number(rec.earlyLeaveMinutes || 0) + Number(rec.earlyLeaveMinutes2 || 0);
+      const earlyMin = earlyFn ? earlyFn(rec) : Number(rec.earlyLeaveMinutes || 0) + Number(rec.earlyLeaveMinutes2 || 0);
       const deductibleMinutes = lateMin + shortfallMin + earlyMin;
       const overtimeHrs = Number(rec.overtimeHours || 0) + Number(rec.overtimeHours2 || 0);
       const breakdown = { lateMin, shortfallMin, earlyMin };
@@ -4984,7 +5014,7 @@ function getAttendanceIssueDays(emp, periodAttendanceRecords, employeeApprovedLe
    يعرض بس "المشاكل" (غياب/تأخير/إضافي)، هذه الدالة ترجّع كل يوم في الفترة بحالته الحقيقية (حاضر،
    إجازة أسبوعية، إجازة معتمدة، إجازة مسجّلة يدويًا، غياب، متأخر، قبل التعيين، أو يوم لسه ما جاء) —
    عشان تُستخدم في تقرير شامل يُطبَع، مو بس لأغراض التصحيح */
-function buildAttendanceReportDays(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd) {
+function buildAttendanceReportDays(emp, periodAttendanceRecords, employeeApprovedLeaves, rangeStart, rangeEnd, earlyFn) {
   if (!emp) return [];
   const start = new Date(rangeStart + "T00:00:00");
   const end = new Date(rangeEnd + "T00:00:00");
@@ -5021,7 +5051,7 @@ function buildAttendanceReportDays(emp, periodAttendanceRecords, employeeApprove
 
     const lateMinutes = rec && rec.status === "متأخر" ? Number(rec.lateMinutes || 0) : 0;
     const shortfallMinutes = rec ? Number(rec.shortfallMinutes || 0) : 0;
-    const earlyLeaveMinutes = rec ? Number(rec.earlyLeaveMinutes || 0) + Number(rec.earlyLeaveMinutes2 || 0) : 0;
+    const earlyLeaveMinutes = rec ? (earlyFn ? earlyFn(rec) : Number(rec.earlyLeaveMinutes || 0) + Number(rec.earlyLeaveMinutes2 || 0)) : 0;
     const overtimeHours = rec ? Number(rec.overtimeHours || 0) + Number(rec.overtimeHours2 || 0) : 0;
 
     days.push({
@@ -8122,7 +8152,7 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
 
 /* ============ سجل الحضور اليومي (قسم مستقل تحت الحضور والإجازات) ============ */
 /* ============ تقرير الحضور والانصراف لموظف واحد — جدول يومي كامل + ملخص شهري قابل للطباعة ============ */
-function EmployeeAttendanceReportModal({ emp, attendance, leaves, branches, onClose }) {
+function EmployeeAttendanceReportModal({ emp, attendance, leaves, branches, onClose, leaveRequests }) {
   const { t } = useLang();
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [__ry, __rm] = month.split("-").map(Number);
@@ -8131,7 +8161,7 @@ function EmployeeAttendanceReportModal({ emp, attendance, leaves, branches, onCl
 
   const monthAttendance = (attendance || []).filter((a) => a.employeeId === emp.id && (a.date || "").startsWith(month));
   const employeeApprovedLeaves = (leaves || []).filter((l) => l.employeeId === emp.id);
-  const days = buildAttendanceReportDays(emp, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
+  const days = buildAttendanceReportDays(emp, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd, makeEarlyMinutesFn(leaveRequests, emp.id));
 
   const presentDays = days.filter((d) => d.kind === "present").length;
   const lateDays = days.filter((d) => d.kind === "late").length;
@@ -8256,7 +8286,7 @@ function EmployeeAttendanceReportModal({ emp, attendance, leaves, branches, onCl
   );
 }
 
-function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage, dirty, onSaveNow }) {
+function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, entities, branches, leaves, onSendMessage, dirty, onSaveNow, leaveRequests }) {
   const { t } = useLang();
   const [attForm, setAttForm] = useState({ entityId: "", branchId: "", employeeId: "", date: "", status: "حاضر", lateMinutes: "", overtimeHours: "" });
   const [viewingPhoto, setViewingPhoto] = useState(null);
@@ -8869,6 +8899,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
           emp={employees.find((e) => e.id === reportEmp.id) || reportEmp}
           attendance={attendance}
           leaves={leaves || []}
+          leaveRequests={leaveRequests || []}
           branches={branches}
           onClose={() => setReportEmp(null)}
         />
@@ -8878,7 +8909,7 @@ function AttendanceLogTab({ employees, attendance, setAttendance, logActivity, e
 }
 
 /* ============ مراقبة الالتزام: الحضور، الانصراف، والبصمة ============ */
-function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
+function ComplianceTab({ employees, attendance, leaves, branches, entities, leaveRequests }) {
   const { t } = useLang();
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
   const [branchFilter, setBranchFilter] = useState("");
@@ -8910,8 +8941,9 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
       const presentDays = monthAttendance.filter((a) => a.status === "حاضر" || a.status === "متأخر").length;
       const lateDays = monthAttendance.filter((a) => a.status === "متأخر").length;
       const lateMinutesTotal = monthAttendance.reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
-      const earlyLeaveDays = monthAttendance.filter((a) => Number(a.earlyLeaveMinutes || 0) > 0 || Number(a.earlyLeaveMinutes2 || 0) > 0).length;
-      const earlyLeaveMinutesTotal = monthAttendance.reduce((s, a) => s + Number(a.earlyLeaveMinutes || 0) + Number(a.earlyLeaveMinutes2 || 0), 0);
+      const earlyFn = makeEarlyMinutesFn(leaveRequests, e.id); /* استئذان الخروج المبكر المعتمد لا يُحسب مخالفة */
+      const earlyLeaveDays = monthAttendance.filter((a) => earlyFn(a) > 0).length;
+      const earlyLeaveMinutesTotal = monthAttendance.reduce((s, a) => s + earlyFn(a), 0);
       const manualAbsentDays = monthAttendance.filter((a) => a.status === "غائب").length;
       const employeeApprovedLeaves = leaves.filter((l) => l.employeeId === e.id);
       const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
@@ -8919,7 +8951,7 @@ function ComplianceTab({ employees, attendance, leaves, branches, entities }) {
       const overtimeDays = monthAttendance.filter((a) => Number(a.overtimeHours || 0) > 0 || Number(a.overtimeHours2 || 0) > 0).length;
       const overtimeHoursTotal = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0) + Number(a.overtimeHours2 || 0), 0);
       const cleanDays = monthAttendance.filter(
-        (a) => a.status === "حاضر" && !Number(a.earlyLeaveMinutes || 0) && !Number(a.earlyLeaveMinutes2 || 0) && !Number(a.shortfallMinutes || 0)
+        (a) => a.status === "حاضر" && !earlyFn(a) && !Number(a.shortfallMinutes || 0)
       ).length;
       const expectedDays = presentDays + absentDays;
       /* سقف أمان: النسبة منطقيًا ما تتعدى 100% أبدًا (cleanDays ≤ expectedDays دايمًا) — لو حصل أي
@@ -9165,7 +9197,7 @@ function PayrollSheetModal({ rows, totals, month, branches, onClose }) {
   );
 }
 
-function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranch, gosiRates, attendance, setAttendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage }) {
+function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranch, gosiRates, attendance, setAttendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage, leaveRequests }) {
   const { t } = useLang();
   const [branchFilter, setBranchFilter] = useState("");
   const [month, setMonth] = useState(new Date().toISOString().slice(0, 7));
@@ -9348,17 +9380,15 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
       const absentDays = manualAbsentDays + autoAbsentDays;
       /* أيام الغياب (تلقائي أو يدوي) والتأخير خلال الشهر بتفاصيلها — لإتاحة تصحيح وقت الدوام الفعلي
          ليوم بعينه من جدول الرواتب لو الموظف ما قدر يسجّل دخوله عن طريق النظام */
-      const attendanceIssues = getAttendanceIssueDays(e, monthAttendance, employeeApprovedLeaves, monthStart, effectiveEnd);
+      const earlyFn = makeEarlyMinutesFn(leaveRequests, e.id); /* استئذان الخروج المبكر المعتمد لا يُحسب مخالفة */
+      const attendanceIssues = getAttendanceIssueDays(e, monthAttendance, employeeApprovedLeaves, monthStart, effectiveEnd, earlyFn);
       const lateMinutesTotal = monthAttendance
         .filter((a) => a.status === "متأخر")
         .reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
       /* دوام حر: نقص الساعات عن 8 ساعات فعلية يوميًا (لا "تأخير" بالمعنى العادي، لكن نفس أساس الخصم بالدقيقة) */
       const flexibleShortfallMinutes = monthAttendance.reduce((s, a) => s + Number(a.shortfallMinutes || 0), 0);
       /* الخروج المبكر (قبل نهاية الدوام المحدد) — فترة صباحية ومسائية معًا */
-      const earlyLeaveMinutesTotal = monthAttendance.reduce(
-        (s, a) => s + Number(a.earlyLeaveMinutes || 0) + Number(a.earlyLeaveMinutes2 || 0),
-        0
-      );
+      const earlyLeaveMinutesTotal = monthAttendance.reduce((s, a) => s + earlyFn(a), 0);
       const totalDeductibleMinutes = lateMinutesTotal + flexibleShortfallMinutes + earlyLeaveMinutesTotal;
 
       const unpaidLeaveDays = leaves
