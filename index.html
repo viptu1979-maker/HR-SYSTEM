@@ -3516,6 +3516,46 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       sendMessage({ scope: "employee", employeeId: w.employeeId, text: deductionText, requiresAck: true });
     }
   };
+  /* تعديل إنذار موجود (النوع، الدرجة، التاريخ، التفاصيل، الصور، الخصم المرتبط). الموظف نفسه ما يتغيّر.
+     الخصم المرتبط (لو موجود) يتحدّث في كشف الرواتب، ويُنشأ لو أضيف الآن، ويُحذف لو أُلغي — بدون إعادة إرسال
+     إشعار الإنذار للموظف (رسالته الأصلية تبقى كما هي) */
+  const updateWarning = (id, patch) => {
+    const old = warnings.find((x) => x.id === id);
+    if (!old) return;
+    const nextPhotos = patch.photos || [];
+    (old.photos || []).filter((u) => u && !nextPhotos.includes(u)).forEach((u) => deleteFileFromStorage(u));
+    const nextAmount = Number(patch.deductionAmount) > 0 ? Number(patch.deductionAmount) : 0;
+    setWarnings((prev) =>
+      prev.map((x) =>
+        x.id === id
+          ? { ...x, category: patch.category, severity: patch.severity, date: patch.date, description: patch.description || "", descriptionEn: patch.descriptionEn || "", photos: nextPhotos, deductionAmount: nextAmount ? nextAmount : "" }
+          : x
+      )
+    );
+    const severityLabel = trLabel(t, WARNING_SEVERITY_LEVELS_EN, patch.severity);
+    const descAr = (patch.description || patch.descriptionEn || "").trim();
+    const descEn = (patch.descriptionEn || patch.description || "").trim();
+    const note = `${t(`خصم مرتبط بـ`, `Deduction linked to`)} ${severityLabel}${descAr ? ` — ${t(descAr, descEn)}` : ""}`;
+    const month = (patch.date || new Date().toISOString()).slice(0, 7);
+    const hasLinked = payrollItems.some((p) => p.relatedWarningId === id);
+    if (nextAmount && hasLinked) {
+      setPayrollItems((prev) => prev.map((p) => (p.relatedWarningId === id ? { ...p, amount: nextAmount, date: patch.date, month, note } : p)));
+    } else if (nextAmount && !hasLinked) {
+      setPayrollItems((prev) => [...prev, { id: uid(), employeeId: old.employeeId, type: "خصم", amount: nextAmount, date: patch.date, month, note, relatedWarningId: id }]);
+      sendMessage({
+        scope: "employee",
+        employeeId: old.employeeId,
+        text: t(
+          `تم تسجيل خصم بمبلغ ${fmt(nextAmount)} ﷼ على راتبك مرتبط بـ "${severityLabel}" بتاريخ ${patch.date || "—"}. برجاء مراجعته والموافقة عليه.`,
+          `A deduction of ${fmt(nextAmount)} SAR has been recorded on your salary linked to "${severityLabel}" dated ${patch.date || "—"}. Please review and approve it.`
+        ),
+        requiresAck: true,
+      });
+    } else if (!nextAmount && hasLinked) {
+      setPayrollItems((prev) => prev.filter((p) => p.relatedWarningId !== id));
+    }
+    logActivity && logActivity("تعديل إنذار", "warnings", `${employees.find((e) => e.id === old.employeeId)?.name || ""} — ${patch.severity}`);
+  };
   const removeWarning = (id) => {
     const w = warnings.find((x) => x.id === id);
     (w?.photos || []).forEach((u) => u && deleteFileFromStorage(u));
@@ -4276,6 +4316,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             warnings={scopedWarnings}
             messages={scopedMessages}
             onAddWarning={addWarning}
+            onUpdateWarning={updateWarning}
             onRemoveWarning={removeWarning}
           />
         )}
@@ -12694,9 +12735,10 @@ function QualityTab({ equipment, templates, submissions, branches, defaultBranch
    للموظف تلقائيًا إشعار في صفحته الذاتية عبر نظام الرسائل الموجود، ويُطلب منه "الاطلاع والموافقة"
    الصريحة (زي التوقيع الورقي، بس رقمي) — بالضبط نفس آلية إشعارات الخصم/السلفة الموجودة في الرواتب.
    ولو الإنذار مرتبط بخصم مالي، يُسجَّل تلقائيًا قيد خصم في كشف الرواتب مع إشعار منفصل بذلك */
-function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, messages, onAddWarning, onRemoveWarning }) {
+function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, messages, onAddWarning, onUpdateWarning, onRemoveWarning }) {
   const { t, lang } = useLang();
   const [showForm, setShowForm] = useState(false);
+  const [editingWarningId, setEditingWarningId] = useState(null);
   const [form, setForm] = useState(() => makeEmptyWarning());
   const [applyDeduction, setApplyDeduction] = useState(false);
   const [branchFilter, setBranchFilter] = useState("");
@@ -12735,10 +12777,33 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
 
   const submitWarning = () => {
     if (!form.employeeId || !form.date) return;
-    onAddWarning({ ...form, deductionAmount: applyDeduction ? form.deductionAmount : "" });
+    if (editingWarningId) {
+      onUpdateWarning && onUpdateWarning(editingWarningId, { ...form, deductionAmount: applyDeduction ? form.deductionAmount : "" });
+      setEditingWarningId(null);
+    } else {
+      onAddWarning({ ...form, deductionAmount: applyDeduction ? form.deductionAmount : "" });
+    }
     setForm(makeEmptyWarning());
     setApplyDeduction(false);
     setShowForm(false);
+    setPhotoError("");
+  };
+  const startEditWarning = (w) => {
+    setEditingWarningId(w.id);
+    setForm({
+      employeeId: w.employeeId, branchId: w.branchId || "", category: w.category, severity: w.severity, date: w.date || fmtISODate(new Date()),
+      description: w.description || "", descriptionEn: w.descriptionEn || "", deductionAmount: w.deductionAmount || "", photos: Array.isArray(w.photos) ? w.photos : [],
+    });
+    setApplyDeduction(Number(w.deductionAmount) > 0);
+    setPhotoError("");
+    setShowForm(true);
+    if (typeof window !== "undefined" && window.scrollTo) window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  const cancelWarningForm = () => {
+    setShowForm(false);
+    setEditingWarningId(null);
+    setForm(makeEmptyWarning());
+    setApplyDeduction(false);
     setPhotoError("");
   };
 
@@ -12782,15 +12847,20 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("سجل الإنذارات", "Warnings Log")} ({filtered.length})</SectionTitle>
-        <Btn small onClick={() => setShowForm((s) => !s)}>{showForm ? t("إلغاء", "Cancel") : t("⚠ تسجيل إنذار جديد", "⚠ Issue New Warning")}</Btn>
+        <Btn small onClick={() => (showForm ? cancelWarningForm() : setShowForm(true))}>{showForm ? t("إلغاء", "Cancel") : t("⚠ تسجيل إنذار جديد", "⚠ Issue New Warning")}</Btn>
       </div>
 
       {showForm && (
         <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, margin: "14px 0" }} className="no-print">
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            {editingWarningId && (
+              <div style={{ width: "100%", fontSize: 12.5, fontWeight: 700, color: COLORS.coffee }}>
+                {t("✎ تعديل إنذار —", "✎ Editing warning —")} {empName(form.employeeId)}
+              </div>
+            )}
             <Field label={t("الموظف", "Employee")} required>
               <EmployeeSelect
-                employees={activeEmployees}
+                employees={editingWarningId ? employees.filter((e) => e.id === form.employeeId) : activeEmployees}
                 value={form.employeeId}
                 onChange={(id) => setForm({ ...form, employeeId: id })}
                 placeholder={t("اكتب اسم الموظف أو رقم هويته...", "Type the employee's name or ID number...")}
@@ -12871,7 +12941,14 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
             )}
           </div>
           <div style={{ marginTop: 14 }}>
-            <Btn onClick={submitWarning} disabled={!form.employeeId || !form.date}>{t("✔ تسجيل الإنذار وإشعار الموظف", "✔ Issue Warning & Notify Employee")}</Btn>
+            <Btn onClick={submitWarning} disabled={!form.employeeId || !form.date}>
+              {editingWarningId ? t("✔ حفظ التعديل", "✔ Save Changes") : t("✔ تسجيل الإنذار وإشعار الموظف", "✔ Issue Warning & Notify Employee")}
+            </Btn>
+            {editingWarningId && (
+              <div style={{ marginTop: 8, fontSize: 11, color: "#8a7a63" }}>
+                {t("التعديل لا يُعيد إرسال إشعار الإنذار للموظف (رسالته الأصلية تبقى كما هي). الخصم المرتبط يتحدّث تلقائيًا في كشف الرواتب.", "Editing doesn't re-send the warning notification (the original message stays). The linked deduction updates automatically in payroll.")}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -12956,6 +13033,7 @@ function WarningsTab({ employees, branches, entities, entityOfBranch, warnings, 
                 </div>
                 <div style={{ display: "flex", gap: 8 }} className="no-print">
                   <Btn small onClick={() => setPrintItem(w)}>{t("🖶 طباعة", "🖶 Print")}</Btn>
+                  <Btn small tone="secondary" onClick={() => startEditWarning(w)}>{t("تعديل", "Edit")}</Btn>
                   <Btn
                     small
                     tone="danger"
