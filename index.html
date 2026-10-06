@@ -2904,8 +2904,12 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const retryTimerRef = useRef(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
   /* وضع "جهاز الحضور المشترك": الفرع المفعَّل على هذا الجهاز (مخزّن محليًا على الجهاز نفسه ولنفس الحساب فقط) */
-  const [kioskBranchId, setKioskBranchId] = useState(() => readKioskSetting(currentUser.id));
-  const [showKioskSetup, setShowKioskSetup] = useState(false);
+  /* وضع "الجهاز المشترك" من حساب الإدارة أُلغي: الجهاز المخصّص للبصمة صار حسابًا مستقلًا لكل فرع (دور "جهاز بصمة الوجه").
+     نمسح أي إعداد قديم محفوظ على هذا الجهاز عشان ما يبقى في أي حساب إدارة أثره */
+  useEffect(() => {
+    if (readKioskSetting(currentUser.id)) writeKioskSetting(currentUser.id, "");
+    // eslint-disable-next-line
+  }, []);
   const isMobile = useIsMobile();
   const [navOpen, setNavOpen] = useState(false);
   /* بحث عام عن موظف بالاسم أو رقم الهوية عبر جميع الأقسام والفروع */
@@ -3057,9 +3061,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   /* لو فشل الحفظ التلقائي مرة (انقطاع إنترنت لحظي مثلاً)، نعيد المحاولة كل 5 ثواني تلقائيًا بدل ما
      نسيب النظام عالق على "غير محفوظ" للأبد بدون أي محاولة تانية — وده كان بيسبب توقف استقبال أي
      تحديثات جديدة من القاعدة (بما فيها بيانات الموظفين نفسها) لحد ما يعمل المستخدم ريفرش يدوي */
-  /* حفظ تلقائي فوري لصفحة الموظف الذاتية، ولحساب "جهاز بصمة الوجه" المخصص، ولوضع الجهاز المشترك — لأن أحدًا لن
+  /* حفظ تلقائي فوري لصفحة الموظف الذاتية، ولحساب "جهاز بصمة الوجه" المخصص — لأن أحدًا لن
      يضغط أيقونة الحفظ بعد كل بصمة، وأي حركة حضور لازم تنحفظ قبل ما الجهاز يُقفل أو تنقطع الصفحة */
-  const autoSave = role === "employee" || role === "attendance_device" || !!kioskBranchId;
+  const autoSave = role === "employee" || role === "attendance_device";
   useEffect(() => {
     if (!autoSave || !dirty) return;
     const interval = setInterval(() => setRetryTick((n) => n + 1), 5000);
@@ -3922,30 +3926,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
     );
   }
 
-  if (kioskBranchId && ["admin", "manager", "entity_manager", "branch_manager"].includes(role)) {
-    return (
-      <KioskAttendanceView
-        branchId={kioskBranchId}
-        branches={branches}
-        employees={employees}
-        attendance={attendance}
-        setAttendance={setAttendance}
-        setEmployees={setEmployees}
-        logActivity={logActivity}
-        loaded={loaded}
-        dirty={dirty}
-        saving={saving}
-        syncError={syncError}
-        onSave={saveNow}
-        onExit={() => {
-          writeKioskSetting(currentUser.id, "");
-          setKioskBranchId("");
-          logActivity && logActivity("إنهاء وضع الجهاز المشترك", "attendance", branchName(kioskBranchId));
-        }}
-      />
-    );
-  }
-
   return (
     <div
       dir="rtl"
@@ -4282,24 +4262,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           >
             {t("🔑 تغيير كلمة المرور", "🔑 Change Password")}
           </button>
-          {kioskBranchesForUser(currentUser, branches).length > 0 && (
-            <button
-              onClick={() => setShowKioskSetup(true)}
-              style={{
-                width: "100%",
-                background: "transparent",
-                border: "1px solid rgba(216,168,90,0.4)",
-                color: "#D9CBB2",
-                borderRadius: 6,
-                padding: "7px 10px",
-                fontSize: 12,
-                cursor: "pointer",
-                marginBottom: 8,
-              }}
-            >
-              {t("📱 جهاز حضور مشترك", "📱 Shared attendance device")}
-            </button>
-          )}
           <button
             onClick={onLogout}
             style={{
@@ -4324,19 +4286,6 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setUsers={setUsers}
           logActivity={logActivity}
           onClose={() => setShowChangePassword(false)}
-        />
-      )}
-
-      {showKioskSetup && (
-        <KioskSetupModal
-          branches={kioskBranchesForUser(currentUser, branches)}
-          onClose={() => setShowKioskSetup(false)}
-          onStart={(bid) => {
-            writeKioskSetting(currentUser.id, bid);
-            setKioskBranchId(bid);
-            setShowKioskSetup(false);
-            logActivity && logActivity("تفعيل وضع الجهاز المشترك", "attendance", branchName(bid));
-          }}
         />
       )}
 
