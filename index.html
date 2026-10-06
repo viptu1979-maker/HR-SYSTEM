@@ -986,8 +986,8 @@ const DEFAULT_ADMIN_PASSWORD = "admin123";
 /* كلمة المرور الافتراضية عند توليد حسابات جماعية للموظفين — يُجبر الموظف على تغييرها أول ما يدخل بيها */
 const DEFAULT_BULK_PASSWORD = "admin@123";
 
-const ROLE_LABELS = { admin: "أدمن", manager: "مسؤول عام", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", accountant: "محاسب", cashier: "أمين صندوق", quality: "مختص الجودة", maintenance: "مختص الصيانة", employee: "موظف" };
-const ROLE_LABELS_EN = { admin: "Admin", manager: "General Manager", entity_manager: "Entity Manager", branch_manager: "Branch Manager", accountant: "Accountant", cashier: "Cashier", quality: "Quality Specialist", maintenance: "Maintenance Specialist", employee: "Employee" };
+const ROLE_LABELS = { admin: "أدمن", manager: "مسؤول عام", entity_manager: "مدير كيان", branch_manager: "مسؤول فرع", accountant: "محاسب", cashier: "أمين صندوق", quality: "مختص الجودة", maintenance: "مختص الصيانة", attendance_device: "جهاز بصمة الوجه", employee: "موظف" };
+const ROLE_LABELS_EN = { admin: "Admin", manager: "General Manager", entity_manager: "Entity Manager", branch_manager: "Branch Manager", accountant: "Accountant", cashier: "Cashier", quality: "Quality Specialist", maintenance: "Maintenance Specialist", attendance_device: "Face Attendance Device", employee: "Employee" };
 /* اسم الدور المعروض — لو الدور "custom" (دور مخصص كتبه الأدمن يدويًا) بيرجّع الاسم اللي كتبه، وإلا بيرجّع الترجمة القياسية */
 function roleLabel(u, t) {
   if (!u) return "—";
@@ -1743,6 +1743,12 @@ function kioskPickDecision(emp, stage) {
   return { type: "blocked", reason: "unknown" };
 }
 
+/* موظفو الفرع اللي يقدر المسؤول يسجّل بصمة وجههم من الجهاز المشترك: على رأس العمل، التحقق بالوجه مفعّل عندهم،
+   وما سجّلوا بصمة بعد */
+function kioskEnrollableEmployees(employees, branchId) {
+  return kioskEmployeesForBranch(employees, branchId).filter((e) => e.faceAttendanceEnabled !== false && !e.faceDescriptor);
+}
+
 /* الفروع اللي يقدر الحساب ده يحوّل الجهاز لها: مسؤول الفرع فرعه فقط، مدير الكيان فروع كيانه، والباقي (أدمن/مدير)
    كل الفروع. حسابات الجودة والصيانة ما يظهرلهاش الخيار أصلًا */
 function kioskBranchesForUser(user, branches) {
@@ -1794,7 +1800,7 @@ function KioskSetupModal({ branches, onStart, onClose }) {
   );
 }
 
-function KioskAttendanceView({ branchId, branches, employees, attendance, setAttendance, setEmployees, logActivity, loaded, dirty, saving, syncError, onSave, onExit }) {
+function KioskAttendanceView({ branchId, branches, employees, attendance, setAttendance, setEmployees, logActivity, loaded, dirty, saving, syncError, onSave, onExit, dedicated }) {
   const { t } = useLang();
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(null);
@@ -1804,6 +1810,15 @@ function KioskAttendanceView({ branchId, branches, employees, attendance, setAtt
   const [exitPw, setExitPw] = useState("");
   const [exitErr, setExitErr] = useState("");
   const [exitBusy, setExitBusy] = useState(false);
+  /* تسجيل بصمة وجه موظف جديد من الجهاز المشترك — بإشراف المسؤول فقط: لازم كلمة مرور حساب الجهاز أولًا (نفس كلمة
+     الخروج)، وإلا أي موظف يقدر يختار اسم زميله ويسجّل وجهه هو مكانه. الإذن ينتهي تلقائيًا بعد 10 دقائق */
+  const [enrollStage, setEnrollStage] = useState(null); /* null | "auth" | "pick" | "face" */
+  const [enrollPw, setEnrollPw] = useState("");
+  const [enrollErr, setEnrollErr] = useState("");
+  const [enrollBusy, setEnrollBusy] = useState(false);
+  const [enrollSearch, setEnrollSearch] = useState("");
+  const [enrollEmpId, setEnrollEmpId] = useState(null);
+  const enrollEmp = employees.find((e) => e.id === enrollEmpId) || null;
   const selectedEmp = employees.find((e) => e.id === selectedId) || null;
   const clock = useAttendanceClock({ myEmployee: selectedEmp, attendance, setAttendance, setEmployees, branches, logActivity, t });
   const requestedRef = useRef(null);
@@ -1837,8 +1852,8 @@ function KioskAttendanceView({ branchId, branches, employees, attendance, setAtt
           `Face verification is disabled for ${emp.name} — please check in from your personal account.`
         ),
         noFace: t(
-          `${emp.name}: لم تسجّل بصمة وجهك بعد. سجّلها أول مرة من حسابك الشخصي على جوالك، وبعدها تقدر تستخدم الجهاز المشترك.`,
-          `${emp.name}: you haven't registered your face yet. Register it once from your personal account on your phone, then you can use the shared device.`
+          `${emp.name}: لم تسجّل بصمة وجهك بعد. اطلب من المسؤول تسجيلها لك من هذا الجهاز (زر "تسجيل وجه موظف جديد" أسفل الصفحة)، أو سجّلها من حسابك الشخصي على جوالك.`,
+          `${emp.name}: you haven't registered your face yet. Ask the supervisor to register it here (the "Register a new employee's face" button at the bottom), or register it from your personal account on your phone.`
         ),
         done: t(`${emp.name}: سجّلت حضورك وانصرافك لليوم بالكامل.`, `${emp.name}: you've completed all of today's check-ins and check-outs.`),
         unknown: t("تعذّر تحديد حالة دوامك اليوم.", "Couldn't determine your attendance status for today."),
@@ -1928,6 +1943,64 @@ function KioskAttendanceView({ branchId, branches, employees, attendance, setAtt
           : t("تعذّر التحقق — تأكد من الاتصال بالإنترنت وحاول مرة أخرى", "Couldn't verify — check your connection and try again")
       );
     }
+  };
+
+  const closeEnroll = () => {
+    setEnrollStage(null);
+    setEnrollPw("");
+    setEnrollErr("");
+    setEnrollSearch("");
+    setEnrollEmpId(null);
+  };
+  const startEnroll = () => {
+    setEnrollPw("");
+    setEnrollErr("");
+    setEnrollStage("auth");
+  };
+  const authorizeEnroll = async () => {
+    setEnrollErr("");
+    if (!enrollPw.trim()) return;
+    if (!auth.currentUser) {
+      setEnrollErr(t("لا توجد جلسة دخول نشطة.", "No active sign-in session."));
+      return;
+    }
+    setEnrollBusy(true);
+    try {
+      const cred = firebase.auth.EmailAuthProvider.credential(auth.currentUser.email, padPasswordForAuth(enrollPw));
+      await auth.currentUser.reauthenticateWithCredential(cred);
+      setEnrollBusy(false);
+      setEnrollPw("");
+      setEnrollStage("pick");
+    } catch (e) {
+      setEnrollBusy(false);
+      setEnrollErr(
+        e && (e.code === "auth/wrong-password" || e.code === "auth/invalid-credential" || e.code === "auth/invalid-login-credentials")
+          ? t("كلمة المرور غير صحيحة", "Incorrect password")
+          : t("تعذّر التحقق — تأكد من الاتصال بالإنترنت وحاول مرة أخرى", "Couldn't verify — check your connection and try again")
+      );
+    }
+  };
+  /* انتهاء إذن التسجيل تلقائيًا بعد 10 دقائق من اعتماد المسؤول (حتى لو نسي يقفله) */
+  useEffect(() => {
+    if (enrollStage !== "pick" && enrollStage !== "face") return;
+    const id = setTimeout(() => {
+      closeEnroll();
+      setNotice({ kind: "error", text: t("انتهى إذن تسجيل الوجوه (10 دقائق) — اضغط الزر وأدخل كلمة المرور مرة أخرى للمتابعة.", "Face-enrollment permission expired (10 minutes) — press the button and enter the password again to continue.") });
+    }, 10 * 60 * 1000);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line
+  }, [enrollStage === "pick" || enrollStage === "face"]);
+  const handleEnrollVerified = ({ photo, descriptor }) => {
+    if (descriptor && enrollEmp) {
+      const empId = enrollEmp.id;
+      setEmployees((prev) =>
+        prev.map((e) => (e.id === empId && !e.faceDescriptor ? { ...e, faceDescriptor: descriptor, faceRegisteredAt: new Date().toISOString(), faceRegisteredVia: "kiosk" } : e))
+      );
+      logActivity && logActivity("تسجيل بصمة الوجه من الجهاز المشترك (بإشراف المسؤول)", "attendance", enrollEmp.name);
+      setNotice({ kind: "success", text: t(`✓ تم تسجيل بصمة وجه ${enrollEmp.name} — يقدر الآن يسجّل حضوره بالوجه من هذا الجهاز`, `✓ ${enrollEmp.name}'s face was registered — they can now check in with their face on this device`) });
+    }
+    setEnrollEmpId(null);
+    setEnrollStage("pick");
   };
 
   const q = search.trim().toLowerCase();
@@ -2025,9 +2098,12 @@ function KioskAttendanceView({ branchId, branches, employees, attendance, setAtt
           </>
         )}
 
-        <div style={{ marginTop: 28, textAlign: "center" }}>
+        <div style={{ marginTop: 28, textAlign: "center", display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap" }}>
+          <Btn tone="secondary" small disabled={!!selectedId} onClick={startEnroll}>
+            👤 {t("تسجيل وجه موظف جديد (بإذن المسؤول)", "Register a new employee's face (supervisor)")}
+          </Btn>
           <Btn tone="secondary" small onClick={() => { setShowExit(true); setExitPw(""); setExitErr(""); }}>
-            🔒 {t("خروج من وضع الجهاز المشترك", "Exit shared-device mode")}
+            🔒 {dedicated ? t("تسجيل خروج هذا الجهاز (بكلمة المرور)", "Sign out this device (password)") : t("خروج من وضع الجهاز المشترك", "Exit shared-device mode")}
           </Btn>
         </div>
       </div>
@@ -2040,6 +2116,88 @@ function KioskAttendanceView({ branchId, branches, employees, attendance, setAtt
             resetSelection();
           }}
           onVerified={clock.handleFaceVerified}
+        />
+      )}
+
+      {enrollStage === "auth" && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: "#fff", borderRadius: 12, maxWidth: 360, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.35)", padding: 22 }}>
+            <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 15, marginBottom: 6 }}>
+              {t("تسجيل وجه موظف جديد", "Register a new employee's face")}
+            </div>
+            <div style={{ fontSize: 12, color: "#6b5a45", marginBottom: 12, lineHeight: 1.7 }}>
+              {t("هذه الخطوة للمسؤول فقط. اكتب كلمة مرور الحساب المسجّل دخوله على هذا الجهاز لتفعيل التسجيل لمدة 10 دقائق.", "Supervisor only. Enter the password of the account signed in on this device to enable enrollment for 10 minutes.")}
+            </div>
+            <input
+              type="password"
+              style={{ ...inputStyle, width: "100%", marginBottom: 8 }}
+              value={enrollPw}
+              onChange={(e) => setEnrollPw(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") authorizeEnroll(); }}
+              autoFocus
+            />
+            {enrollErr && <div style={{ background: COLORS.brickBg, color: COLORS.brick, padding: "8px 10px", borderRadius: 8, fontSize: 12.5, marginBottom: 8 }}>{enrollErr}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <Btn tone="secondary" onClick={closeEnroll}>{t("إلغاء", "Cancel")}</Btn>
+              <Btn onClick={authorizeEnroll} disabled={enrollBusy}>{enrollBusy ? t("جارِ التحقق...", "Verifying...") : t("متابعة", "Continue")}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {enrollStage === "pick" && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div style={{ background: "#fff", borderRadius: 12, maxWidth: 480, width: "100%", maxHeight: "85vh", overflow: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.35)", padding: 22 }}>
+            <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 15, marginBottom: 6 }}>
+              {t("اختاري الموظف المراد تسجيل وجهه", "Choose the employee to register")}
+            </div>
+            <div style={{ fontSize: 12, color: COLORS.brick, marginBottom: 10, lineHeight: 1.7 }}>
+              {t("تأكدي أن الموظف نفسه واقف أمام الكاميرا، لأن الوجه الذي يُسجَّل الآن هو الذي سيُقبل لهذا الاسم لاحقًا.", "Make sure the employee himself is standing in front of the camera — the face registered now is the one accepted for this name afterward.")}
+            </div>
+            <input
+              style={{ ...inputStyle, width: "100%", marginBottom: 10 }}
+              placeholder={t("🔍 ابحث بالاسم...", "🔍 Search by name...")}
+              value={enrollSearch}
+              onChange={(e) => setEnrollSearch(e.target.value)}
+            />
+            {(() => {
+              const eq = enrollSearch.trim().toLowerCase();
+              const candidates = kioskEnrollableEmployees(employees, branchId)
+                .filter((e) => !eq || String(e.name || "").toLowerCase().includes(eq))
+                .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ar"));
+              if (candidates.length === 0) {
+                return (
+                  <div style={{ textAlign: "center", color: "#8a7a63", padding: 20, fontSize: 13 }}>
+                    {t("لا يوجد موظفون بدون بصمة وجه في هذا الفرع 🎉", "No employees without a registered face in this branch 🎉")}
+                  </div>
+                );
+              }
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {candidates.map((e) => (
+                    <button
+                      key={e.id}
+                      onClick={() => { setEnrollEmpId(e.id); setEnrollStage("face"); }}
+                      style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: "12px 14px", textAlign: "right", cursor: "pointer", fontWeight: 700, color: COLORS.espresso, fontSize: 14 }}
+                    >
+                      {e.name}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
+            <div style={{ marginTop: 14, display: "flex", justifyContent: "flex-end" }}>
+              <Btn tone="secondary" onClick={closeEnroll}>{t("إنهاء التسجيل", "Finish enrolling")}</Btn>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {enrollStage === "face" && enrollEmp && (
+        <FaceCheckModal
+          employee={enrollEmp}
+          onCancel={() => { setEnrollEmpId(null); setEnrollStage("pick"); }}
+          onVerified={handleEnrollVerified}
         />
       )}
 
@@ -2061,7 +2219,7 @@ function KioskAttendanceView({ branchId, branches, employees, attendance, setAtt
         >
           <div style={{ background: "#fff", borderRadius: 12, maxWidth: 360, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.35)", padding: 22 }}>
             <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 15, marginBottom: 6 }}>
-              {t("الخروج من وضع الجهاز المشترك", "Exit shared-device mode")}
+              {dedicated ? t("تسجيل خروج جهاز البصمة", "Sign out the attendance device") : t("الخروج من وضع الجهاز المشترك", "Exit shared-device mode")}
             </div>
             <div style={{ fontSize: 12, color: "#6b5a45", marginBottom: 12 }}>
               {t("اكتب كلمة مرور الحساب المسجّل دخوله على هذا الجهاز.", "Enter the password of the account signed in on this device.")}
@@ -2899,11 +3057,14 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   /* لو فشل الحفظ التلقائي مرة (انقطاع إنترنت لحظي مثلاً)، نعيد المحاولة كل 5 ثواني تلقائيًا بدل ما
      نسيب النظام عالق على "غير محفوظ" للأبد بدون أي محاولة تانية — وده كان بيسبب توقف استقبال أي
      تحديثات جديدة من القاعدة (بما فيها بيانات الموظفين نفسها) لحد ما يعمل المستخدم ريفرش يدوي */
+  /* حفظ تلقائي فوري لصفحة الموظف الذاتية، ولحساب "جهاز بصمة الوجه" المخصص، ولوضع الجهاز المشترك — لأن أحدًا لن
+     يضغط أيقونة الحفظ بعد كل بصمة، وأي حركة حضور لازم تنحفظ قبل ما الجهاز يُقفل أو تنقطع الصفحة */
+  const autoSave = role === "employee" || role === "attendance_device" || !!kioskBranchId;
   useEffect(() => {
-    if (role !== "employee" || !dirty) return;
+    if (!autoSave || !dirty) return;
     const interval = setInterval(() => setRetryTick((n) => n + 1), 5000);
     return () => clearInterval(interval);
-  }, [role, dirty]);
+  }, [autoSave, dirty]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -2913,7 +3074,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       setDirty(false);
       return;
     }
-    if (role === "employee") {
+    if (autoSave) {
       setSaving(true);
       setSyncError("");
       /* الحفظ فوري (بدون أي تأخير مصطنع) — أهم حاجة إن تسجيل الحضور/الانصراف ينحفظ في قاعدة البيانات
@@ -2952,7 +3113,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       return;
     }
     setDirty(true);
-  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, loaded, role, retryTick]);
+  }, [entities, branches, employees, leaves, leaveRequests, advanceRequests, attendance, gosiRates, vehicles, payrollItems, tasks, messages, equipment, workOrders, qualityTemplates, qualitySubmissions, warnings, loaded, role, autoSave, retryTick]);
 
   /* نسخة احتياطية يومية تلقائية (بيانات النظام + حسابات الدخول معًا) — لو انحذف أو اتغيّر شيء بالغلط
      (من داخل النظام أو حتى من Firestore Console مباشرة) يقدر الأدمن يسترجعها من تبويب "الإعدادات" */
@@ -3734,6 +3895,29 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         onRemoveQualityTemplate={removeQualityTemplate}
         onAddQualitySubmission={addQualitySubmission}
         onRemoveQualitySubmission={removeQualitySubmission}
+      />
+    );
+  }
+
+  /* حساب "جهاز بصمة الوجه" المخصص: يدخل مباشرة لشاشة البصمة لفرعه فقط، بدون أي قوائم أو تبويبات، ولا يخرج منها
+     إلا بتسجيل الخروج بكلمة مرور الحساب نفسه */
+  if (role === "attendance_device") {
+    return (
+      <KioskAttendanceView
+        dedicated
+        branchId={currentUser.branchId || ""}
+        branches={branches}
+        employees={employees}
+        attendance={attendance}
+        setAttendance={setAttendance}
+        setEmployees={setEmployees}
+        logActivity={logActivity}
+        loaded={loaded}
+        dirty={dirty}
+        saving={saving}
+        syncError={syncError}
+        onSave={saveNow}
+        onExit={onLogout}
       />
     );
   }
@@ -14812,6 +14996,10 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
       setErr(t("الرجاء كتابة اسم الدور المخصص", "Please enter the custom role name"));
       return;
     }
+    if (form.role === "attendance_device" && !form.branchId) {
+      setErr(t("اختاري الفرع الذي سيعمل عليه جهاز البصمة", "Pick the branch this attendance device will work for"));
+      return;
+    }
     const dup = users.find((u) => u.username === form.username.trim() && u.id !== editingId);
     if (dup) {
       setErr(t("اسم المستخدم مستخدم بالفعل، اختر اسمًا آخر", "This username is already taken, please choose another"));
@@ -15101,6 +15289,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
               <option value="cashier">{t("أمين صندوق (كل الكيانات)", "Cashier (all entities)")}</option>
               <option value="quality">{t("مختص الجودة (فرع محدد)", "Quality Specialist (specific branch)")}</option>
               <option value="maintenance">{t("مختص الصيانة (فرع محدد)", "Maintenance Specialist (specific branch)")}</option>
+              <option value="attendance_device">{t("📱 جهاز بصمة الوجه (جوال مخصص لفرع)", "📱 Face Attendance Device (dedicated phone for a branch)")}</option>
               <option value="custom">{t("دور مخصص (اكتب اسمه)", "Custom role (type name)")}</option>
               <option value="employee">{t("موظف", "Employee")}</option>
             </select>
@@ -15125,7 +15314,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
               </select>
             </Field>
           )}
-          {["branch_manager", "quality", "maintenance"].includes(form.role) && (
+          {["branch_manager", "quality", "maintenance", "attendance_device"].includes(form.role) && (
             <Field label={t("الفرع", "Branch")}>
               <select style={inputStyle} value={form.branchId} onChange={(e) => setForm({ ...form, branchId: e.target.value })}>
                 <option value="">{t("اختر الفرع", "Select branch")}</option>
@@ -15217,7 +15406,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
       <SectionTitle>{t("الحسابات الحالية", "Current Accounts")} ({fmt(users.length)})</SectionTitle>
       {(() => {
         const branchIdOf = (u) => {
-          if (u.role === "branch_manager" || u.role === "quality" || u.role === "maintenance") return u.branchId || null;
+          if (u.role === "branch_manager" || u.role === "quality" || u.role === "maintenance" || u.role === "attendance_device") return u.branchId || null;
           if (u.role === "employee") return employees.find((e) => e.id === u.employeeId)?.branchId || null;
           return null;
         };
@@ -15262,7 +15451,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
                     <div style={{ fontSize: 11.5, color: "#8a7a63" }}>
                       {roleLabel(u, t)}
                       {u.role === "entity_manager" && ` · ${entities.find((en) => en.id === u.entityId)?.name || "—"}`}
-                      {(u.role === "branch_manager" || u.role === "quality" || u.role === "maintenance") && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
+                      {(u.role === "branch_manager" || u.role === "quality" || u.role === "maintenance" || u.role === "attendance_device") && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
                       {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
                       {Array.isArray(u.customTabs) && ` · 🔧 ${t(`صلاحيات مخصصة (${u.customTabs.length} تبويب)`, `Custom access (${u.customTabs.length} tabs)`)}`}
                       {u.qualityAccess && ` · ◒ ${t("الجودة", "Quality")}`}
