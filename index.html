@@ -3197,6 +3197,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         .slice(0, 8)
     : [];
   const goToEmployee = (empId) => {
+    if (!hasTab("employees")) return; /* من غير صلاحية تبويب الموظفين ما نفتح صفحة الموظف من البحث */
     setTab("employees");
     setJumpToEmployeeId(empId);
     setGlobalSearch("");
@@ -4098,6 +4099,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       {/* المحتوى */}
       <main style={{ flex: 1, minWidth: 0, padding: isMobile ? "70px 14px 24px" : "26px 30px", maxWidth: 1180 }}>
         {/* بحث عام عن موظف بالاسم أو رقم الهوية — يعمل عبر جميع الأقسام والفروع */}
+        {hasTab("employees") && (
         <div className="no-print" style={{ position: "relative", marginBottom: 18, maxWidth: 340 }}>
           <input
             style={{ ...inputStyle, width: "100%", paddingInlineStart: 32 }}
@@ -4152,6 +4154,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             </div>
           )}
         </div>
+        )}
         {tab === "dash" && (
           <Dashboard
             entities={scopedEntities}
@@ -4164,7 +4167,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             entityName={entityName}
           />
         )}
-        {tab === "employees" && (
+        {tab === "employees" && hasTab("employees") && (
           <EmployeesTab
             employees={scopedEmployees}
             setEmployees={setEmployees}
