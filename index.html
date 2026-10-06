@@ -4826,6 +4826,8 @@ const EMPTY_EMP = {
   position: "",
   salary: "",
   joinDate: "",
+  /* آخر يوم عمل (عند ترك الموظف للعمل) — يُحتسب راتب شهر خروجه على أيام شغله فقط */
+  endDate: "",
   phone: "",
   /* طريقة استلام الراتب المعتادة للموظف (نقدًا أو تحويل بنكي) — تُعرض كعمود في جدول الرواتب */
   paymentMethod: "تحويل بنكي",
@@ -5538,6 +5540,11 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
               <option value="منتهي الخدمة">{t("منتهي الخدمة", "Terminated")}</option>
             </select>
           </Field>
+          {(form.status === "منتهي الخدمة" || form.endDate) && (
+            <Field label={t("آخر يوم عمل (لحساب راتب الشهر الأخير)", "Last Working Day (for final-month pay)")}>
+              <DateField style={inputStyle} value={form.endDate || ""} onChange={(v) => setForm({ ...form, endDate: v })} />
+            </Field>
+          )}
         </div>
 
         <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.coffee, margin: "14px 0 8px" }}>{t("بيانات الإقامة والعقد", "Iqama & Contract Details")}</div>
@@ -9307,7 +9314,12 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
 
   const q = searchQuery.trim().toLowerCase();
   const rows = employees
-    .filter((e) => e.status === "نشط")
+    /* الموظف النشط يدخل الرواتب دائمًا. الموظف اللي ترك العمل (منتهي الخدمة وله "آخر يوم عمل") يدخل رواتب
+       شهر خروجه (على أيام شغله فقط) وكل شهر قبله — ولا يظهر في الشهور بعد خروجه */
+    .filter((e) => {
+      if (e.endDate && e.endDate < `${month}-01`) return false;
+      return e.status === "نشط" || (e.status === "منتهي الخدمة" && !!e.endDate);
+    })
     .filter((e) => !branchFilter || e.branchId === branchFilter)
     .filter((e) => !q || (e.name || "").toLowerCase().includes(q) || (e.nationalId || "").toLowerCase().includes(q))
     .map((e) => {
@@ -9329,11 +9341,14 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
       const [__pmY, __pmM] = month.split("-").map(Number);
       const monthStart = `${month}-01`;
       const monthEnd = fmtISODate(new Date(__pmY, __pmM, 0));
-      const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
+      /* لو الموظف ترك العمل خلال هذا الشهر: ما نحتسب غيابًا ولا مخالفات بعد آخر يوم عمل */
+      const endsThisMonth = !!(e.endDate && e.endDate >= monthStart && e.endDate <= monthEnd);
+      const effectiveEnd = endsThisMonth ? e.endDate : monthEnd;
+      const autoAbsentDays = countMissingAttendanceDays(e, monthAttendance, employeeApprovedLeaves, monthStart, effectiveEnd);
       const absentDays = manualAbsentDays + autoAbsentDays;
       /* أيام الغياب (تلقائي أو يدوي) والتأخير خلال الشهر بتفاصيلها — لإتاحة تصحيح وقت الدوام الفعلي
          ليوم بعينه من جدول الرواتب لو الموظف ما قدر يسجّل دخوله عن طريق النظام */
-      const attendanceIssues = getAttendanceIssueDays(e, monthAttendance, employeeApprovedLeaves, monthStart, monthEnd);
+      const attendanceIssues = getAttendanceIssueDays(e, monthAttendance, employeeApprovedLeaves, monthStart, effectiveEnd);
       const lateMinutesTotal = monthAttendance
         .filter((a) => a.status === "متأخر")
         .reduce((s, a) => s + Number(a.lateMinutes || 0), 0);
@@ -9365,7 +9380,15 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
          راتب الشهر كامل عن أيام ماكانش معيَّن فيها فعليًا (بلاغ المستخدمة: موظف بدأ الشغل يوم 10
          من الشهر واستلم راتب شهر كامل رغم إنه ما اشتغلش أول 9 أيام) */
       let joinProrationDays = 0;
-      if (e.joinDate && e.joinDate > monthStart && e.joinDate <= monthEnd) {
+      if (endsThisMonth) {
+        /* ترك العمل خلال الشهر: الراتب = (الراتب ÷ 30) × أيام الشغل الفعلية من أول يوم له في الشهر (أول الشهر أو يوم تعيينه)
+           لحد آخر يوم عمل (بحد أقصى 30 يومًا)، والباقي يُخصم كـ"أيام خارج مدة الخدمة" */
+        const joinInMonth = e.joinDate && e.joinDate > monthStart && e.joinDate <= monthEnd;
+        const startDayNum = joinInMonth ? Number(e.joinDate.slice(8, 10)) : 1;
+        const endDayNum = Number(e.endDate.slice(8, 10));
+        const entitledDays = Math.min(30, Math.max(0, endDayNum - startDayNum + 1));
+        joinProrationDays = 30 - entitledDays;
+      } else if (e.joinDate && e.joinDate > monthStart && e.joinDate <= monthEnd) {
         const msPerDay = 24 * 60 * 60 * 1000;
         joinProrationDays = Math.round((new Date(e.joinDate + "T00:00:00") - new Date(monthStart + "T00:00:00")) / msPerDay);
       }
@@ -9414,6 +9437,7 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
         annualLeaveDeduction,
         joinProrationDays,
         joinProrationDeduction,
+        endsThisMonth,
         attendanceDeduction,
         overtimeHours,
         overtimePay,
@@ -9611,8 +9635,8 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
                   { label: t("خصم الإجازة", "Leave Deduction") },
                   { label: t("أيام إجازة سنوية (مدفوعة مقدمًا)", "Annual Leave Days (Prepaid)") },
                   { label: t("خصم الإجازة السنوية", "Annual Leave Deduction") },
-                  { label: t("أيام قبل التعيين هذا الشهر", "Days Before Hire This Month") },
-                  { label: t("خصم التعيين الجزئي", "Partial-Month Hire Deduction") },
+                  { label: t("أيام خارج مدة الخدمة هذا الشهر", "Days Outside Service Period This Month") },
+                  { label: t("خصم الشهر الجزئي (تعيين/ترك عمل)", "Partial-Month Deduction (Hire/Exit)") },
                   { label: t("إجمالي خصومات الحضور", "Total Attendance Deductions") },
                   { label: t("ساعات إضافي", "Overtime Hours") },
                   { label: t("قيمة الإضافي", "Overtime Pay") },
@@ -9680,8 +9704,8 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
                   <td data-label={t("خصم الإجازة", "Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.unpaidLeaveDeduction)}</td>
                   <td data-label={t("أيام إجازة سنوية (مدفوعة مقدمًا)", "Annual Leave Days (Prepaid)")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.annualLeaveDays)}</td>
                   <td data-label={t("خصم الإجازة السنوية", "Annual Leave Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.annualLeaveDeduction)}</td>
-                  <td data-label={t("أيام قبل التعيين هذا الشهر", "Days Before Hire This Month")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.joinProrationDays)}</td>
-                  <td data-label={t("خصم التعيين الجزئي", "Partial-Month Hire Deduction")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.joinProrationDeduction)}</td>
+                  <td data-label={t("أيام خارج مدة الخدمة هذا الشهر", "Days Outside Service Period This Month")} style={{ padding: "9px 12px", fontFamily: "inherit" }}>{fmt(r.joinProrationDays)}</td>
+                  <td data-label={t("خصم الشهر الجزئي (تعيين/ترك عمل)", "Partial-Month Deduction (Hire/Exit)")} style={{ padding: "9px 12px", color: COLORS.brick }}>{fmt(r.joinProrationDeduction)}</td>
                   <td data-label={t("إجمالي خصومات الحضور", "Total Attendance Deductions")} style={{ padding: "9px 12px", color: COLORS.brick, fontWeight: 700 }}>{fmt(r.attendanceDeduction)}</td>
                   <td
                     data-label={t("ساعات إضافي", "Overtime Hours")}
@@ -9882,6 +9906,7 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
                 <div><b>{t("الجنسية", "Nationality")}:</b> {trLabel(t, NATIONALITY_LABELS_EN, payslip.nationality)}</div>
                 <div><b>{t("الفرع", "Branch")}:</b> {branches.find((b) => b.id === payslip.branchId)?.name || "—"}</div>
                 <div><b>{t("تاريخ التعيين", "Hire Date")}:</b> {payslip.joinDate || "—"}</div>
+                {payslip.endsThisMonth && <div><b>{t("آخر يوم عمل", "Last Working Day")}:</b> {payslip.endDate}</div>}
                 <div><b>{t("طريقة استلام الراتب", "Payment Method")}:</b> {trLabel(t, PAYMENT_METHOD_LABELS_EN, payslip.paymentMethod || "تحويل بنكي")}</div>
               </div>
 
@@ -9942,7 +9967,9 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
                   )}
                   {payslip.joinProrationDays > 0 && (
                     <tr>
-                      <td style={{ padding: "6px 12px" }}>{t(`خصم أيام قبل التعيين هذا الشهر (${fmt(payslip.joinProrationDays)} يوم)`, `Days Before Hire This Month Deduction (${fmt(payslip.joinProrationDays)} days)`)}</td>
+                      <td style={{ padding: "6px 12px" }}>{(payslip.endsThisMonth
+                        ? t(`خصم أيام خارج مدة الخدمة — ترك العمل (${fmt(payslip.joinProrationDays)} يوم من 30، أيام العمل المستحقة ${fmt(30 - payslip.joinProrationDays)})`, `Days Outside Service Period — Exit (${fmt(payslip.joinProrationDays)} of 30 days; paid days ${fmt(30 - payslip.joinProrationDays)})`)
+                        : t(`خصم أيام قبل التعيين هذا الشهر (${fmt(payslip.joinProrationDays)} يوم)`, `Days Before Hire This Month Deduction (${fmt(payslip.joinProrationDays)} days)`))}</td>
                       <td style={{ padding: "6px 12px", textAlign: "left", fontFamily: "Consolas, monospace" }}>{fmt(payslip.joinProrationDeduction)} ﷼</td>
                     </tr>
                   )}
