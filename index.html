@@ -4205,6 +4205,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         )}
         {tab === "attendance" && (
           <AttendanceTab
+            leaveRequests={leaveRequests}
+            setLeaveRequests={setLeaveRequests}
+            recordedBy={currentUser.name}
             employees={scopedEmployees}
             setEmployees={setEmployees}
             leaves={scopedLeaves}
@@ -7811,10 +7814,13 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
 }
 
 /* ============ الحضور والإجازات ============ */
-function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity, entities, branches }) {
+function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity, entities, branches, leaveRequests, setLeaveRequests, recordedBy }) {
   const { t } = useLang();
   const [leaveForm, setLeaveForm] = useState({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
   const [editingLeaveId, setEditingLeaveId] = useState(null);
+  const [earlyForm, setEarlyForm] = useState({ date: "", exitTime: "", note: "" });
+  const [leaveFormErr, setLeaveFormErr] = useState("");
+  const isEarlyExit = leaveForm.type === LEAVE_EARLY_EXIT;
   /* تصفية جدول أرصدة الإجازة السنوية: بحث بالاسم + فرع */
   const [balSearch, setBalSearch] = useState("");
   const [balBranchFilter, setBalBranchFilter] = useState("");
@@ -7826,6 +7832,29 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
     : leaveForm.entityId
     ? employees.filter((e) => leaveBranches.some((b) => b.id === e.branchId))
     : employees;
+
+  /* استئذان الخروج المبكر يسجّله الأدمن مباشرة: بيتخزّن كطلب "موافقة نهائية" في سجل الطلبات، مش في سجل الإجازات —
+     عشان ما يتحسبش اليوم إجازة كاملة ولا يخصم من الرصيد ولا يأثر على الرواتب */
+  const addEarlyExit = () => {
+    if (!leaveForm.employeeId || !earlyForm.date || !earlyForm.exitTime) {
+      setLeaveFormErr(t("اختر الموظف وتاريخ الاستئذان ووقت الخروج", "Pick the employee, the date and the leaving time"));
+      return;
+    }
+    setLeaveFormErr("");
+    const now = new Date().toISOString();
+    setLeaveRequests && setLeaveRequests((prev) => [
+      { id: uid(), employeeId: leaveForm.employeeId, type: LEAVE_EARLY_EXIT, from: earlyForm.date, to: earlyForm.date, exitTime: earlyForm.exitTime, note: earlyForm.note || "", status: "موافقة نهائية", requestedAt: now, finalApprovedBy: recordedBy || "", finalApprovedAt: now, recordedByAdmin: true },
+      ...prev,
+    ]);
+    logActivity && logActivity("تسجيل استئذان خروج مبكر", "attendance", empName(leaveForm.employeeId));
+    setEarlyForm({ date: "", exitTime: "", note: "" });
+    setLeaveForm({ entityId: "", branchId: "", employeeId: "", type: "سنوية", from: "", to: "" });
+  };
+  const removeEarlyExit = (id) => {
+    setLeaveRequests && setLeaveRequests((prev) => prev.filter((r) => r.id !== id));
+    logActivity && logActivity("حذف استئذان خروج مبكر", "attendance", empName((leaveRequests || []).find((r) => r.id === id)?.employeeId));
+  };
+  const earlyExitList = (leaveRequests || []).filter((r) => r.type === LEAVE_EARLY_EXIT && r.status === "موافقة نهائية" && employees.some((e) => e.id === r.employeeId));
 
   const addLeave = () => {
     if (!leaveForm.employeeId || !leaveForm.from || !leaveForm.to) return;
@@ -7891,27 +7920,54 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
             <EmployeeSelect employees={leaveEmployees} value={leaveForm.employeeId} onChange={(id) => setLeaveForm({ ...leaveForm, employeeId: id })} />
           </Field>
           <Field label={t("نوع الإجازة", "Leave Type")}>
-            <select style={inputStyle} value={leaveForm.type} onChange={(e) => setLeaveForm({ ...leaveForm, type: e.target.value })}>
+            <select style={inputStyle} value={leaveForm.type} disabled={!!editingLeaveId && !isEarlyExit} onChange={(e) => { setLeaveFormErr(""); setLeaveForm({ ...leaveForm, type: e.target.value }); }}>
               <option value="سنوية">{t("سنوية", "Annual")}</option>
               <option value="مرضية">{t("مرضية", "Sick")}</option>
               <option value="طارئة">{t("طارئة", "Emergency")}</option>
               <option value="بدون راتب">{t("بدون راتب", "Unpaid")}</option>
               <option value="أخرى">{t("أخرى", "Other")}</option>
+              {!editingLeaveId && <option value={LEAVE_EARLY_EXIT}>{t("استئذان بالخروج المبكر", "Early Exit Permission")}</option>}
             </select>
           </Field>
-          <Field label={t("من تاريخ", "From Date")}>
-            <DateField style={inputStyle} value={leaveForm.from} onChange={(v) => setLeaveForm({ ...leaveForm, from: v })} />
-          </Field>
-          <Field label={t("إلى تاريخ", "To Date")}>
-            <DateField style={inputStyle} value={leaveForm.to} onChange={(v) => setLeaveForm({ ...leaveForm, to: v })} />
-          </Field>
+          {isEarlyExit ? (
+            <>
+              <Field label={t("تاريخ الاستئذان", "Date")}>
+                <DateField style={inputStyle} value={earlyForm.date} onChange={(v) => setEarlyForm({ ...earlyForm, date: v })} />
+              </Field>
+              <Field label={t("وقت الخروج", "Leaving Time")}>
+                <input type="time" style={inputStyle} value={earlyForm.exitTime} onChange={(e) => setEarlyForm({ ...earlyForm, exitTime: e.target.value })} />
+              </Field>
+              <Field label={t("السبب (اختياري)", "Reason (optional)")}>
+                <input style={inputStyle} value={earlyForm.note} onChange={(e) => setEarlyForm({ ...earlyForm, note: e.target.value })} />
+              </Field>
+            </>
+          ) : (
+            <>
+              <Field label={t("من تاريخ", "From Date")}>
+                <DateField style={inputStyle} value={leaveForm.from} onChange={(v) => setLeaveForm({ ...leaveForm, from: v })} />
+              </Field>
+              <Field label={t("إلى تاريخ", "To Date")}>
+                <DateField style={inputStyle} value={leaveForm.to} onChange={(v) => setLeaveForm({ ...leaveForm, to: v })} />
+              </Field>
+            </>
+          )}
           <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-            <Btn onClick={addLeave}>{editingLeaveId ? t("حفظ التعديل", "Save Changes") : t("تسجيل الإجازة", "Register Leave")}</Btn>
+            {isEarlyExit ? (
+              <Btn onClick={addEarlyExit}>{t("تسجيل الاستئذان", "Register Permission")}</Btn>
+            ) : (
+              <Btn onClick={addLeave}>{editingLeaveId ? t("حفظ التعديل", "Save Changes") : t("تسجيل الإجازة", "Register Leave")}</Btn>
+            )}
             {editingLeaveId && (
               <Btn tone="secondary" onClick={cancelEditLeave}>{t("إلغاء", "Cancel")}</Btn>
             )}
           </div>
         </div>
+        {leaveFormErr && <div style={{ marginTop: 10, fontSize: 12, color: COLORS.brick }}>{leaveFormErr}</div>}
+        {isEarlyExit && (
+          <div style={{ marginTop: 10, fontSize: 11.5, color: "#8a7a63" }}>
+            {t("استئذان الخروج المبكر لا يُحسب إجازة يوم كامل ولا يخصم من الرصيد أو الراتب — يُسجَّل كموافقة موثّقة فقط.", "An early-exit permission is not a full-day leave and does not affect leave balance or salary — it is recorded as a documented approval only.")}
+          </div>
+        )}
         {leaveForm.type === "بدون راتب" && (
           <div style={{ marginTop: 10, fontSize: 11.5, color: COLORS.brick }}>
             {t(
@@ -7930,6 +7986,20 @@ function AttendanceTab({ employees, setEmployees, leaves, setLeaves, logActivity
               <span style={{ fontFamily: "Consolas, monospace" }}>{l.from} → {l.to}</span>
               <Btn small onClick={() => startEditLeave(l)}>{t("تعديل", "Edit")}</Btn>
               <Btn small tone="danger" onClick={() => removeLeave(l.id)}>{t("حذف", "Delete")}</Btn>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <SectionTitle>{t("استئذانات الخروج المبكر", "Early Exit Permissions")} ({earlyExitList.length})</SectionTitle>
+      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }}>
+        {earlyExitList.length === 0 && <Empty text={t("لا توجد استئذانات مسجّلة", "No registered permissions")} />}
+        {earlyExitList.map((r, i) => (
+          <div key={r.id} style={{ display: "flex", justifyContent: "space-between", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5 }}>
+            <div><b>{empName(r.employeeId)}</b>{r.note ? <span style={{ color: "#8a7a63" }}> — {r.note}</span> : null}</div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <span style={{ fontFamily: "Consolas, monospace" }}>{leaveRequestWhenLabel(r, t)}</span>
+              <Btn small tone="danger" onClick={() => removeEarlyExit(r.id)}>{t("حذف", "Delete")}</Btn>
             </div>
           </div>
         ))}
