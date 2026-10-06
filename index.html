@@ -14387,6 +14387,20 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
   const [recoverySaving, setRecoverySaving] = useState(false);
   const [recoveryMsg, setRecoveryMsg] = useState("");
   const [recoveryErr, setRecoveryErr] = useState("");
+  /* إعادة تهيئة دخول حساب موظف ما يقدر يدخل بكلمة مروره (كلمة الدخول الفعلية في Firebase مختلفة عن المخزّنة) */
+  const [resetLoginConfirm, setResetLoginConfirm] = useState(false);
+  const [resetLoginDone, setResetLoginDone] = useState(null);
+  const resetLoginForAccount = () => {
+    const target = users.find((u) => u.id === editingId);
+    if (!target || !target.authUid) return;
+    const oldUid = target.authUid;
+    setUsers((prev) => prev.map((u) => (u.id === editingId ? { ...u, authUid: "" } : u)));
+    clearUserRoleDoc(oldUid);
+    setForm((f) => ({ ...f, authUid: "" }));
+    setResetLoginConfirm(false);
+    setResetLoginDone({ email: usernameToAuthEmail(target.username), username: target.username });
+    logActivity && logActivity("إعادة تهيئة دخول مستخدم", "users", target.username);
+  };
 
   /* "تعبئة" فهرس الأدوار (userRoles) لكل الحسابات المُرحَّلة فعلًا لـ Firebase Authentication من قبل —
      لأن حسابات اترحّلت قبل ما هذا الفهرس يُضاف أصلًا ما عندهاش مستند فيه بعد (الكود الجديد بيحدّثه بس
@@ -14516,8 +14530,8 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
           } catch (signInErr) {
             failed.push(
               `${u.name || u.username} (${u.username}): ${t(
-                "الحساب موجود في Firebase لكن بكلمة مرور مختلفة عن كلمة المرور الحالية في النظام — غيّري كلمة مرور هذا الحساب من هنا ثم أعيدي محاولة الترحيل",
-                "Account exists in Firebase but with a different password than the one currently set here — change this account's password here, then retry migration"
+                "الحساب موجود في Firebase لكن بكلمة مرور مختلفة عن كلمة المرور الحالية في النظام — احذفي هذا المستخدم من Firebase ← Authentication ثم أعيدي محاولة الترحيل (بعد التأكد من كلمة المرور المحفوظة له هنا)",
+                "Account exists in Firebase but with a different password than the one currently set here — delete this user from Firebase → Authentication, then retry migration (after confirming the password saved for him here)"
               )}`
             );
             continue;
@@ -14826,6 +14840,35 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
               onChange={(e) => setForm({ ...form, password: e.target.value })}
             />
           </Field>
+          {resetLoginDone && (
+            <div style={{ fontSize: 12, color: COLORS.espresso, background: COLORS.greenBg, border: `1px solid ${COLORS.green}`, borderRadius: 8, padding: 12, marginBottom: 10, lineHeight: 1.9 }}>
+              <b>{t("تمت إعادة التهيئة. أكملي هذه الخطوات بالترتيب:", "Reset done. Complete these steps in order:")}</b>
+              <div>1) {t("افتحي Firebase ← Authentication ← Users، واحذفي المستخدم", "Open Firebase → Authentication → Users and delete the user")} <b dir="ltr" style={{ fontFamily: "Consolas, monospace" }}>{resetLoginDone.email}</b></div>
+              <div>2) {t("اكتبي كلمة مرور جديدة للموظف في خانة \"كلمة المرور\" بالأعلى ثم اضغطي \"حفظ التعديل\".", "Type a new password for the employee in the Password field above, then press Save.")}</div>
+              <div>3) {t("اضغطي \"حفظ الآن\" ثم الزر الأحمر/الأخضر \"ابدأ الترحيل\" أعلى الصفحة.", "Press Save Now, then \"Start Migration\" at the top of the page.")}</div>
+              <div>4) {t("أعطي الموظف كلمة المرور الجديدة — يدخل بها، ويقدر يغيّرها بنفسه بعدها.", "Give the employee the new password — he can log in, then change it himself.")}</div>
+              <div style={{ marginTop: 6 }}><Btn small tone="secondary" onClick={() => setResetLoginDone(null)}>{t("تم — إخفاء", "Done — hide")}</Btn></div>
+            </div>
+          )}
+          {editingId && users.find((u) => u.id === editingId)?.authUid && (
+            <div style={{ marginBottom: 10 }}>
+              {!resetLoginConfirm ? (
+                <Btn small tone="secondary" onClick={() => setResetLoginConfirm(true)}>
+                  {t("🔧 الموظف ما يقدر يدخل — إعادة تهيئة دخول هذا الحساب", "🔧 Employee can't log in — reset this account's login")}
+                </Btn>
+              ) : (
+                <div style={{ fontSize: 12, background: COLORS.brickBg, border: `1px solid ${COLORS.brick}`, borderRadius: 8, padding: 12 }}>
+                  <div style={{ marginBottom: 8 }}>
+                    {t("سيُفصل هذا الحساب عن حساب الدخول القديم في Firebase، وبعدها تحذفين حساب الدخول القديم من Firebase وتنشئين كلمة مرور جديدة (4 خطوات تظهر لك). لا يتأثر أي بيان آخر. متأكدة؟", "This unlinks the account from its old Firebase login. You'll then delete the old login in Firebase and set a new password (4 steps will be shown). No other data is affected. Continue?")}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Btn small tone="danger" onClick={resetLoginForAccount}>{t("نعم، أعيدي التهيئة", "Yes, reset")}</Btn>
+                    <Btn small tone="secondary" onClick={() => setResetLoginConfirm(false)}>{t("إلغاء", "Cancel")}</Btn>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           {editingId && users.find((u) => u.id === editingId)?.authUid && (
             <div style={{ fontSize: 11, color: COLORS.brick, marginTop: -8, marginBottom: 4 }}>
               ⚠️{" "}
