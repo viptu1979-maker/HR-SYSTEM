@@ -1009,7 +1009,13 @@ function isSaudiNationality(v) {
   return s === "سعودي" || s === "السعودية" || s === "سعودية" || s.toLowerCase() === "saudi" || s.toLowerCase() === "sa";
 }
 const CONTRACT_TYPE_LABELS_EN = { "محدد المدة": "Fixed-term", "غير محدد المدة": "Unlimited" };
-const LEAVE_TYPE_LABELS_EN = { "سنوية": "Annual", "مرضية": "Sick", "طارئة": "Emergency", "بدون راتب": "Unpaid", "أخرى": "Other" };
+const LEAVE_EARLY_EXIT = "استئذان خروج مبكر";
+const LEAVE_TYPE_LABELS_EN = { "سنوية": "Annual", "مرضية": "Sick", "طارئة": "Emergency", "بدون راتب": "Unpaid", "أخرى": "Other", [LEAVE_EARLY_EXIT]: "Early Exit Permission" };
+/* نص "متى" لطلب الإجازة: إجازة عادية = من → إلى، واستئذان الخروج المبكر = التاريخ + وقت الخروج المطلوب */
+const leaveRequestWhenLabel = (r, t) =>
+  r && r.type === LEAVE_EARLY_EXIT
+    ? `${r.from}${r.exitTime ? ` — ${t("الخروج الساعة", "Leaving at")} ${r.exitTime}` : ""}`
+    : `${r.from} → ${r.to}`;
 const LEAVE_REQUEST_STATUS_LABELS_EN = {
   "قيد المراجعة": "Pending Review",
   "موافقة مبدئية": "Preliminary Approved",
@@ -1679,6 +1685,1000 @@ function Btn({ children, onClick, tone = "primary", small, type = "button", disa
 }
 
 /* ============ التطبيق الرئيسي ============ */
+/* ============ جهاز الحضور المشترك (جوال/تابلت الفرع) ============
+   جهاز واحد في الفرع يفضل مفتوح على قائمة موظفي الفرع: كل موظف يضغط اسمه ← تحقق بالوجه ← يتسجّل حضوره أو
+   انصرافه تلقائيًا حسب حالة يومه. الجهاز بيفضل مسجّل دخول بحساب مدير/أدمن، لكن الشاشة ما بتعرض أي بيانات
+   شخصية (رواتب/طلبات/مهام) — بس أسماء الموظفين وحالة حضور اليوم. الخروج من الوضع ده يتطلب كلمة مرور الحساب. */
+const KIOSK_STORAGE_KEY = "hr-system-kiosk";
+
+/* بنخزّن الإعداد على الجهاز نفسه (مش في Firestore) عشان يخص الجهاز ده بس — ولازم يكون لنفس الحساب
+   المسجّل دخوله، فلو حد تاني سجّل دخول على نفس الجهاز ما يرثش وضع الجهاز المشترك */
+function readKioskSetting(accountId) {
+  try {
+    const raw = localStorage.getItem(KIOSK_STORAGE_KEY);
+    if (!raw) return "";
+    const v = JSON.parse(raw);
+    return v && v.accountId === accountId && v.branchId ? v.branchId : "";
+  } catch (e) {
+    return "";
+  }
+}
+function writeKioskSetting(accountId, branchId) {
+  try {
+    if (branchId) localStorage.setItem(KIOSK_STORAGE_KEY, JSON.stringify({ accountId, branchId }));
+    else localStorage.removeItem(KIOSK_STORAGE_KEY);
+  } catch (e) {
+    /* التخزين المحلي غير متاح (وضع خاص مثلًا) — الوضع يشتغل لحد إغلاق الصفحة بس */
+  }
+}
+
+/* موظفو الفرع اللي يظهروا في الجهاز المشترك: على رأس العمل فقط، فرعهم الأساسي أو أحد فروعهم الإضافية */
+function kioskEmployeesForBranch(employees, branchId) {
+  return (employees || []).filter(
+    (e) => e.status !== "منتهي الخدمة" && (e.branchId === branchId || (e.additionalBranchIds || []).includes(branchId))
+  );
+}
+
+/* قرار الجهاز لما موظف يضغط اسمه. بنرفض (بدل ما نتساهل) في حالتين عشان الجهاز مشترك ومفتوح لكل الناس:
+   - ما سجّلش بصمة وجهه: التسجيل الأول للوجه لازم يتم من حسابه الشخصي، وإلا أي موظف يقدر يضغط اسم زميله
+     ويسجّل وجهه هو مكان زميله
+   - التحقق بالوجه معطّل له: بدونه مفيش أي إثبات هوية، فأي شخص يقدر يسجّل حضور غيره بضغطة اسم */
+function kioskPickDecision(emp, stage) {
+  if (!emp) return { type: "blocked", reason: "noEmployee" };
+  if (emp.faceAttendanceEnabled === false) return { type: "blocked", reason: "faceDisabled" };
+  if (!emp.faceDescriptor) return { type: "blocked", reason: "noFace" };
+  if (stage === "done") return { type: "blocked", reason: "done" };
+  if (typeof stage === "string" && stage.startsWith("in")) return { type: "in" };
+  if (typeof stage === "string" && stage.startsWith("out")) return { type: "out" };
+  return { type: "blocked", reason: "unknown" };
+}
+
+/* الفروع اللي يقدر الحساب ده يحوّل الجهاز لها: مسؤول الفرع فرعه فقط، مدير الكيان فروع كيانه، والباقي (أدمن/مدير)
+   كل الفروع. حسابات الجودة والصيانة ما يظهرلهاش الخيار أصلًا */
+function kioskBranchesForUser(user, branches) {
+  const all = branches || [];
+  if (!user) return [];
+  if (user.role === "admin" || user.role === "manager") return all;
+  if (user.role === "entity_manager") return all.filter((b) => b.entityId === user.entityId);
+  if (user.role === "branch_manager") return all.filter((b) => b.id === user.branchId);
+  return [];
+}
+
+function KioskSetupModal({ branches, onStart, onClose }) {
+  const { t } = useLang();
+  const [branchId, setBranchId] = useState(branches.length === 1 ? branches[0].id : "");
+  return (
+    <div
+      className="no-print"
+      style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+    >
+      <div style={{ background: "#fff", borderRadius: 12, maxWidth: 400, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.35)", padding: 22 }}>
+        <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 15, marginBottom: 8 }}>
+          📱 {t("تحويل هذا الجهاز لجهاز حضور مشترك", "Turn this device into a shared attendance device")}
+        </div>
+        <div style={{ fontSize: 12, color: "#6b5a45", lineHeight: 1.7, marginBottom: 14 }}>
+          {t(
+            "هتظهر على الجهاز قائمة بموظفي الفرع، وكل موظف يضغط اسمه ويتحقق بوجهه عشان يسجّل حضوره أو انصرافه. الجهاز بيفضل في الوضع ده (حتى لو اتقفلت الصفحة) ولا يخرج منه إلا بكلمة مرور حسابك.",
+            "The device will show the branch's employee list; each employee taps their name and verifies with their face to check in or out. It stays in this mode (even if the page is closed) and only exits with your account password."
+          )}
+        </div>
+        <div style={{ fontSize: 12, fontWeight: 700, color: COLORS.espresso, marginBottom: 4 }}>{t("الفرع", "Branch")}</div>
+        <select style={{ ...inputStyle, width: "100%", marginBottom: 16 }} value={branchId} onChange={(e) => setBranchId(e.target.value)}>
+          <option value="">{t("— اختاري الفرع —", "— Select a branch —")}</option>
+          {branches.map((b) => (
+            <option key={b.id} value={b.id}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+          <Btn tone="secondary" onClick={onClose}>
+            {t("إلغاء", "Cancel")}
+          </Btn>
+          <Btn onClick={() => branchId && onStart(branchId)} disabled={!branchId}>
+            {t("ابدأ الوضع المشترك", "Start shared mode")}
+          </Btn>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KioskAttendanceView({ branchId, branches, employees, attendance, setAttendance, setEmployees, logActivity, loaded, dirty, saving, syncError, onSave, onExit }) {
+  const { t } = useLang();
+  const [search, setSearch] = useState("");
+  const [selectedId, setSelectedId] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [, setTick] = useState(0);
+  const [showExit, setShowExit] = useState(false);
+  const [exitPw, setExitPw] = useState("");
+  const [exitErr, setExitErr] = useState("");
+  const [exitBusy, setExitBusy] = useState(false);
+  const selectedEmp = employees.find((e) => e.id === selectedId) || null;
+  const clock = useAttendanceClock({ myEmployee: selectedEmp, attendance, setAttendance, setEmployees, branches, logActivity, t });
+  const requestedRef = useRef(null);
+  const startedAtRef = useRef(0);
+  const branch = branches.find((b) => b.id === branchId);
+
+  /* تحميل نماذج الوجه مبكرًا (زي شاشة الموظف) عشان التحقق يبدأ فورًا لما الموظف يضغط اسمه */
+  useEffect(() => {
+    loadFaceModels().catch(() => {});
+  }, []);
+  /* تحديث الساعة وحالات اليوم كل 20 ثانية */
+  useEffect(() => {
+    const id = setInterval(() => setTick((x) => x + 1), 20000);
+    return () => clearInterval(id);
+  }, []);
+
+  const resetSelection = () => {
+    requestedRef.current = null;
+    setSelectedId(null);
+  };
+
+  const pick = (emp) => {
+    if (selectedId) return;
+    clock.setGeoError("");
+    const stage = clock.attendanceStage(clock.findOpenAttendanceRecord(emp.id), emp);
+    const decision = kioskPickDecision(emp, stage);
+    if (decision.type === "blocked") {
+      const texts = {
+        faceDisabled: t(
+          `التحقق بالوجه معطّل لـ ${emp.name} — سجّل حضورك من حسابك الشخصي.`,
+          `Face verification is disabled for ${emp.name} — please check in from your personal account.`
+        ),
+        noFace: t(
+          `${emp.name}: لم تسجّل بصمة وجهك بعد. سجّلها أول مرة من حسابك الشخصي على جوالك، وبعدها تقدر تستخدم الجهاز المشترك.`,
+          `${emp.name}: you haven't registered your face yet. Register it once from your personal account on your phone, then you can use the shared device.`
+        ),
+        done: t(`${emp.name}: سجّلت حضورك وانصرافك لليوم بالكامل.`, `${emp.name}: you've completed all of today's check-ins and check-outs.`),
+        unknown: t("تعذّر تحديد حالة دوامك اليوم.", "Couldn't determine your attendance status for today."),
+        noEmployee: t("الموظف غير موجود.", "Employee not found."),
+      };
+      setNotice({ kind: "error", text: texts[decision.reason] || texts.unknown });
+      return;
+    }
+    setNotice(null);
+    startedAtRef.current = Date.now();
+    setSelectedId(emp.id);
+  };
+
+  /* بعد ما الاختيار يتثبّت في الـ state (والـ hook يشوف الموظف الجديد) نطلب الحضور/الانصراف المناسب */
+  useEffect(() => {
+    if (!selectedEmp || requestedRef.current === selectedEmp.id) return;
+    requestedRef.current = selectedEmp.id;
+    const stage = clock.attendanceStage(clock.findOpenAttendanceRecord(selectedEmp.id), selectedEmp);
+    if (stage.startsWith("in")) clock.requestClockIn();
+    else if (stage.startsWith("out")) clock.requestClockOut();
+    // eslint-disable-next-line
+  }, [selectedId]);
+
+  /* نجاح التسجيل */
+  useEffect(() => {
+    if (!clock.lastAction || !selectedEmp) return;
+    if (clock.lastAction.at < startedAtRef.current) return;
+    const d = new Date();
+    const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    const isIn = clock.lastAction.kind === "in";
+    setNotice({
+      kind: "success",
+      text: isIn
+        ? t(`✓ تم تسجيل حضور ${selectedEmp.name} الساعة ${time}`, `✓ ${selectedEmp.name} checked in at ${time}`)
+        : t(`✓ تم تسجيل انصراف ${selectedEmp.name} الساعة ${time}`, `✓ ${selectedEmp.name} checked out at ${time}`),
+    });
+    resetSelection();
+    // eslint-disable-next-line
+  }, [clock.lastAction]);
+
+  /* فشل (خارج نطاق الفرع، رفض إذن الموقع، فترة الراحة...) */
+  useEffect(() => {
+    if (clock.geoError && selectedId) {
+      setNotice({ kind: "error", text: clock.geoError });
+      resetSelection();
+    }
+    // eslint-disable-next-line
+  }, [clock.geoError]);
+
+  /* شبكة أمان: لو الاختيار فضل معلّق بعد التحقق من الوجه من غير نتيجة (نجاح أو خطأ)، نرجّع الشاشة للقائمة
+     بدل ما تفضل عالقة على الجهاز المشترك */
+  useEffect(() => {
+    if (!selectedId || clock.faceModal) return;
+    const id = setTimeout(() => {
+      setNotice({ kind: "error", text: t("تعذّر إكمال التسجيل — حاول مرة أخرى.", "Couldn't complete the check — please try again.") });
+      resetSelection();
+    }, 45000);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line
+  }, [selectedId, clock.faceModal]);
+
+  /* رسالة النجاح تختفي لوحدها */
+  useEffect(() => {
+    if (!notice || notice.kind !== "success") return;
+    const id = setTimeout(() => setNotice(null), 6000);
+    return () => clearTimeout(id);
+  }, [notice]);
+
+  const tryExit = async () => {
+    setExitErr("");
+    if (!exitPw.trim()) return;
+    if (!auth.currentUser) {
+      setExitErr(t("لا توجد جلسة دخول نشطة.", "No active sign-in session."));
+      return;
+    }
+    setExitBusy(true);
+    try {
+      const cred = firebase.auth.EmailAuthProvider.credential(auth.currentUser.email, padPasswordForAuth(exitPw));
+      await auth.currentUser.reauthenticateWithCredential(cred);
+      setExitBusy(false);
+      onExit();
+    } catch (e) {
+      setExitBusy(false);
+      setExitErr(
+        e && (e.code === "auth/wrong-password" || e.code === "auth/invalid-credential" || e.code === "auth/invalid-login-credentials")
+          ? t("كلمة المرور غير صحيحة", "Incorrect password")
+          : t("تعذّر التحقق — تأكد من الاتصال بالإنترنت وحاول مرة أخرى", "Couldn't verify — check your connection and try again")
+      );
+    }
+  };
+
+  const q = search.trim().toLowerCase();
+  const list = kioskEmployeesForBranch(employees, branchId)
+    .filter((e) => !q || String(e.name || "").toLowerCase().includes(q))
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ar"));
+  const now = new Date();
+  const clockText = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+
+  const statusOf = (emp) => {
+    const stage = clock.attendanceStage(clock.findOpenAttendanceRecord(emp.id), emp);
+    if (stage === "done") return { label: t("أنهى دوامه", "Done for today"), bg: "#EEE9DD", color: "#8a7a63" };
+    if (stage.startsWith("out")) return { label: t("حاضر — اضغط للانصراف", "Present — tap to check out"), bg: COLORS.greenBg, color: COLORS.green };
+    return { label: t("اضغط لتسجيل الحضور", "Tap to check in"), bg: "#fff", color: COLORS.coffee };
+  };
+
+  return (
+    <div
+      dir="rtl"
+      style={{ fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", background: COLORS.paper, minHeight: "100vh", color: COLORS.ink, padding: "16px 14px 28px" }}
+    >
+      <div style={{ maxWidth: 900, margin: "0 auto" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10, marginBottom: 14 }}>
+          <div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: COLORS.espresso }}>📱 {t("جهاز الحضور", "Attendance Device")}</div>
+            <div style={{ fontSize: 13, color: "#8a7a63", marginTop: 2 }}>{branch ? branch.name : t("فرع غير معروف", "Unknown branch")}</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: COLORS.coffee, direction: "ltr" }}>{clockText}</div>
+            <SaveStatusIcon saving={saving} syncError={syncError} dirty={dirty} onSave={onSave} compact />
+            <LangToggle />
+          </div>
+        </div>
+
+        {notice && (
+          <div
+            role="status"
+            style={{
+              background: notice.kind === "success" ? COLORS.greenBg : COLORS.brickBg,
+              border: `1px solid ${notice.kind === "success" ? COLORS.green : COLORS.brick}`,
+              color: notice.kind === "success" ? COLORS.green : COLORS.brick,
+              borderRadius: 10,
+              padding: "14px 16px",
+              fontSize: 15,
+              fontWeight: 700,
+              marginBottom: 14,
+            }}
+          >
+            {notice.text}
+          </div>
+        )}
+
+        {!loaded ? (
+          <div style={{ textAlign: "center", color: "#8a7a63", padding: 40 }}>{t("جارِ تحميل قائمة الموظفين...", "Loading the employee list...")}</div>
+        ) : (
+          <>
+            <input
+              style={{ ...inputStyle, width: "100%", marginBottom: 14, fontSize: 15, padding: "12px 14px" }}
+              placeholder={t("🔍 ابحث باسمك...", "🔍 Search your name...")}
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+            {list.length === 0 ? (
+              <div style={{ textAlign: "center", color: "#8a7a63", padding: 30 }}>
+                {t("لا يوجد موظفون مطابقون في هذا الفرع.", "No matching employees in this branch.")}
+              </div>
+            ) : (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>
+                {list.map((emp) => {
+                  const st = statusOf(emp);
+                  return (
+                    <button
+                      key={emp.id}
+                      onClick={() => pick(emp)}
+                      disabled={!!selectedId}
+                      style={{
+                        background: st.bg,
+                        border: `1px solid ${COLORS.line}`,
+                        borderRadius: 12,
+                        padding: "16px 10px",
+                        minHeight: 84,
+                        cursor: selectedId ? "not-allowed" : "pointer",
+                        opacity: selectedId ? 0.55 : 1,
+                        textAlign: "center",
+                        color: COLORS.espresso,
+                      }}
+                    >
+                      <div style={{ fontSize: 15, fontWeight: 800, lineHeight: 1.4 }}>{emp.name}</div>
+                      <div style={{ fontSize: 11.5, color: st.color, marginTop: 6, fontWeight: 600 }}>{st.label}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+
+        <div style={{ marginTop: 28, textAlign: "center" }}>
+          <Btn tone="secondary" small onClick={() => { setShowExit(true); setExitPw(""); setExitErr(""); }}>
+            🔒 {t("خروج من وضع الجهاز المشترك", "Exit shared-device mode")}
+          </Btn>
+        </div>
+      </div>
+
+      {clock.faceModal && selectedEmp && (
+        <FaceCheckModal
+          employee={selectedEmp}
+          onCancel={() => {
+            clock.handleFaceCancel();
+            resetSelection();
+          }}
+          onVerified={clock.handleFaceVerified}
+        />
+      )}
+
+      {selectedId && !clock.faceModal && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 65, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+        >
+          <div style={{ background: "#fff", borderRadius: 12, padding: "22px 26px", fontWeight: 700, color: COLORS.espresso, fontSize: 15, textAlign: "center" }}>
+            {clock.geoBusy
+              ? t("جارِ تحديد موقعك...", "Getting your location...")
+              : t(`جارِ تسجيل ${selectedEmp ? selectedEmp.name : ""}...`, `Recording ${selectedEmp ? selectedEmp.name : ""}...`)}
+          </div>
+        </div>
+      )}
+
+      {showExit && (
+        <div
+          style={{ position: "fixed", inset: 0, background: "rgba(36,24,17,0.55)", zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+        >
+          <div style={{ background: "#fff", borderRadius: 12, maxWidth: 360, width: "100%", boxShadow: "0 20px 60px rgba(0,0,0,0.35)", padding: 22 }}>
+            <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 15, marginBottom: 6 }}>
+              {t("الخروج من وضع الجهاز المشترك", "Exit shared-device mode")}
+            </div>
+            <div style={{ fontSize: 12, color: "#6b5a45", marginBottom: 12 }}>
+              {t("اكتب كلمة مرور الحساب المسجّل دخوله على هذا الجهاز.", "Enter the password of the account signed in on this device.")}
+            </div>
+            <input
+              type="password"
+              style={{ ...inputStyle, width: "100%", marginBottom: 8 }}
+              value={exitPw}
+              onChange={(e) => setExitPw(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") tryExit();
+              }}
+              autoFocus
+            />
+            {exitErr && <div style={{ background: COLORS.brickBg, color: COLORS.brick, padding: "8px 10px", borderRadius: 8, fontSize: 12.5, marginBottom: 8 }}>{exitErr}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <Btn tone="secondary" onClick={() => setShowExit(false)}>
+                {t("إلغاء", "Cancel")}
+              </Btn>
+              <Btn onClick={tryExit} disabled={exitBusy}>
+                {exitBusy ? t("جارِ التحقق...", "Verifying...") : t("خروج", "Exit")}
+              </Btn>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============ منطق تسجيل الحضور/الانصراف (مستخرج كـ hook) ============
+   كان داخل شاشة الموظف مباشرة ومربوطًا بـ"الموظف المسجّل دخوله". اتنقل هنا حرفيًا (بدون تغيير في الحسابات)
+   عشان يشتغل لأي موظف يُمرَّر له — شاشة الموظف الشخصية بتمرّر موظفها، وشاشة "جهاز الحضور المشترك" بتمرّر
+   الموظف اللي اختاره من القائمة. أي إصلاح لحسابات الحضور (تأخير/إضافي/دوامين...) يبقى في مكان واحد بس */
+function useAttendanceClock({ myEmployee, attendance, setAttendance, setEmployees, branches, logActivity: logActivityRaw, t }) {
+    /* آخر عملية حضور/انصراف نجحت فعليًا (بيستخدمها الجهاز المشترك لإظهار رسالة التأكيد) */
+    const [lastAction, setLastAction] = useState(null);
+    const logActivity = (action, section, detail) => {
+      if (typeof action === "string" && (action.startsWith("تسجيل حضور") || action.startsWith("تسجيل انصراف"))) {
+        setLastAction({ kind: action.startsWith("تسجيل حضور") ? "in" : "out", action, detail, at: Date.now() });
+      }
+      logActivityRaw && logActivityRaw(action, section, detail);
+    };
+
+    /* لازم تكون دالة (تُستدعى وقت الحاجة الفعلية) مش قيمة ثابتة محسوبة مرة واحدة وقت الـ render —
+       لو الموظف سايب صفحة تسجيل الحضور مفتوحة من يوم سابق (تابلت مشترك عند الباب مثلًا) من غير ما
+       تحصل أي إعادة render للصفحة من نص الليل، أي كود جوه closure بصمّ على القيمة القديمة لـ"اليوم"
+       لحد ما يحصل render جديد، حتى لو ضغط الموظف فعليًا بعد منتصف الليل بساعات. ده بالظبط كان بيسبب
+       حفظ تسجيل حضور بتاريخ "أمس" بدل اليوم الفعلي، رغم إن وقت الحضور (نفسه محسوب بدالة nowTimeStr
+       فعلًا وقت الاستدعاء) كان صحيحًا — بلاغ المستخدمة: موظفة سجّلت حضورها الساعة 7:47 صباحًا لكن
+       انحفظ السجل بتاريخ أمس.
+       مهم إضافي: لازم تستخدم التاريخ المحلي (مش toISOString اللي يرجع تاريخ UTC) — السعودية
+       +3 ساعات عن UTC، فلو استخدمنا toISOString أي حضور بين 12:00 منتصف الليل و 3:00 فجرًا بالتوقيت
+       المحلي كان هيتسجل بتاريخ "أمس" برضو (لأن تاريخ UTC وقتها لسه ما اتغيّرش)، بالظبط نفس خلل
+       الإغلاق القديم بس بسبب مختلف. fmtISODate بيستخدم getFullYear/getMonth/getDate المحلية فعلًا */
+    const todayISO = () => fmtISODate(new Date());
+    const nowTimeStr = () => {
+      const d = new Date();
+      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    };
+    const minutesOf = (hhmm) => {
+      const [h, m] = (hhmm || "00:00").split(":").map(Number);
+      return h * 60 + m;
+    };
+    /* Firestore يرفض القيم "undefined" بالكامل (خطأ invalid-argument) — بعض متصفحات الموبايل بترجّع
+       دقة الموقع (accuracy) أو حقول تانية بقيمة undefined أحيانًا. نضمن هنا إن كل حقل يبقى رقم حقيقي
+       أو null (Firestore بيقبل null عادي) قبل ما نحفظه أبدًا */
+    const sanitizeLocation = (c) => ({
+      lat: c?.lat ?? null,
+      lng: c?.lng ?? null,
+      distance: c?.distance ?? null,
+      accuracy: c?.accuracy ?? null,
+    });
+    /* لو الموظف بصم حضور وفضل شغال لحد بعد منتصف الليل، وقت ما يجي يبصم انصراف بيكون التاريخ اتغيّر
+       (يوم جديد) — فنفتش كمان عن سجل أمس المفتوح (له حضور بدون انصراف) بدل ما نفترض إنه محتاج
+       يسجّل حضور جديد من الأول */
+    /* سجل "مفتوح" (فيه حضور بدون انصراف بعد) — لموظفي الدوامات المتعددة (segments) بنفحص آخر فترة بس،
+       ولباقي الموظفين (الموديل الثابت القديم) بنفحص checkInTime/checkOutTime العاديين زي ما كان */
+    const hasOpenPeriod = (rec) => {
+      if (!rec) return false;
+      if (Array.isArray(rec.segments) && rec.segments.length) {
+        const last = rec.segments[rec.segments.length - 1];
+        return !!(last.checkInTime && !last.checkOutTime);
+      }
+      return !!(rec.checkInTime && !rec.checkOutTime);
+    };
+    const findOpenAttendanceRecord = (empId) => {
+      const todayRec = attendance.find((a) => a.employeeId === empId && a.date === todayISO());
+      if (todayRec) return todayRec;
+      const y = new Date();
+      y.setDate(y.getDate() - 1);
+      const yesterdayISO = fmtISODate(y);
+      /* لازم checkInTime يكون فعلاً موجود عشان يُعتبر دوام ليلي مفتوح فعليًا — وإلا سجل أمس (زي سجل
+         "حاضر" مُضاف يدويًا أو جماعيًا بدون وقت حضور) هيتفهم غلط إنه دوام ليلي متواصل لحد النهاردة */
+      const openYesterday = attendance.find((a) => a.employeeId === empId && a.date === yesterdayISO && hasOpenPeriod(a));
+      return openYesterday || null;
+    };
+    /* يحوّل وقت الانصراف لدقائق مع مراعاة عبوره منتصف الليل (لو أصغر رقميًا من وقت الحضور، معناه
+       اليوم اتغيّر فعليًا، فنضيفله 24 ساعة عشان الفرق يطلع صحيح مش رقم سالب غريب) */
+    const minutesOfCheckoutAdjusted = (checkoutStr, checkInStr) => {
+      let m = minutesOf(checkoutStr);
+      if (m < minutesOf(checkInStr || "00:00")) m += 24 * 60;
+      return m;
+    };
+
+    const [geoBusy, setGeoBusy] = useState(false);
+    const [geoError, setGeoError] = useState("");
+    /* "in" أو "out" أثناء انتظار تحقق الوجه، أو null لو الشاشة مقفولة */
+    const [faceModal, setFaceModal] = useState(null);
+    /* قفل مزامنة (ref مش state) يمنع تنفيذ clockIn/clockOut أكتر من مرة في نفس اللحظة — لو الموظف
+       ضغط زر الحضور أكتر من مرة بسرعة (ضغطتين/3 متتاليات، أو الشاشة اتأخرت في الاستجابة)، كل استدعاء
+       زيادة كان بيقرأ "already" (هل فيه سجل حضور اليوم) بنسخة قديمة لسه ما اتحدّثتش، فيضيف سجل حضور
+       جديد منفصل بدل ما يتجاهل الضغطة الزيادة — ده اللي كان بيسبب "تسجيل حضور 3 مرات" لنفس الموظف
+       ولا نفس اليوم. state (useState) مش كافي هنا لأن تحديثه مش فوري/متزامن، فاستخدمنا ref بدل كده
+       عشان القفل يتفعّل فورًا من أول سطر قبل أي await */
+    const clockActionBusyRef = useRef(false);
+
+    /* لموظفين يشتغلوا على أكتر من فرع: بيتفحص موقعهم مقابل كل فروعهم (الأساسي + الإضافية)،
+       وبينجح التسجيل لو كانوا داخل نطاق أي فرع منهم — مع تسجيل الفرع الفعلي اللي سجّلوا منه */
+    const verifyAtAnyBranch = async (branchIds) => {
+      const validBranches = branchIds.map((id) => branches.find((b) => b.id === id)).filter((b) => b && b.lat != null && b.lng != null);
+      if (validBranches.length === 0) {
+        return {
+          ok: false,
+          message: t(
+            "لم يتم تحديد موقع أي من فروعك بعد — تواصل مع الإدارة لضبط مواقع الفروع من تبويب \"الكيانات والفروع\".",
+            "None of your branches have a location set yet — contact management to set them from the \"Entities & Branches\" tab."
+          ),
+        };
+      }
+      let pos;
+      try {
+        pos = await getCurrentPosition();
+      } catch (err) {
+        if (err && err.code === 1) {
+          return { ok: false, message: t("تم رفض إذن الوصول للموقع. فعّل خدمة الموقع للمتصفح من إعدادات جهازك وحاول مرة أخرى.", "Location permission was denied. Enable location access for the browser in your device settings and try again.") };
+        }
+        if (err && err.message === "NOT_SUPPORTED") {
+          return { ok: false, message: t("جهازك أو متصفحك لا يدعم تحديد الموقع.", "Your device or browser doesn't support geolocation.") };
+        }
+        return { ok: false, message: t("تعذّر تحديد موقعك. تأكد من تفعيل GPS ووجود اتصال، ثم حاول مرة أخرى.", "Couldn't get your location. Make sure GPS is enabled and you have a connection, then try again.") };
+      }
+      let closest = null;
+      for (const branch of validBranches) {
+        const dist = distanceMeters(pos.coords.latitude, pos.coords.longitude, branch.lat, branch.lng);
+        const radius = branch.radius || 150;
+        if (dist <= radius) {
+          return { ok: true, branchId: branch.id, lat: pos.coords.latitude, lng: pos.coords.longitude, distance: Math.round(dist), accuracy: pos.coords.accuracy };
+        }
+        if (!closest || dist < closest.dist) closest = { dist, branch, radius };
+      }
+      return {
+        ok: false,
+        message: t(
+          `أنت لست داخل نطاق أي من فروعك — أقرب فرع لك هو "${closest.branch.name}" وتبعد عنه ${Math.round(closest.dist)} متر تقريبًا (النطاق المسموح ${closest.radius} متر).`,
+          `You're not within range of any of your branches — the closest is "${closest.branch.name}", about ${Math.round(closest.dist)}m away (allowed range ${closest.radius}m).`
+        ),
+      };
+    };
+
+    /* تحديد المرحلة الحالية للحضور/الانصراف اليوم: حضور1/انصراف1/حضور2(دوامين)/انصراف2/تم.
+       مهم: سجل موجود بدون checkInTime (زي سجل "تسجيل حضور جماعي" أو إضافة يدوية من سجل الحضور
+       اليومي — كلاهما ينشئ السجل بدون وقت حضور فعلي) لازم يتعامل معه زي ما مفيش سجل أصلًا، وإلا
+       الموظف يفضل "عالق" في مرحلة انصراف لأبد وما يقدرش يسجّل حضوره الفعلي بنفسه من صفحته */
+    const attendanceStage = (rec, emp) => {
+      /* دوامات متعددة بعدد غير محدد: مفيش حالة "تم" نهائية — طالما آخر فترة مقفولة (فيها انصراف)
+         فهو جاهز يسجّل فترة جديدة (inN)، ولو آخر فترة لسه مفتوحة فهو جاهز يسجّل انصرافها (outN) */
+      if (emp?.multiShift) {
+        const segs = (rec && Array.isArray(rec.segments)) ? rec.segments : [];
+        const last = segs[segs.length - 1];
+        return !last || last.checkOutTime ? "inN" : "outN";
+      }
+      if (!rec || !rec.checkInTime) return "in1";
+      if (!rec.checkOutTime) return "out1";
+      if (!emp?.twoShifts) return "done";
+      if (!rec.checkInTime2) return "in2";
+      if (!rec.checkOutTime2) return "out2";
+      return "done";
+    };
+
+    /* عدد الدقائق اللي مرّت من تاريخ/وقت معيّن (مثل انصراف الفترة الصباحية) لحد دلوقتي — بنستخدم
+       تاريخ ووقت حقيقيين (مش مجرد فرق دقائق اليوم) عشان يبقى صحيح حتى لو الانصراف كان قريب من
+       منتصف الليل */
+    const minutesSinceDateTime = (dateStr, timeStr) => {
+      if (!dateStr || !timeStr) return Infinity;
+      const [h, m] = timeStr.split(":").map(Number);
+      const then = new Date(dateStr + "T00:00:00");
+      then.setHours(h, m, 0, 0);
+      return Math.round((Date.now() - then.getTime()) / 60000);
+    };
+
+    const clockIn = async (facePhoto) => {
+      if (!myEmployee) return;
+      if (clockActionBusyRef.current) return;
+      const already = findOpenAttendanceRecord(myEmployee.id);
+      const stage = attendanceStage(already, myEmployee);
+      /* موظف دوامات متعددة بعدد غير محدد: فرع منفصل بالكامل عن منطق الدوامين الثابت تحت — بيضيف فترة
+         (segment) جديدة بدل ما يملأ checkInTime/checkInTime2 الثابتين */
+      if (myEmployee.multiShift) {
+        if (stage !== "inN") return;
+        const segsSoFar = (already && Array.isArray(already.segments)) ? already.segments : [];
+        const lastClosedSeg = segsSoFar[segsSoFar.length - 1];
+        if (lastClosedSeg && lastClosedSeg.checkOutTime) {
+          const minutesSinceBreakStart = minutesSinceDateTime(already.date, lastClosedSeg.checkOutTime);
+          if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
+            const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
+            setGeoError(
+              t(
+                `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل قبل ما تقدر تسجّل حضور الفترة الجديدة — باقي ${remaining} دقيقة تقريبًا.`,
+                `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break before you can check in for the new period — about ${remaining} more minute(s) to go.`
+              )
+            );
+            return;
+          }
+        }
+        clockActionBusyRef.current = true;
+        try {
+          setGeoError("");
+          setGeoBusy(true);
+          const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
+          const check = await verifyAtAnyBranch(myBranchIds);
+          setGeoBusy(false);
+          if (!check.ok) {
+            setGeoError(check.message);
+            return;
+          }
+          const timeStr = nowTimeStr();
+          const checkInBranchName = branches.find((b) => b.id === check.branchId)?.name || "";
+          const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
+          const newSegment = {
+            branchId: check.branchId,
+            checkInTime: timeStr,
+            checkInLocation: sanitizeLocation(check),
+            checkInPhoto: uploadedPhotoUrl,
+            checkOutTime: "",
+          };
+          if (already) {
+            setAttendance((prev) =>
+              prev.map((a) => (a.id === already.id ? { ...a, segments: [...(a.segments || []), newSegment], status: "حاضر" } : a))
+            );
+          } else {
+            setAttendance((prev) => [
+              ...prev,
+              {
+                id: uid(),
+                employeeId: myEmployee.id,
+                date: todayISO(),
+                status: "حاضر",
+                lateMinutes: 0,
+                overtimeHours: 0,
+                shortfallMinutes: 0,
+                earlyLeaveMinutes: 0,
+                segments: [newSegment],
+              },
+            ]);
+          }
+          logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
+        } finally {
+          clockActionBusyRef.current = false;
+        }
+        return;
+      }
+      if (stage !== "in1" && stage !== "in2") return;
+      /* دوامين في اليوم: لازم تمر فترة راحة حقيقية بعد انصراف الفترة الصباحية قبل ما يقدر يسجّل حضور
+         الفترة المسائية — يمنع تسجيل انصراف وحضور بفارق دقيقة واحدة بدون أي استراحة فعلية (بلاغ
+         المستخدمة: موظف سجّل الفترتين بفارق دقيقة واحدة بس) */
+      if (stage === "in2" && already) {
+        const minutesSinceBreakStart = minutesSinceDateTime(already.date, already.checkOutTime);
+        if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
+          const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
+          setGeoError(
+            t(
+              `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل بعد انصراف الفترة الصباحية قبل ما تقدر تسجّل حضور الفترة المسائية — باقي ${remaining} دقيقة تقريبًا.`,
+              `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break after your morning check-out before you can check in for the evening shift — about ${remaining} more minute(s) to go.`
+            )
+          );
+          return;
+        }
+      }
+      clockActionBusyRef.current = true;
+      try {
+      setGeoError("");
+      setGeoBusy(true);
+      const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
+      const check = await verifyAtAnyBranch(myBranchIds);
+      setGeoBusy(false);
+      if (!check.ok) {
+        setGeoError(check.message);
+        return;
+      }
+      const timeStr = nowTimeStr();
+      const checkInBranchName = branches.find((b) => b.id === check.branchId)?.name || "";
+      /* الصورة تُرفع على Firebase Storage (مش تُخزَّن كنص base64 جوّه Firestore) — عشان ما تتسبّبش في
+         تضخيم مستند البيانات لحد ما يتخطى حد Firestore (1 ميجابايت) ويوقف كل عمليات الحفظ للجميع */
+      const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
+      if (stage === "in1") {
+        /* الدوام الحر: بدون وقت دخول محدد — دايمًا "حاضر"، النقص أو الزيادة في الساعات يُحتسب وقت الانصراف
+           بناءً على إجمالي الساعات الفعلية بدل وقت دخول ثابت. وكمان لو داوم في يوم إجازته الأسبوعية، ما
+           فيش وقت دخول مقرَّر أصلاً، فمايتحسبش عليه تأخير إطلاقًا */
+        const todayDayName = JS_DAY_INDEX_TO_AR[new Date().getDay()];
+        const isOffDayToday = getOffDays(myEmployee).includes(todayDayName);
+        const shiftStart = effectiveShift(myEmployee, todayDayName).start;
+        const diff = (myEmployee.flexibleSchedule || isOffDayToday) ? 0 : minutesOf(timeStr) - minutesOf(shiftStart);
+        const lateMinutes = diff > LATE_EARLY_GRACE_MINUTES ? diff : 0;
+        /* لو already موجود هنا (سجل "حاضر" مُضاف يدويًا أو جماعيًا لنفس اليوم لكن بدون وقت حضور فعلي)،
+           نكمّل عليه بنفس الـ id بدل ما ننشئ سجل تاني منفصل — وإلا يتكرر سجل الحضور مرتين لنفس اليوم
+           ويتأثر أي تقرير/حساب راتب يفترض سجل واحد بس لكل موظف/يوم */
+        const rec = {
+          id: already ? already.id : uid(),
+          employeeId: myEmployee.id,
+          date: todayISO(),
+          status: lateMinutes > 0 ? "متأخر" : "حاضر",
+          lateMinutes,
+          overtimeHours: 0,
+          checkInTime: timeStr,
+          checkOutTime: "",
+          checkInTime2: "",
+          checkOutTime2: "",
+          branchId: check.branchId,
+          checkInLocation: sanitizeLocation(check),
+          checkInPhoto: uploadedPhotoUrl,
+        };
+        if (already) {
+          setAttendance((prev) => prev.map((a) => (a.id === already.id ? rec : a)));
+        } else {
+          setAttendance((prev) => [...prev, rec]);
+        }
+        logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
+      } else {
+        const shiftStart2 = myEmployee.workShift2?.start || "17:00";
+        const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart2);
+        const lateMinutes2 = diff > LATE_EARLY_GRACE_MINUTES ? diff : 0;
+        setAttendance((prev) =>
+          prev.map((a) =>
+            a.id === already.id
+              ? { ...a, checkInTime2: timeStr, lateMinutes2, checkInLocation2: sanitizeLocation(check), checkInPhoto2: uploadedPhotoUrl }
+              : a
+          )
+        );
+        logActivity && logActivity("تسجيل حضور - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
+      }
+      } finally {
+        clockActionBusyRef.current = false;
+      }
+    };
+
+    const clockOut = async (facePhoto) => {
+      if (!myEmployee) return;
+      if (clockActionBusyRef.current) return;
+      const rec = findOpenAttendanceRecord(myEmployee.id);
+      if (!rec) return;
+      const stage = attendanceStage(rec, myEmployee);
+      if (myEmployee.multiShift) {
+        if (stage !== "outN") return;
+        clockActionBusyRef.current = true;
+        try {
+          setGeoError("");
+          setGeoBusy(true);
+          const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
+          const check = await verifyAtAnyBranch(myBranchIds);
+          setGeoBusy(false);
+          if (!check.ok) {
+            setGeoError(check.message);
+            return;
+          }
+          const timeStr = nowTimeStr();
+          const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
+          const segs = Array.isArray(rec.segments) ? rec.segments : [];
+          const lastIdx = segs.length - 1;
+          const updatedSegs = segs.map((s, i) =>
+            i === lastIdx ? { ...s, checkOutTime: timeStr, checkOutLocation: sanitizeLocation(check), checkOutPhoto: uploadedPhotoUrl } : s
+          );
+          /* مدة الفترة الواحدة بالدقائق (مع مراعاة عبور منتصف الليل)، ثم مجموع كل فترات اليوم مع بعض —
+             بنحسبه كدوام حر دايمًا (مفيش وقت دخول/خروج ثابت لأي فترة من فترات موظف متعدد الدوامات) */
+          const segMinutes = (s) => (s.checkInTime && s.checkOutTime ? minutesOfCheckoutAdjusted(s.checkOutTime, s.checkInTime) - minutesOf(s.checkInTime) : 0);
+          const totalWorkedMinutes = updatedSegs.reduce((sum, s) => sum + segMinutes(s), 0);
+          const workDayName = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO()) + "T00:00:00").getDay()];
+          const isOffDayWork = getOffDays(myEmployee).includes(workDayName);
+          let shortfallMinutes = 0;
+          let overtimeHours = 0;
+          if (isOffDayWork) {
+            overtimeHours = totalWorkedMinutes > 0 ? Math.min(12, Math.round((totalWorkedMinutes / 60) * 2) / 2) : 0;
+          } else {
+            const requiredMinutes = dailyWorkHours(myEmployee) * 60;
+            shortfallMinutes = totalWorkedMinutes < requiredMinutes ? requiredMinutes - totalWorkedMinutes : 0;
+            overtimeHours = totalWorkedMinutes > requiredMinutes ? Math.min(12, Math.round(((totalWorkedMinutes - requiredMinutes) / 60) * 2) / 2) : 0;
+          }
+          setAttendance((prev) =>
+            prev.map((a) => (a.id === rec.id ? { ...a, segments: updatedSegs, shortfallMinutes, overtimeHours } : a))
+          );
+          logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+        } finally {
+          clockActionBusyRef.current = false;
+        }
+        return;
+      }
+      if (stage !== "out1" && stage !== "out2") return;
+      clockActionBusyRef.current = true;
+      try {
+      setGeoError("");
+      setGeoBusy(true);
+      const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
+      const check = await verifyAtAnyBranch(myBranchIds);
+      setGeoBusy(false);
+      if (!check.ok) {
+        setGeoError(check.message);
+        return;
+      }
+      const timeStr = nowTimeStr();
+      const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
+      if (stage === "out1") {
+        let overtimeHours = 0;
+        let shortfallMinutes = 0;
+        let earlyLeaveMinutes = 0;
+        /* وقت الانصراف بالدقائق، مع تصحيح عبور منتصف الليل (لو انصرف بعد الساعة 12 ليلاً في يوم تالٍ،
+           يطلع رقمه أصغر من وقت الحضور، فنضيفله 24 ساعة عشان الفرق يُحسب صح مش يطلع سالب/غريب) */
+        const checkoutMinutesAdj = minutesOfCheckoutAdjusted(timeStr, rec.checkInTime);
+        /* لو داوم في يوم إجازته الأسبوعية (يوم مو مطلوب منه يشتغل فيه أصلاً)، كل الوقت اللي شغله يُحتسب
+           وقت إضافي بالكامل — بدون تأخير ولا خروج مبكر، لأنه مالوش وقت دوام محدد أصلاً هذا اليوم */
+        const workDayName = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO()) + "T00:00:00").getDay()];
+        const isOffDayWork = getOffDays(myEmployee).includes(workDayName);
+        if (isOffDayWork) {
+          const workedMinutes = checkoutMinutesAdj - minutesOf(rec.checkInTime || timeStr);
+          overtimeHours = workedMinutes > 0 ? Math.min(12, Math.round((workedMinutes / 60) * 2) / 2) : 0;
+        } else if (myEmployee.flexibleSchedule && myEmployee.twoShifts) {
+          /* دوام حر مقسوم لفترتين (صباحية ومسائية): انصراف الفترة الصباحية هنا مش نهاية يومه الفعلية —
+             لسه هيرجع يبصم حضور المسائية ويكمّل باقي ساعاته. لو احتسبنا "نقص ساعات" هنا بناءً على
+             فترة الصباح لوحدها، هيظهر نقص وهمي حتى لو الموظف كمّل 8 الساعات كاملة آخر يومه بعد
+             الفترة المسائية. فبنأجّل احتساب النقص/الإضافي النهائي لحد انصراف الفترة المسائية (out2)
+             اللي فيها بنجمع ساعات الفترتين مع بعض ونقارنها بـ 8 الساعات المطلوبة دفعة واحدة */
+          shortfallMinutes = 0;
+          overtimeHours = 0;
+        } else if (myEmployee.flexibleSchedule) {
+          /* دوام حر بفترة واحدة فقط: نحسب إجمالي الساعات الفعلية بين الحضور والانصراف — أي نقص عن عدد
+             ساعات دوامه المطلوبة فعليًا (8 أو 10 أو 12 ساعة حسب وقت دوامه المسجَّل في ملفه) يُخصم، وأي
+             زيادة تُحتسب وقت إضافي */
+          const requiredMinutes = dailyWorkHours(myEmployee) * 60;
+          const workedMinutes = checkoutMinutesAdj - minutesOf(rec.checkInTime || timeStr);
+          shortfallMinutes = workedMinutes < requiredMinutes ? requiredMinutes - workedMinutes : 0;
+          overtimeHours = workedMinutes > requiredMinutes ? Math.min(12, Math.round(((workedMinutes - requiredMinutes) / 60) * 2) / 2) : 0;
+        } else {
+          /* مهم: نستخدم يوم بداية الدوام الفعلي (workDayName، المشتق من تاريخ سجل الحضور rec.date)
+             مش يوم التقويم الحالي وقت الضغط على "انصراف" — لأن الدوام الليلي يبدأ في يوم وينتهي
+             (وبالتالي يُسجَّل الانصراف) في اليوم التالي فعليًا. قبل هذا الإصلاح كان الكود يجيب دوام
+             "اليوم" الحالي (يوم الانصراف) بدل يوم الحضور الأصلي، فلو كان دوام الموظف يختلف من يوم
+             لآخر (useDaySchedules) أو كان يوم الانصراف نفسه يوم إجازته الأسبوعية، كان بيحسب خروج
+             مبكر/إضافي بأرقام غلط تمامًا (زي 719 دقيقة خروج مبكر لموظف دوامه الليلي طبيعي) */
+          const shiftInfo = effectiveShift(myEmployee, workDayName);
+          const shiftStartRaw = shiftInfo.start || "08:00";
+          /* دوام ليلي (وقت النهاية أصغر من أو يساوي وقت البداية، زي 16:00 → 00:00 أو 17:00 → 03:00)
+             يمتد فعليًا لليوم التالي — نضيف 24 ساعة لوقت النهاية عشان الفرق يُحسب صح مقابل وقت
+             الانصراف المعدَّل هو الآخر لعبور منتصف الليل، بدل ما يطلع خصم/إضافي وهمي كبير.
+             ده بيغطي حتى حالة "00:00" بالظبط (منتصف الليل) كوقت نهاية حقيقي، مش بس خطأ إدخال */
+          const shiftEnd = shiftInfo.end || "17:00";
+          let shiftEndMinutes = minutesOf(shiftEnd);
+          if (shiftEndMinutes <= minutesOf(shiftStartRaw)) shiftEndMinutes += 24 * 60;
+          const diff = checkoutMinutesAdj - shiftEndMinutes;
+          /* سقف أمان: أي وقت إضافي محسوب أكتر من 12 ساعة في اليوم غالبًا خطأ إعداد، مش وقت إضافي حقيقي */
+          overtimeHours = diff > 0 ? Math.min(12, Math.round((diff / 60) * 2) / 2) : 0;
+          /* لو انصرف قبل نهاية دوامه، نسجّل عدد دقائق الخروج المبكر (يُستخدم في خصم الراتب لاحقًا) —
+             السقف الأقصى هو عدد ساعات دوامه الفعلية اليومية، مش 8 ساعات ثابتة للجميع */
+          earlyLeaveMinutes = diff < -LATE_EARLY_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff) : 0;
+        }
+        setAttendance((prev) =>
+          prev.map((a) =>
+            a.id === rec.id
+              ? {
+                  ...a,
+                  checkOutTime: timeStr,
+                  overtimeHours,
+                  earlyLeaveMinutes,
+                  ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
+                  checkOutLocation: sanitizeLocation(check),
+                  checkOutPhoto: uploadedPhotoUrl,
+                }
+              : a
+          )
+        );
+        logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+      } else {
+        const workDayName2 = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO()) + "T00:00:00").getDay()];
+        const isOffDayWork2 = getOffDays(myEmployee).includes(workDayName2);
+        const checkoutMinutesAdj2 = minutesOfCheckoutAdjusted(timeStr, rec.checkInTime2 || rec.checkInTime);
+        let overtimeHours2 = 0;
+        let earlyLeaveMinutes2 = 0;
+        let shortfallMinutesFinal = 0;
+        if (isOffDayWork2) {
+          const workedMinutes2 = checkoutMinutesAdj2 - minutesOf(rec.checkInTime2 || rec.checkInTime || timeStr);
+          overtimeHours2 = workedMinutes2 > 0 ? Math.min(12, Math.round((workedMinutes2 / 60) * 2) / 2) : 0;
+        } else if (myEmployee.flexibleSchedule) {
+          /* نهاية يوم الدوام الحر المقسوم لفترتين فعليًا (out2) — هنا بس بنعرف إجمالي ساعات يومه
+             الحقيقي، فبنجمع ساعات الفترة الصباحية (rec.checkInTime→rec.checkOutTime، المحفوظة من
+             انصراف الفترة الأولى) مع ساعات الفترة المسائية الحالية، ونقارن المجموع بعدد الساعات
+             المطلوبة يوميًا (8 مثلاً) دفعة واحدة — بدل ما نحكم على كل فترة لوحدها زي قبل الإصلاح */
+          const period1Minutes =
+            rec.checkInTime && rec.checkOutTime
+              ? minutesOfCheckoutAdjusted(rec.checkOutTime, rec.checkInTime) - minutesOf(rec.checkInTime)
+              : 0;
+          const period2Minutes = checkoutMinutesAdj2 - minutesOf(rec.checkInTime2 || rec.checkInTime || timeStr);
+          const totalWorkedMinutes = period1Minutes + period2Minutes;
+          const requiredMinutes = dailyWorkHours(myEmployee) * 60;
+          shortfallMinutesFinal = totalWorkedMinutes < requiredMinutes ? requiredMinutes - totalWorkedMinutes : 0;
+          overtimeHours2 = totalWorkedMinutes > requiredMinutes ? Math.min(12, Math.round(((totalWorkedMinutes - requiredMinutes) / 60) * 2) / 2) : 0;
+        } else {
+          const shiftStart2Raw = myEmployee.workShift2?.start || "17:00";
+          const shiftEnd2 = myEmployee.workShift2?.end || "22:00";
+          let shiftEnd2Minutes = minutesOf(shiftEnd2);
+          if (shiftEnd2Minutes <= minutesOf(shiftStart2Raw)) shiftEnd2Minutes += 24 * 60;
+          const diff2 = checkoutMinutesAdj2 - shiftEnd2Minutes;
+          overtimeHours2 = diff2 > 0 ? Math.min(12, Math.round((diff2 / 60) * 2) / 2) : 0;
+          earlyLeaveMinutes2 = diff2 < -LATE_EARLY_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff2) : 0;
+        }
+        setAttendance((prev) =>
+          prev.map((a) =>
+            a.id === rec.id
+              ? {
+                  ...a,
+                  checkOutTime2: timeStr,
+                  overtimeHours2,
+                  earlyLeaveMinutes2,
+                  ...(myEmployee.flexibleSchedule ? { shortfallMinutes: shortfallMinutesFinal } : {}),
+                  checkOutLocation2: sanitizeLocation(check),
+                  checkOutPhoto2: uploadedPhotoUrl,
+                }
+              : a
+          )
+        );
+        logActivity && logActivity("تسجيل انصراف - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
+      }
+      } finally {
+        clockActionBusyRef.current = false;
+      }
+    };
+
+    /* الضغط على "تسجيل حضور/انصراف" يفتح شاشة التحقق من الوجه أولًا؛ الفعل الفعلي (clockIn/clockOut)
+       ما بيتنفذ إلا بعد نجاح التحقق (أو التسجيل الأول للوجه) */
+    /* الضغط على "تسجيل حضور/انصراف" يفتح شاشة التحقق من الوجه أولًا (إلا لو كان التحقق بالوجه معطّلًا لهذا
+       الموظف تحديدًا من ملفه الشخصي، فوقتها يسجّل مباشرة بالموقع الجغرافي فقط زي ما كان قبل إضافة الميزة) */
+    const requestClockIn = () => {
+      if (!myEmployee) return;
+      const already = findOpenAttendanceRecord(myEmployee.id);
+      const stage = attendanceStage(already, myEmployee);
+      if (stage !== "in1" && stage !== "in2" && stage !== "inN") return;
+      /* نفس شرط فترة الراحة الدنيا بين الفترتين — نتحقق منه هنا كمان قبل ما نفتح شاشة التحقق من
+         الوجه، عشان ما نضيّعش وقت الموظف في خطوات التحقق لو أصلًا لسه ما خلصتش راحته */
+      if (stage === "in2" && already) {
+        const minutesSinceBreakStart = minutesSinceDateTime(already.date, already.checkOutTime);
+        if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
+          const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
+          setGeoError(
+            t(
+              `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل بعد انصراف الفترة الصباحية قبل ما تقدر تسجّل حضور الفترة المسائية — باقي ${remaining} دقيقة تقريبًا.`,
+              `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break after your morning check-out before you can check in for the evening shift — about ${remaining} more minute(s) to go.`
+            )
+          );
+          return;
+        }
+      }
+      if (stage === "inN" && already) {
+        const segsSoFar = Array.isArray(already.segments) ? already.segments : [];
+        const lastClosedSeg = segsSoFar[segsSoFar.length - 1];
+        if (lastClosedSeg && lastClosedSeg.checkOutTime) {
+          const minutesSinceBreakStart = minutesSinceDateTime(already.date, lastClosedSeg.checkOutTime);
+          if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
+            const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
+            setGeoError(
+              t(
+                `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل قبل ما تقدر تسجّل حضور الفترة الجديدة — باقي ${remaining} دقيقة تقريبًا.`,
+                `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break before you can check in for the new period — about ${remaining} more minute(s) to go.`
+              )
+            );
+            return;
+          }
+        }
+      }
+      if (myEmployee.faceAttendanceEnabled === false) {
+        clockIn();
+        return;
+      }
+      setFaceModal("in");
+    };
+    const requestClockOut = () => {
+      if (!myEmployee) return;
+      const rec = findOpenAttendanceRecord(myEmployee.id);
+      if (!rec) return;
+      const stage = attendanceStage(rec, myEmployee);
+      if (stage !== "out1" && stage !== "out2" && stage !== "outN") return;
+      if (myEmployee.faceAttendanceEnabled === false) {
+        clockOut();
+        return;
+      }
+      setFaceModal("out");
+    };
+    const handleFaceVerified = ({ photo, descriptor }) => {
+      /* أول مرة فقط: نحفظ بصمة الوجه على ملف الموظف بشكل دائم */
+      if (descriptor && myEmployee) {
+        setEmployees((prev) =>
+          prev.map((e) => (e.id === myEmployee.id ? { ...e, faceDescriptor: descriptor, faceRegisteredAt: new Date().toISOString() } : e))
+        );
+        logActivity && logActivity("تسجيل بصمة الوجه لأول مرة", "attendance", myEmployee.name);
+      }
+      const action = faceModal;
+      setFaceModal(null);
+      if (action === "in") clockIn(photo);
+      else if (action === "out") clockOut(photo);
+    };
+    const handleFaceCancel = () => setFaceModal(null);
+
+    return {
+      lastAction,
+      todayISO,
+      findOpenAttendanceRecord,
+      attendanceStage,
+      requestClockIn,
+      requestClockOut,
+      clockIn,
+      clockOut,
+      faceModal,
+      handleFaceVerified,
+      handleFaceCancel,
+      geoBusy,
+      geoError,
+      setGeoError,
+    };
+}
+
+
 function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivity }) {
   const { t } = useLang();
   const role = currentUser.role;
@@ -1735,6 +2735,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
   const [dataRetryTick, setDataRetryTick] = useState(0);
   const retryTimerRef = useRef(null);
   const [showChangePassword, setShowChangePassword] = useState(false);
+  /* وضع "جهاز الحضور المشترك": الفرع المفعَّل على هذا الجهاز (مخزّن محليًا على الجهاز نفسه ولنفس الحساب فقط) */
+  const [kioskBranchId, setKioskBranchId] = useState(() => readKioskSetting(currentUser.id));
+  const [showKioskSetup, setShowKioskSetup] = useState(false);
   const isMobile = useIsMobile();
   const [navOpen, setNavOpen] = useState(false);
   /* بحث عام عن موظف بالاسم أو رقم الهوية عبر جميع الأقسام والفروع */
@@ -2532,7 +3535,11 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       const req = leaveRequests.find((r) => r.id === reqId);
       if (!req || req.status === "موافقة نهائية") return;
       setLeaveRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة نهائية", finalApprovedBy: currentUser.name, finalApprovedAt: new Date().toISOString() } : r)));
-      setLeaves((prev) => [...prev, { id: uid(), employeeId: req.employeeId, type: req.type, from: req.from, to: req.to, note: req.note || "", leaveRequestId: req.id }]);
+      /* استئذان الخروج المبكر مش إجازة يوم كامل: ما نسجّلوش في سجل الإجازات (عشان ما يتحسبش اليوم إجازة ولا يخصم من الرصيد) —
+         بيفضل في سجل الطلبات كموافقة رسمية موثّقة */
+      if (req.type !== LEAVE_EARLY_EXIT) {
+        setLeaves((prev) => [...prev, { id: uid(), employeeId: req.employeeId, type: req.type, from: req.from, to: req.to, note: req.note || "", leaveRequestId: req.id }]);
+      }
       logActivity && logActivity("موافقة نهائية على طلب إجازة", "leaveRequests", employees.find((e) => e.id === req.employeeId)?.name || "");
     });
   const finalRejectLeaveRequest = (reqId) =>
@@ -2596,569 +3603,15 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
       logActivity && logActivity("تقديم طلب سلفة", "advanceRequests", `${myEmployee?.name || ""}: ${fmt(req.amount)} ﷼`);
     };
 
-    /* لازم تكون دالة (تُستدعى وقت الحاجة الفعلية) مش قيمة ثابتة محسوبة مرة واحدة وقت الـ render —
-       لو الموظف سايب صفحة تسجيل الحضور مفتوحة من يوم سابق (تابلت مشترك عند الباب مثلًا) من غير ما
-       تحصل أي إعادة render للصفحة من نص الليل، أي كود جوه closure بصمّ على القيمة القديمة لـ"اليوم"
-       لحد ما يحصل render جديد، حتى لو ضغط الموظف فعليًا بعد منتصف الليل بساعات. ده بالظبط كان بيسبب
-       حفظ تسجيل حضور بتاريخ "أمس" بدل اليوم الفعلي، رغم إن وقت الحضور (نفسه محسوب بدالة nowTimeStr
-       فعلًا وقت الاستدعاء) كان صحيحًا — بلاغ المستخدمة: موظفة سجّلت حضورها الساعة 7:47 صباحًا لكن
-       انحفظ السجل بتاريخ أمس.
-       مهم إضافي: لازم تستخدم التاريخ المحلي (مش toISOString اللي يرجع تاريخ UTC) — السعودية
-       +3 ساعات عن UTC، فلو استخدمنا toISOString أي حضور بين 12:00 منتصف الليل و 3:00 فجرًا بالتوقيت
-       المحلي كان هيتسجل بتاريخ "أمس" برضو (لأن تاريخ UTC وقتها لسه ما اتغيّرش)، بالظبط نفس خلل
-       الإغلاق القديم بس بسبب مختلف. fmtISODate بيستخدم getFullYear/getMonth/getDate المحلية فعلًا */
-    const todayISO = () => fmtISODate(new Date());
-    const nowTimeStr = () => {
-      const d = new Date();
-      return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-    };
-    const minutesOf = (hhmm) => {
-      const [h, m] = (hhmm || "00:00").split(":").map(Number);
-      return h * 60 + m;
-    };
-    /* Firestore يرفض القيم "undefined" بالكامل (خطأ invalid-argument) — بعض متصفحات الموبايل بترجّع
-       دقة الموقع (accuracy) أو حقول تانية بقيمة undefined أحيانًا. نضمن هنا إن كل حقل يبقى رقم حقيقي
-       أو null (Firestore بيقبل null عادي) قبل ما نحفظه أبدًا */
-    const sanitizeLocation = (c) => ({
-      lat: c?.lat ?? null,
-      lng: c?.lng ?? null,
-      distance: c?.distance ?? null,
-      accuracy: c?.accuracy ?? null,
-    });
-    /* لو الموظف بصم حضور وفضل شغال لحد بعد منتصف الليل، وقت ما يجي يبصم انصراف بيكون التاريخ اتغيّر
-       (يوم جديد) — فنفتش كمان عن سجل أمس المفتوح (له حضور بدون انصراف) بدل ما نفترض إنه محتاج
-       يسجّل حضور جديد من الأول */
-    /* سجل "مفتوح" (فيه حضور بدون انصراف بعد) — لموظفي الدوامات المتعددة (segments) بنفحص آخر فترة بس،
-       ولباقي الموظفين (الموديل الثابت القديم) بنفحص checkInTime/checkOutTime العاديين زي ما كان */
-    const hasOpenPeriod = (rec) => {
-      if (!rec) return false;
-      if (Array.isArray(rec.segments) && rec.segments.length) {
-        const last = rec.segments[rec.segments.length - 1];
-        return !!(last.checkInTime && !last.checkOutTime);
-      }
-      return !!(rec.checkInTime && !rec.checkOutTime);
-    };
-    const findOpenAttendanceRecord = (empId) => {
-      const todayRec = attendance.find((a) => a.employeeId === empId && a.date === todayISO());
-      if (todayRec) return todayRec;
-      const y = new Date();
-      y.setDate(y.getDate() - 1);
-      const yesterdayISO = fmtISODate(y);
-      /* لازم checkInTime يكون فعلاً موجود عشان يُعتبر دوام ليلي مفتوح فعليًا — وإلا سجل أمس (زي سجل
-         "حاضر" مُضاف يدويًا أو جماعيًا بدون وقت حضور) هيتفهم غلط إنه دوام ليلي متواصل لحد النهاردة */
-      const openYesterday = attendance.find((a) => a.employeeId === empId && a.date === yesterdayISO && hasOpenPeriod(a));
-      return openYesterday || null;
-    };
-    /* يحوّل وقت الانصراف لدقائق مع مراعاة عبوره منتصف الليل (لو أصغر رقميًا من وقت الحضور، معناه
-       اليوم اتغيّر فعليًا، فنضيفله 24 ساعة عشان الفرق يطلع صحيح مش رقم سالب غريب) */
-    const minutesOfCheckoutAdjusted = (checkoutStr, checkInStr) => {
-      let m = minutesOf(checkoutStr);
-      if (m < minutesOf(checkInStr || "00:00")) m += 24 * 60;
-      return m;
-    };
-
-    const [geoBusy, setGeoBusy] = useState(false);
-    const [geoError, setGeoError] = useState("");
-    /* "in" أو "out" أثناء انتظار تحقق الوجه، أو null لو الشاشة مقفولة */
-    const [faceModal, setFaceModal] = useState(null);
-    /* قفل مزامنة (ref مش state) يمنع تنفيذ clockIn/clockOut أكتر من مرة في نفس اللحظة — لو الموظف
-       ضغط زر الحضور أكتر من مرة بسرعة (ضغطتين/3 متتاليات، أو الشاشة اتأخرت في الاستجابة)، كل استدعاء
-       زيادة كان بيقرأ "already" (هل فيه سجل حضور اليوم) بنسخة قديمة لسه ما اتحدّثتش، فيضيف سجل حضور
-       جديد منفصل بدل ما يتجاهل الضغطة الزيادة — ده اللي كان بيسبب "تسجيل حضور 3 مرات" لنفس الموظف
-       ولا نفس اليوم. state (useState) مش كافي هنا لأن تحديثه مش فوري/متزامن، فاستخدمنا ref بدل كده
-       عشان القفل يتفعّل فورًا من أول سطر قبل أي await */
-    const clockActionBusyRef = useRef(false);
-
-    /* لموظفين يشتغلوا على أكتر من فرع: بيتفحص موقعهم مقابل كل فروعهم (الأساسي + الإضافية)،
-       وبينجح التسجيل لو كانوا داخل نطاق أي فرع منهم — مع تسجيل الفرع الفعلي اللي سجّلوا منه */
-    const verifyAtAnyBranch = async (branchIds) => {
-      const validBranches = branchIds.map((id) => branches.find((b) => b.id === id)).filter((b) => b && b.lat != null && b.lng != null);
-      if (validBranches.length === 0) {
-        return {
-          ok: false,
-          message: t(
-            "لم يتم تحديد موقع أي من فروعك بعد — تواصل مع الإدارة لضبط مواقع الفروع من تبويب \"الكيانات والفروع\".",
-            "None of your branches have a location set yet — contact management to set them from the \"Entities & Branches\" tab."
-          ),
-        };
-      }
-      let pos;
-      try {
-        pos = await getCurrentPosition();
-      } catch (err) {
-        if (err && err.code === 1) {
-          return { ok: false, message: t("تم رفض إذن الوصول للموقع. فعّل خدمة الموقع للمتصفح من إعدادات جهازك وحاول مرة أخرى.", "Location permission was denied. Enable location access for the browser in your device settings and try again.") };
-        }
-        if (err && err.message === "NOT_SUPPORTED") {
-          return { ok: false, message: t("جهازك أو متصفحك لا يدعم تحديد الموقع.", "Your device or browser doesn't support geolocation.") };
-        }
-        return { ok: false, message: t("تعذّر تحديد موقعك. تأكد من تفعيل GPS ووجود اتصال، ثم حاول مرة أخرى.", "Couldn't get your location. Make sure GPS is enabled and you have a connection, then try again.") };
-      }
-      let closest = null;
-      for (const branch of validBranches) {
-        const dist = distanceMeters(pos.coords.latitude, pos.coords.longitude, branch.lat, branch.lng);
-        const radius = branch.radius || 150;
-        if (dist <= radius) {
-          return { ok: true, branchId: branch.id, lat: pos.coords.latitude, lng: pos.coords.longitude, distance: Math.round(dist), accuracy: pos.coords.accuracy };
-        }
-        if (!closest || dist < closest.dist) closest = { dist, branch, radius };
-      }
-      return {
-        ok: false,
-        message: t(
-          `أنت لست داخل نطاق أي من فروعك — أقرب فرع لك هو "${closest.branch.name}" وتبعد عنه ${Math.round(closest.dist)} متر تقريبًا (النطاق المسموح ${closest.radius} متر).`,
-          `You're not within range of any of your branches — the closest is "${closest.branch.name}", about ${Math.round(closest.dist)}m away (allowed range ${closest.radius}m).`
-        ),
-      };
-    };
-
-    /* تحديد المرحلة الحالية للحضور/الانصراف اليوم: حضور1/انصراف1/حضور2(دوامين)/انصراف2/تم.
-       مهم: سجل موجود بدون checkInTime (زي سجل "تسجيل حضور جماعي" أو إضافة يدوية من سجل الحضور
-       اليومي — كلاهما ينشئ السجل بدون وقت حضور فعلي) لازم يتعامل معه زي ما مفيش سجل أصلًا، وإلا
-       الموظف يفضل "عالق" في مرحلة انصراف لأبد وما يقدرش يسجّل حضوره الفعلي بنفسه من صفحته */
-    const attendanceStage = (rec, emp) => {
-      /* دوامات متعددة بعدد غير محدد: مفيش حالة "تم" نهائية — طالما آخر فترة مقفولة (فيها انصراف)
-         فهو جاهز يسجّل فترة جديدة (inN)، ولو آخر فترة لسه مفتوحة فهو جاهز يسجّل انصرافها (outN) */
-      if (emp?.multiShift) {
-        const segs = (rec && Array.isArray(rec.segments)) ? rec.segments : [];
-        const last = segs[segs.length - 1];
-        return !last || last.checkOutTime ? "inN" : "outN";
-      }
-      if (!rec || !rec.checkInTime) return "in1";
-      if (!rec.checkOutTime) return "out1";
-      if (!emp?.twoShifts) return "done";
-      if (!rec.checkInTime2) return "in2";
-      if (!rec.checkOutTime2) return "out2";
-      return "done";
-    };
-
-    /* عدد الدقائق اللي مرّت من تاريخ/وقت معيّن (مثل انصراف الفترة الصباحية) لحد دلوقتي — بنستخدم
-       تاريخ ووقت حقيقيين (مش مجرد فرق دقائق اليوم) عشان يبقى صحيح حتى لو الانصراف كان قريب من
-       منتصف الليل */
-    const minutesSinceDateTime = (dateStr, timeStr) => {
-      if (!dateStr || !timeStr) return Infinity;
-      const [h, m] = timeStr.split(":").map(Number);
-      const then = new Date(dateStr + "T00:00:00");
-      then.setHours(h, m, 0, 0);
-      return Math.round((Date.now() - then.getTime()) / 60000);
-    };
-
-    const clockIn = async (facePhoto) => {
-      if (!myEmployee) return;
-      if (clockActionBusyRef.current) return;
-      const already = findOpenAttendanceRecord(myEmployee.id);
-      const stage = attendanceStage(already, myEmployee);
-      /* موظف دوامات متعددة بعدد غير محدد: فرع منفصل بالكامل عن منطق الدوامين الثابت تحت — بيضيف فترة
-         (segment) جديدة بدل ما يملأ checkInTime/checkInTime2 الثابتين */
-      if (myEmployee.multiShift) {
-        if (stage !== "inN") return;
-        const segsSoFar = (already && Array.isArray(already.segments)) ? already.segments : [];
-        const lastClosedSeg = segsSoFar[segsSoFar.length - 1];
-        if (lastClosedSeg && lastClosedSeg.checkOutTime) {
-          const minutesSinceBreakStart = minutesSinceDateTime(already.date, lastClosedSeg.checkOutTime);
-          if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
-            const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
-            setGeoError(
-              t(
-                `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل قبل ما تقدر تسجّل حضور الفترة الجديدة — باقي ${remaining} دقيقة تقريبًا.`,
-                `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break before you can check in for the new period — about ${remaining} more minute(s) to go.`
-              )
-            );
-            return;
-          }
-        }
-        clockActionBusyRef.current = true;
-        try {
-          setGeoError("");
-          setGeoBusy(true);
-          const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
-          const check = await verifyAtAnyBranch(myBranchIds);
-          setGeoBusy(false);
-          if (!check.ok) {
-            setGeoError(check.message);
-            return;
-          }
-          const timeStr = nowTimeStr();
-          const checkInBranchName = branches.find((b) => b.id === check.branchId)?.name || "";
-          const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
-          const newSegment = {
-            branchId: check.branchId,
-            checkInTime: timeStr,
-            checkInLocation: sanitizeLocation(check),
-            checkInPhoto: uploadedPhotoUrl,
-            checkOutTime: "",
-          };
-          if (already) {
-            setAttendance((prev) =>
-              prev.map((a) => (a.id === already.id ? { ...a, segments: [...(a.segments || []), newSegment], status: "حاضر" } : a))
-            );
-          } else {
-            setAttendance((prev) => [
-              ...prev,
-              {
-                id: uid(),
-                employeeId: myEmployee.id,
-                date: todayISO(),
-                status: "حاضر",
-                lateMinutes: 0,
-                overtimeHours: 0,
-                shortfallMinutes: 0,
-                earlyLeaveMinutes: 0,
-                segments: [newSegment],
-              },
-            ]);
-          }
-          logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
-        } finally {
-          clockActionBusyRef.current = false;
-        }
-        return;
-      }
-      if (stage !== "in1" && stage !== "in2") return;
-      /* دوامين في اليوم: لازم تمر فترة راحة حقيقية بعد انصراف الفترة الصباحية قبل ما يقدر يسجّل حضور
-         الفترة المسائية — يمنع تسجيل انصراف وحضور بفارق دقيقة واحدة بدون أي استراحة فعلية (بلاغ
-         المستخدمة: موظف سجّل الفترتين بفارق دقيقة واحدة بس) */
-      if (stage === "in2" && already) {
-        const minutesSinceBreakStart = minutesSinceDateTime(already.date, already.checkOutTime);
-        if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
-          const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
-          setGeoError(
-            t(
-              `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل بعد انصراف الفترة الصباحية قبل ما تقدر تسجّل حضور الفترة المسائية — باقي ${remaining} دقيقة تقريبًا.`,
-              `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break after your morning check-out before you can check in for the evening shift — about ${remaining} more minute(s) to go.`
-            )
-          );
-          return;
-        }
-      }
-      clockActionBusyRef.current = true;
-      try {
-      setGeoError("");
-      setGeoBusy(true);
-      const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
-      const check = await verifyAtAnyBranch(myBranchIds);
-      setGeoBusy(false);
-      if (!check.ok) {
-        setGeoError(check.message);
-        return;
-      }
-      const timeStr = nowTimeStr();
-      const checkInBranchName = branches.find((b) => b.id === check.branchId)?.name || "";
-      /* الصورة تُرفع على Firebase Storage (مش تُخزَّن كنص base64 جوّه Firestore) — عشان ما تتسبّبش في
-         تضخيم مستند البيانات لحد ما يتخطى حد Firestore (1 ميجابايت) ويوقف كل عمليات الحفظ للجميع */
-      const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
-      if (stage === "in1") {
-        /* الدوام الحر: بدون وقت دخول محدد — دايمًا "حاضر"، النقص أو الزيادة في الساعات يُحتسب وقت الانصراف
-           بناءً على إجمالي الساعات الفعلية بدل وقت دخول ثابت. وكمان لو داوم في يوم إجازته الأسبوعية، ما
-           فيش وقت دخول مقرَّر أصلاً، فمايتحسبش عليه تأخير إطلاقًا */
-        const todayDayName = JS_DAY_INDEX_TO_AR[new Date().getDay()];
-        const isOffDayToday = getOffDays(myEmployee).includes(todayDayName);
-        const shiftStart = effectiveShift(myEmployee, todayDayName).start;
-        const diff = (myEmployee.flexibleSchedule || isOffDayToday) ? 0 : minutesOf(timeStr) - minutesOf(shiftStart);
-        const lateMinutes = diff > LATE_EARLY_GRACE_MINUTES ? diff : 0;
-        /* لو already موجود هنا (سجل "حاضر" مُضاف يدويًا أو جماعيًا لنفس اليوم لكن بدون وقت حضور فعلي)،
-           نكمّل عليه بنفس الـ id بدل ما ننشئ سجل تاني منفصل — وإلا يتكرر سجل الحضور مرتين لنفس اليوم
-           ويتأثر أي تقرير/حساب راتب يفترض سجل واحد بس لكل موظف/يوم */
-        const rec = {
-          id: already ? already.id : uid(),
-          employeeId: myEmployee.id,
-          date: todayISO(),
-          status: lateMinutes > 0 ? "متأخر" : "حاضر",
-          lateMinutes,
-          overtimeHours: 0,
-          checkInTime: timeStr,
-          checkOutTime: "",
-          checkInTime2: "",
-          checkOutTime2: "",
-          branchId: check.branchId,
-          checkInLocation: sanitizeLocation(check),
-          checkInPhoto: uploadedPhotoUrl,
-        };
-        if (already) {
-          setAttendance((prev) => prev.map((a) => (a.id === already.id ? rec : a)));
-        } else {
-          setAttendance((prev) => [...prev, rec]);
-        }
-        logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
-      } else {
-        const shiftStart2 = myEmployee.workShift2?.start || "17:00";
-        const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart2);
-        const lateMinutes2 = diff > LATE_EARLY_GRACE_MINUTES ? diff : 0;
-        setAttendance((prev) =>
-          prev.map((a) =>
-            a.id === already.id
-              ? { ...a, checkInTime2: timeStr, lateMinutes2, checkInLocation2: sanitizeLocation(check), checkInPhoto2: uploadedPhotoUrl }
-              : a
-          )
-        );
-        logActivity && logActivity("تسجيل حضور - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
-      }
-      } finally {
-        clockActionBusyRef.current = false;
-      }
-    };
-
-    const clockOut = async (facePhoto) => {
-      if (!myEmployee) return;
-      if (clockActionBusyRef.current) return;
-      const rec = findOpenAttendanceRecord(myEmployee.id);
-      if (!rec) return;
-      const stage = attendanceStage(rec, myEmployee);
-      if (myEmployee.multiShift) {
-        if (stage !== "outN") return;
-        clockActionBusyRef.current = true;
-        try {
-          setGeoError("");
-          setGeoBusy(true);
-          const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
-          const check = await verifyAtAnyBranch(myBranchIds);
-          setGeoBusy(false);
-          if (!check.ok) {
-            setGeoError(check.message);
-            return;
-          }
-          const timeStr = nowTimeStr();
-          const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
-          const segs = Array.isArray(rec.segments) ? rec.segments : [];
-          const lastIdx = segs.length - 1;
-          const updatedSegs = segs.map((s, i) =>
-            i === lastIdx ? { ...s, checkOutTime: timeStr, checkOutLocation: sanitizeLocation(check), checkOutPhoto: uploadedPhotoUrl } : s
-          );
-          /* مدة الفترة الواحدة بالدقائق (مع مراعاة عبور منتصف الليل)، ثم مجموع كل فترات اليوم مع بعض —
-             بنحسبه كدوام حر دايمًا (مفيش وقت دخول/خروج ثابت لأي فترة من فترات موظف متعدد الدوامات) */
-          const segMinutes = (s) => (s.checkInTime && s.checkOutTime ? minutesOfCheckoutAdjusted(s.checkOutTime, s.checkInTime) - minutesOf(s.checkInTime) : 0);
-          const totalWorkedMinutes = updatedSegs.reduce((sum, s) => sum + segMinutes(s), 0);
-          const workDayName = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO()) + "T00:00:00").getDay()];
-          const isOffDayWork = getOffDays(myEmployee).includes(workDayName);
-          let shortfallMinutes = 0;
-          let overtimeHours = 0;
-          if (isOffDayWork) {
-            overtimeHours = totalWorkedMinutes > 0 ? Math.min(12, Math.round((totalWorkedMinutes / 60) * 2) / 2) : 0;
-          } else {
-            const requiredMinutes = dailyWorkHours(myEmployee) * 60;
-            shortfallMinutes = totalWorkedMinutes < requiredMinutes ? requiredMinutes - totalWorkedMinutes : 0;
-            overtimeHours = totalWorkedMinutes > requiredMinutes ? Math.min(12, Math.round(((totalWorkedMinutes - requiredMinutes) / 60) * 2) / 2) : 0;
-          }
-          setAttendance((prev) =>
-            prev.map((a) => (a.id === rec.id ? { ...a, segments: updatedSegs, shortfallMinutes, overtimeHours } : a))
-          );
-          logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
-        } finally {
-          clockActionBusyRef.current = false;
-        }
-        return;
-      }
-      if (stage !== "out1" && stage !== "out2") return;
-      clockActionBusyRef.current = true;
-      try {
-      setGeoError("");
-      setGeoBusy(true);
-      const myBranchIds = [myEmployee.branchId, ...(myEmployee.additionalBranchIds || [])].filter(Boolean);
-      const check = await verifyAtAnyBranch(myBranchIds);
-      setGeoBusy(false);
-      if (!check.ok) {
-        setGeoError(check.message);
-        return;
-      }
-      const timeStr = nowTimeStr();
-      const uploadedPhotoUrl = await uploadPhotoToStorage(facePhoto, `attendancePhotos/${myEmployee.id}`).catch(() => "");
-      if (stage === "out1") {
-        let overtimeHours = 0;
-        let shortfallMinutes = 0;
-        let earlyLeaveMinutes = 0;
-        /* وقت الانصراف بالدقائق، مع تصحيح عبور منتصف الليل (لو انصرف بعد الساعة 12 ليلاً في يوم تالٍ،
-           يطلع رقمه أصغر من وقت الحضور، فنضيفله 24 ساعة عشان الفرق يُحسب صح مش يطلع سالب/غريب) */
-        const checkoutMinutesAdj = minutesOfCheckoutAdjusted(timeStr, rec.checkInTime);
-        /* لو داوم في يوم إجازته الأسبوعية (يوم مو مطلوب منه يشتغل فيه أصلاً)، كل الوقت اللي شغله يُحتسب
-           وقت إضافي بالكامل — بدون تأخير ولا خروج مبكر، لأنه مالوش وقت دوام محدد أصلاً هذا اليوم */
-        const workDayName = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO()) + "T00:00:00").getDay()];
-        const isOffDayWork = getOffDays(myEmployee).includes(workDayName);
-        if (isOffDayWork) {
-          const workedMinutes = checkoutMinutesAdj - minutesOf(rec.checkInTime || timeStr);
-          overtimeHours = workedMinutes > 0 ? Math.min(12, Math.round((workedMinutes / 60) * 2) / 2) : 0;
-        } else if (myEmployee.flexibleSchedule && myEmployee.twoShifts) {
-          /* دوام حر مقسوم لفترتين (صباحية ومسائية): انصراف الفترة الصباحية هنا مش نهاية يومه الفعلية —
-             لسه هيرجع يبصم حضور المسائية ويكمّل باقي ساعاته. لو احتسبنا "نقص ساعات" هنا بناءً على
-             فترة الصباح لوحدها، هيظهر نقص وهمي حتى لو الموظف كمّل 8 الساعات كاملة آخر يومه بعد
-             الفترة المسائية. فبنأجّل احتساب النقص/الإضافي النهائي لحد انصراف الفترة المسائية (out2)
-             اللي فيها بنجمع ساعات الفترتين مع بعض ونقارنها بـ 8 الساعات المطلوبة دفعة واحدة */
-          shortfallMinutes = 0;
-          overtimeHours = 0;
-        } else if (myEmployee.flexibleSchedule) {
-          /* دوام حر بفترة واحدة فقط: نحسب إجمالي الساعات الفعلية بين الحضور والانصراف — أي نقص عن عدد
-             ساعات دوامه المطلوبة فعليًا (8 أو 10 أو 12 ساعة حسب وقت دوامه المسجَّل في ملفه) يُخصم، وأي
-             زيادة تُحتسب وقت إضافي */
-          const requiredMinutes = dailyWorkHours(myEmployee) * 60;
-          const workedMinutes = checkoutMinutesAdj - minutesOf(rec.checkInTime || timeStr);
-          shortfallMinutes = workedMinutes < requiredMinutes ? requiredMinutes - workedMinutes : 0;
-          overtimeHours = workedMinutes > requiredMinutes ? Math.min(12, Math.round(((workedMinutes - requiredMinutes) / 60) * 2) / 2) : 0;
-        } else {
-          /* مهم: نستخدم يوم بداية الدوام الفعلي (workDayName، المشتق من تاريخ سجل الحضور rec.date)
-             مش يوم التقويم الحالي وقت الضغط على "انصراف" — لأن الدوام الليلي يبدأ في يوم وينتهي
-             (وبالتالي يُسجَّل الانصراف) في اليوم التالي فعليًا. قبل هذا الإصلاح كان الكود يجيب دوام
-             "اليوم" الحالي (يوم الانصراف) بدل يوم الحضور الأصلي، فلو كان دوام الموظف يختلف من يوم
-             لآخر (useDaySchedules) أو كان يوم الانصراف نفسه يوم إجازته الأسبوعية، كان بيحسب خروج
-             مبكر/إضافي بأرقام غلط تمامًا (زي 719 دقيقة خروج مبكر لموظف دوامه الليلي طبيعي) */
-          const shiftInfo = effectiveShift(myEmployee, workDayName);
-          const shiftStartRaw = shiftInfo.start || "08:00";
-          /* دوام ليلي (وقت النهاية أصغر من أو يساوي وقت البداية، زي 16:00 → 00:00 أو 17:00 → 03:00)
-             يمتد فعليًا لليوم التالي — نضيف 24 ساعة لوقت النهاية عشان الفرق يُحسب صح مقابل وقت
-             الانصراف المعدَّل هو الآخر لعبور منتصف الليل، بدل ما يطلع خصم/إضافي وهمي كبير.
-             ده بيغطي حتى حالة "00:00" بالظبط (منتصف الليل) كوقت نهاية حقيقي، مش بس خطأ إدخال */
-          const shiftEnd = shiftInfo.end || "17:00";
-          let shiftEndMinutes = minutesOf(shiftEnd);
-          if (shiftEndMinutes <= minutesOf(shiftStartRaw)) shiftEndMinutes += 24 * 60;
-          const diff = checkoutMinutesAdj - shiftEndMinutes;
-          /* سقف أمان: أي وقت إضافي محسوب أكتر من 12 ساعة في اليوم غالبًا خطأ إعداد، مش وقت إضافي حقيقي */
-          overtimeHours = diff > 0 ? Math.min(12, Math.round((diff / 60) * 2) / 2) : 0;
-          /* لو انصرف قبل نهاية دوامه، نسجّل عدد دقائق الخروج المبكر (يُستخدم في خصم الراتب لاحقًا) —
-             السقف الأقصى هو عدد ساعات دوامه الفعلية اليومية، مش 8 ساعات ثابتة للجميع */
-          earlyLeaveMinutes = diff < -LATE_EARLY_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff) : 0;
-        }
-        setAttendance((prev) =>
-          prev.map((a) =>
-            a.id === rec.id
-              ? {
-                  ...a,
-                  checkOutTime: timeStr,
-                  overtimeHours,
-                  earlyLeaveMinutes,
-                  ...(myEmployee.flexibleSchedule ? { shortfallMinutes } : {}),
-                  checkOutLocation: sanitizeLocation(check),
-                  checkOutPhoto: uploadedPhotoUrl,
-                }
-              : a
-          )
-        );
-        logActivity && logActivity("تسجيل انصراف (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
-      } else {
-        const workDayName2 = JS_DAY_INDEX_TO_AR[new Date((rec.date || todayISO()) + "T00:00:00").getDay()];
-        const isOffDayWork2 = getOffDays(myEmployee).includes(workDayName2);
-        const checkoutMinutesAdj2 = minutesOfCheckoutAdjusted(timeStr, rec.checkInTime2 || rec.checkInTime);
-        let overtimeHours2 = 0;
-        let earlyLeaveMinutes2 = 0;
-        let shortfallMinutesFinal = 0;
-        if (isOffDayWork2) {
-          const workedMinutes2 = checkoutMinutesAdj2 - minutesOf(rec.checkInTime2 || rec.checkInTime || timeStr);
-          overtimeHours2 = workedMinutes2 > 0 ? Math.min(12, Math.round((workedMinutes2 / 60) * 2) / 2) : 0;
-        } else if (myEmployee.flexibleSchedule) {
-          /* نهاية يوم الدوام الحر المقسوم لفترتين فعليًا (out2) — هنا بس بنعرف إجمالي ساعات يومه
-             الحقيقي، فبنجمع ساعات الفترة الصباحية (rec.checkInTime→rec.checkOutTime، المحفوظة من
-             انصراف الفترة الأولى) مع ساعات الفترة المسائية الحالية، ونقارن المجموع بعدد الساعات
-             المطلوبة يوميًا (8 مثلاً) دفعة واحدة — بدل ما نحكم على كل فترة لوحدها زي قبل الإصلاح */
-          const period1Minutes =
-            rec.checkInTime && rec.checkOutTime
-              ? minutesOfCheckoutAdjusted(rec.checkOutTime, rec.checkInTime) - minutesOf(rec.checkInTime)
-              : 0;
-          const period2Minutes = checkoutMinutesAdj2 - minutesOf(rec.checkInTime2 || rec.checkInTime || timeStr);
-          const totalWorkedMinutes = period1Minutes + period2Minutes;
-          const requiredMinutes = dailyWorkHours(myEmployee) * 60;
-          shortfallMinutesFinal = totalWorkedMinutes < requiredMinutes ? requiredMinutes - totalWorkedMinutes : 0;
-          overtimeHours2 = totalWorkedMinutes > requiredMinutes ? Math.min(12, Math.round(((totalWorkedMinutes - requiredMinutes) / 60) * 2) / 2) : 0;
-        } else {
-          const shiftStart2Raw = myEmployee.workShift2?.start || "17:00";
-          const shiftEnd2 = myEmployee.workShift2?.end || "22:00";
-          let shiftEnd2Minutes = minutesOf(shiftEnd2);
-          if (shiftEnd2Minutes <= minutesOf(shiftStart2Raw)) shiftEnd2Minutes += 24 * 60;
-          const diff2 = checkoutMinutesAdj2 - shiftEnd2Minutes;
-          overtimeHours2 = diff2 > 0 ? Math.min(12, Math.round((diff2 / 60) * 2) / 2) : 0;
-          earlyLeaveMinutes2 = diff2 < -LATE_EARLY_GRACE_MINUTES ? Math.min(dailyWorkHours(myEmployee) * 60, -diff2) : 0;
-        }
-        setAttendance((prev) =>
-          prev.map((a) =>
-            a.id === rec.id
-              ? {
-                  ...a,
-                  checkOutTime2: timeStr,
-                  overtimeHours2,
-                  earlyLeaveMinutes2,
-                  ...(myEmployee.flexibleSchedule ? { shortfallMinutes: shortfallMinutesFinal } : {}),
-                  checkOutLocation2: sanitizeLocation(check),
-                  checkOutPhoto2: uploadedPhotoUrl,
-                }
-              : a
-          )
-        );
-        logActivity && logActivity("تسجيل انصراف - الفترة المسائية (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}`);
-      }
-      } finally {
-        clockActionBusyRef.current = false;
-      }
-    };
-
-    /* الضغط على "تسجيل حضور/انصراف" يفتح شاشة التحقق من الوجه أولًا؛ الفعل الفعلي (clockIn/clockOut)
-       ما بيتنفذ إلا بعد نجاح التحقق (أو التسجيل الأول للوجه) */
-    /* الضغط على "تسجيل حضور/انصراف" يفتح شاشة التحقق من الوجه أولًا (إلا لو كان التحقق بالوجه معطّلًا لهذا
-       الموظف تحديدًا من ملفه الشخصي، فوقتها يسجّل مباشرة بالموقع الجغرافي فقط زي ما كان قبل إضافة الميزة) */
-    const requestClockIn = () => {
-      if (!myEmployee) return;
-      const already = findOpenAttendanceRecord(myEmployee.id);
-      const stage = attendanceStage(already, myEmployee);
-      if (stage !== "in1" && stage !== "in2" && stage !== "inN") return;
-      /* نفس شرط فترة الراحة الدنيا بين الفترتين — نتحقق منه هنا كمان قبل ما نفتح شاشة التحقق من
-         الوجه، عشان ما نضيّعش وقت الموظف في خطوات التحقق لو أصلًا لسه ما خلصتش راحته */
-      if (stage === "in2" && already) {
-        const minutesSinceBreakStart = minutesSinceDateTime(already.date, already.checkOutTime);
-        if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
-          const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
-          setGeoError(
-            t(
-              `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل بعد انصراف الفترة الصباحية قبل ما تقدر تسجّل حضور الفترة المسائية — باقي ${remaining} دقيقة تقريبًا.`,
-              `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break after your morning check-out before you can check in for the evening shift — about ${remaining} more minute(s) to go.`
-            )
-          );
-          return;
-        }
-      }
-      if (stage === "inN" && already) {
-        const segsSoFar = Array.isArray(already.segments) ? already.segments : [];
-        const lastClosedSeg = segsSoFar[segsSoFar.length - 1];
-        if (lastClosedSeg && lastClosedSeg.checkOutTime) {
-          const minutesSinceBreakStart = minutesSinceDateTime(already.date, lastClosedSeg.checkOutTime);
-          if (minutesSinceBreakStart < MIN_BREAK_BETWEEN_SHIFTS_MINUTES) {
-            const remaining = MIN_BREAK_BETWEEN_SHIFTS_MINUTES - minutesSinceBreakStart;
-            setGeoError(
-              t(
-                `لازم تاخذ راحة ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES} دقيقة على الأقل قبل ما تقدر تسجّل حضور الفترة الجديدة — باقي ${remaining} دقيقة تقريبًا.`,
-                `You need at least a ${MIN_BREAK_BETWEEN_SHIFTS_MINUTES}-minute break before you can check in for the new period — about ${remaining} more minute(s) to go.`
-              )
-            );
-            return;
-          }
-        }
-      }
-      if (myEmployee.faceAttendanceEnabled === false) {
-        clockIn();
-        return;
-      }
-      setFaceModal("in");
-    };
-    const requestClockOut = () => {
-      if (!myEmployee) return;
-      const rec = findOpenAttendanceRecord(myEmployee.id);
-      if (!rec) return;
-      const stage = attendanceStage(rec, myEmployee);
-      if (stage !== "out1" && stage !== "out2" && stage !== "outN") return;
-      if (myEmployee.faceAttendanceEnabled === false) {
-        clockOut();
-        return;
-      }
-      setFaceModal("out");
-    };
-    const handleFaceVerified = ({ photo, descriptor }) => {
-      /* أول مرة فقط: نحفظ بصمة الوجه على ملف الموظف بشكل دائم */
-      if (descriptor && myEmployee) {
-        setEmployees((prev) =>
-          prev.map((e) => (e.id === myEmployee.id ? { ...e, faceDescriptor: descriptor, faceRegisteredAt: new Date().toISOString() } : e))
-        );
-        logActivity && logActivity("تسجيل بصمة الوجه لأول مرة", "attendance", myEmployee.name);
-      }
-      const action = faceModal;
-      setFaceModal(null);
-      if (action === "in") clockIn(photo);
-      else if (action === "out") clockOut(photo);
-    };
-    const handleFaceCancel = () => setFaceModal(null);
+    const {
+      requestClockIn,
+      requestClockOut,
+      faceModal,
+      handleFaceVerified,
+      handleFaceCancel,
+      geoBusy,
+      geoError,
+    } = useAttendanceClock({ myEmployee, attendance, setAttendance, setEmployees, branches, logActivity, t });
 
     return (
       <EmployeeSelfView
@@ -3220,6 +3673,30 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         onRemoveQualityTemplate={removeQualityTemplate}
         onAddQualitySubmission={addQualitySubmission}
         onRemoveQualitySubmission={removeQualitySubmission}
+      />
+    );
+  }
+
+  if (kioskBranchId && ["admin", "manager", "entity_manager", "branch_manager"].includes(role)) {
+    return (
+      <KioskAttendanceView
+        branchId={kioskBranchId}
+        branches={branches}
+        employees={employees}
+        attendance={attendance}
+        setAttendance={setAttendance}
+        setEmployees={setEmployees}
+        logActivity={logActivity}
+        loaded={loaded}
+        dirty={dirty}
+        saving={saving}
+        syncError={syncError}
+        onSave={saveNow}
+        onExit={() => {
+          writeKioskSetting(currentUser.id, "");
+          setKioskBranchId("");
+          logActivity && logActivity("إنهاء وضع الجهاز المشترك", "attendance", branchName(kioskBranchId));
+        }}
       />
     );
   }
@@ -3560,6 +4037,24 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           >
             {t("🔑 تغيير كلمة المرور", "🔑 Change Password")}
           </button>
+          {kioskBranchesForUser(currentUser, branches).length > 0 && (
+            <button
+              onClick={() => setShowKioskSetup(true)}
+              style={{
+                width: "100%",
+                background: "transparent",
+                border: "1px solid rgba(216,168,90,0.4)",
+                color: "#D9CBB2",
+                borderRadius: 6,
+                padding: "7px 10px",
+                fontSize: 12,
+                cursor: "pointer",
+                marginBottom: 8,
+              }}
+            >
+              {t("📱 جهاز حضور مشترك", "📱 Shared attendance device")}
+            </button>
+          )}
           <button
             onClick={onLogout}
             style={{
@@ -3584,6 +4079,19 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
           setUsers={setUsers}
           logActivity={logActivity}
           onClose={() => setShowChangePassword(false)}
+        />
+      )}
+
+      {showKioskSetup && (
+        <KioskSetupModal
+          branches={kioskBranchesForUser(currentUser, branches)}
+          onClose={() => setShowKioskSetup(false)}
+          onStart={(bid) => {
+            writeKioskSetting(currentUser.id, bid);
+            setKioskBranchId(bid);
+            setShowKioskSetup(false);
+            logActivity && logActivity("تفعيل وضع الجهاز المشترك", "attendance", branchName(bid));
+          }}
         />
       )}
 
@@ -10750,7 +11258,7 @@ function LeaveRequestsTab({ employees, leaveRequests, isPreliminaryApprover, isF
           <div style={{ fontWeight: 700, color: COLORS.espresso, fontSize: 13.5 }}>{empName(r.employeeId)}</div>
           <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 2 }}>{branchName(r.employeeId)}</div>
           <div style={{ fontSize: 12.5, marginTop: 6 }}>
-            {trLabel(t, LEAVE_TYPE_LABELS_EN, r.type)} — <span style={{ fontFamily: "Consolas, monospace" }}>{r.from} → {r.to}</span>
+            {trLabel(t, LEAVE_TYPE_LABELS_EN, r.type)} — <span style={{ fontFamily: "Consolas, monospace" }}>{leaveRequestWhenLabel(r, t)}</span>
           </div>
           {r.note && <div style={{ fontSize: 11.5, color: "#8a7a63", marginTop: 4 }}>{r.note}</div>}
         </div>
@@ -12599,13 +13107,27 @@ function MessagesTab({ employees, branches, messages, onSendMessage, onRemoveMes
 }
 
 function LeaveRequestForm({ onSubmit, t }) {
-  const [form, setForm] = useState({ type: "سنوية", from: "", to: "", note: "" });
+  const [form, setForm] = useState({ type: "سنوية", from: "", to: "", exitTime: "", note: "" });
   const [sent, setSent] = useState(false);
+  const [err, setErr] = useState("");
+  const isEarlyExit = form.type === LEAVE_EARLY_EXIT;
 
   const submit = () => {
-    if (!form.from || !form.to) return;
-    onSubmit && onSubmit(form);
-    setForm({ type: "سنوية", from: "", to: "", note: "" });
+    if (isEarlyExit) {
+      if (!form.from || !form.exitTime) {
+        setErr(t("اختر تاريخ الاستئذان ووقت الخروج المطلوب", "Pick the permission date and the requested leaving time"));
+        return;
+      }
+      onSubmit && onSubmit({ type: form.type, from: form.from, to: form.from, exitTime: form.exitTime, note: form.note });
+    } else {
+      if (!form.from || !form.to) {
+        setErr(t("اختر تاريخ البداية والنهاية", "Pick the start and end dates"));
+        return;
+      }
+      onSubmit && onSubmit({ type: form.type, from: form.from, to: form.to, note: form.note });
+    }
+    setErr("");
+    setForm({ type: "سنوية", from: "", to: "", exitTime: "", note: "" });
     setSent(true);
     setTimeout(() => setSent(false), 2500);
   };
@@ -12613,28 +13135,43 @@ function LeaveRequestForm({ onSubmit, t }) {
   return (
     <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 16, marginBottom: 20 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-        <Field label={t("نوع الإجازة", "Leave Type")}>
-          <select style={inputStyle} value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
-            <option value="سنوية">{t("سنوية", "Annual")}</option>
-            <option value="مرضية">{t("مرضية", "Sick")}</option>
-            <option value="طارئة">{t("طارئة", "Emergency")}</option>
-            <option value="بدون راتب">{t("بدون راتب", "Unpaid")}</option>
-            <option value="أخرى">{t("أخرى", "Other")}</option>
+        <Field label={t("نوع الطلب", "Request Type")}>
+          <select style={inputStyle} value={form.type} onChange={(e) => { setErr(""); setForm({ ...form, type: e.target.value }); }}>
+            <option value="سنوية">{t("إجازة سنوية", "Annual")}</option>
+            <option value="مرضية">{t("إجازة مرضية", "Sick")}</option>
+            <option value="طارئة">{t("إجازة طارئة", "Emergency")}</option>
+            <option value="بدون راتب">{t("إجازة بدون راتب", "Unpaid")}</option>
+            <option value="أخرى">{t("إجازة أخرى", "Other")}</option>
+            <option value={LEAVE_EARLY_EXIT}>{t("استئذان بالخروج المبكر", "Early Exit Permission")}</option>
           </select>
         </Field>
-        <Field label={t("من تاريخ", "From")}>
-          <DateField style={inputStyle} value={form.from} onChange={(v) => setForm({ ...form, from: v })} />
-        </Field>
-        <Field label={t("إلى تاريخ", "To")}>
-          <DateField style={inputStyle} value={form.to} onChange={(v) => setForm({ ...form, to: v })} />
-        </Field>
-        <Field label={t("ملاحظة (اختياري)", "Note (optional)")}>
+        {isEarlyExit ? (
+          <>
+            <Field label={t("تاريخ الاستئذان", "Date")}>
+              <DateField style={inputStyle} value={form.from} onChange={(v) => setForm({ ...form, from: v })} />
+            </Field>
+            <Field label={t("وقت الخروج المطلوب", "Requested Leaving Time")}>
+              <input type="time" style={inputStyle} value={form.exitTime} onChange={(e) => setForm({ ...form, exitTime: e.target.value })} />
+            </Field>
+          </>
+        ) : (
+          <>
+            <Field label={t("من تاريخ", "From")}>
+              <DateField style={inputStyle} value={form.from} onChange={(v) => setForm({ ...form, from: v })} />
+            </Field>
+            <Field label={t("إلى تاريخ", "To")}>
+              <DateField style={inputStyle} value={form.to} onChange={(v) => setForm({ ...form, to: v })} />
+            </Field>
+          </>
+        )}
+        <Field label={isEarlyExit ? t("سبب الاستئذان (اختياري)", "Reason (optional)") : t("ملاحظة (اختياري)", "Note (optional)")}>
           <input style={inputStyle} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} />
         </Field>
         <div style={{ display: "flex", alignItems: "flex-end" }}>
           <Btn onClick={submit}>{t("إرسال الطلب", "Submit Request")}</Btn>
         </div>
       </div>
+      {err && <div style={{ marginTop: 10, fontSize: 12, color: COLORS.brick }}>{err}</div>}
       {sent && (
         <div style={{ marginTop: 10, fontSize: 12, color: COLORS.green }}>
           {t("تم إرسال طلبك — بانتظار الموافقة المبدئية من مدير الكيان ثم الموافقة النهائية.", "Your request has been sent — awaiting preliminary approval from the entity manager, then final approval.")}
@@ -13567,7 +14104,7 @@ function EmployeeSelfView({
           </div>
         )}
 
-        <SectionTitle>{t("طلب إجازة جديد", "New Leave Request")}</SectionTitle>
+        <SectionTitle>{t("طلب إجازة أو استئذان جديد", "New Leave / Permission Request")}</SectionTitle>
         <LeaveRequestForm onSubmit={onSubmitLeaveRequest} t={t} />
 
         <SectionTitle>{t("طلباتي", "My Requests")}</SectionTitle>
@@ -13580,7 +14117,7 @@ function EmployeeSelfView({
           {(leaveRequests || []).map((r) => (
             <div key={r.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div style={{ fontSize: 12.5 }}>
-                {trLabel(t, LEAVE_TYPE_LABELS_EN, r.type)} — <span style={{ fontFamily: "Consolas, monospace" }}>{r.from} → {r.to}</span>
+                {trLabel(t, LEAVE_TYPE_LABELS_EN, r.type)} — <span style={{ fontFamily: "Consolas, monospace" }}>{leaveRequestWhenLabel(r, t)}</span>
               </div>
               <Stamp tone={r.status === "موافقة نهائية" ? "green" : r.status.includes("مرفوضة") ? "brick" : "gold"}>
                 {trLabel(t, LEAVE_REQUEST_STATUS_LABELS_EN, r.status)}
