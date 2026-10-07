@@ -2845,7 +2845,7 @@ function useAttendanceClock({ myEmployee, attendance, setAttendance, setEmployee
 }
 
 
-function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivity }) {
+function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivity, idleHooksRef }) {
   const { t } = useLang();
   const role = currentUser.role;
   const isAdmin = role === "admin";
@@ -3346,6 +3346,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
         setSyncError(`تعذر الحفظ [${detail}] — تحقّق من الإنترنت`);
       });
   };
+
+  /* يُطلع للخروج التلقائي (IdleLogoutGuard) حالة الحفظ ودالته — يحاول يحفظ أي تعديلات معلّقة قبل الخروج */
+  if (idleHooksRef) idleHooksRef.current = { dirty, save: saveNow };
 
   const branchName = (id) => branches.find((b) => b.id === id)?.name || "—";
   const entityName = (id) => entities.find((e) => e.id === id)?.name || "—";
@@ -15600,6 +15603,74 @@ function ReportsTab({ activityLog, users }) {
 }
 
 /* ============ بوابة الدخول (تدير المستخدمين والجلسة) ============ */
+/* ===== خروج تلقائي بعد فترة سكون: 10 دقائق بدون أي حركة/لمس/ضغط = تسجيل خروج للجميع (ما عدا جهاز بصمة الوجه
+   المخصَّص اللي لازم يبقى شغّال). قبل الخروج بدقيقة يظهر تنبيه، وأي حركة تلغي العدّ. لو فيه تعديلات لم تُحفظ
+   يحاول يحفظها أولًا (حتى 4 ثوانٍ) ثم يخرج ===== */
+const IDLE_LOGOUT_MS = 10 * 60 * 1000;
+const IDLE_WARN_MS = 60 * 1000;
+function IdleLogoutGuard({ enabled, hooksRef, onTimeout }) {
+  const { t } = useLang();
+  const lastRef = useRef(Date.now());
+  const firedRef = useRef(false);
+  const [left, setLeft] = useState(null);
+  useEffect(() => {
+    if (!enabled) return undefined;
+    lastRef.current = Date.now();
+    firedRef.current = false;
+    const bump = () => {
+      lastRef.current = Date.now();
+    };
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll", "click", "wheel"];
+    events.forEach((ev) => window.addEventListener(ev, bump, { passive: true, capture: true }));
+    const tick = async () => {
+      if (firedRef.current) return;
+      const idle = Date.now() - lastRef.current;
+      if (idle >= IDLE_LOGOUT_MS) {
+        firedRef.current = true;
+        setLeft(0);
+        const h = hooksRef && hooksRef.current;
+        if (h && h.dirty && typeof h.save === "function") {
+          try {
+            h.save();
+          } catch (e) {}
+          for (let i = 0; i < 8 && hooksRef.current && hooksRef.current.dirty; i++) {
+            await new Promise((r) => setTimeout(r, 500));
+          }
+        }
+        setLeft(null);
+        onTimeout();
+      } else if (idle >= IDLE_LOGOUT_MS - IDLE_WARN_MS) {
+        setLeft(Math.ceil((IDLE_LOGOUT_MS - idle) / 1000));
+      } else {
+        setLeft((prev) => (prev === null ? prev : null));
+      }
+    };
+    const id = setInterval(tick, 1000);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", tick);
+      events.forEach((ev) => window.removeEventListener(ev, bump, { capture: true }));
+    };
+    // eslint-disable-next-line
+  }, [enabled]);
+  if (!enabled || left === null) return null;
+  return (
+    <div
+      className="no-print"
+      style={{
+        position: "fixed", bottom: 16, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
+        background: "#3a2a1c", color: "#fff", padding: "10px 18px", borderRadius: 10, fontSize: 13,
+        boxShadow: "0 4px 18px rgba(0,0,0,0.35)", maxWidth: "90vw", textAlign: "center",
+      }}
+    >
+      {left > 0
+        ? t(`سيتم تسجيل خروجك تلقائيًا بعد ${left} ثانية لعدم النشاط — حرّكي الماوس أو المسي الشاشة للبقاء`, `You will be signed out in ${left}s due to inactivity — move the mouse or tap to stay`)
+        : t("جارِ حفظ التعديلات وتسجيل الخروج...", "Saving changes and signing out...")}
+    </div>
+  );
+}
+
 function Root() {
   /* لو الرابط راجع من إيميل استرجاع كلمة المرور (فيه mode=resetPassword&oobCode=...)، نعرض شاشة
      "تعيين كلمة مرور جديدة" مباشرة قبل أي شيء تاني، بغض النظر عن حالة تسجيل الدخول الحالية */
@@ -15686,6 +15757,7 @@ function Root() {
      نتجاهل هذا الربط التلقائي أثناء عملية تسجيل خروج جارية (loggingOutRef) حتى لا يعيد تسجيل الدخول
      فورًا قبل ما Firebase يخلّص فعليًا عملية الخروج (كان سبب الحاجة لضغط "خروج" مرتين) */
   const loggingOutRef = useRef(false);
+  const idleHooksRef = useRef(null);
   useEffect(() => {
     if (!fbUser || !usersLoaded || currentUsername || loggingOutRef.current) return;
     const match = users.find((u) => u.authUid === fbUser.uid);
@@ -15945,14 +16017,25 @@ function Root() {
   }
 
   return (
-    <HRApp
-      currentUser={currentUser}
-      users={users}
-      setUsers={setUsers}
-      onLogout={logout}
-      activityLog={activityLog}
-      logActivity={(action, targetType, targetLabel) => logActivity(currentUser, action, targetType, targetLabel)}
-    />
+    <>
+      <IdleLogoutGuard
+        enabled={currentUser.role !== "attendance_device"}
+        hooksRef={idleHooksRef}
+        onTimeout={() => {
+          logout();
+          setLoginError("تم تسجيل خروجك تلقائيًا بعد 10 دقائق بدون نشاط — سجّلي الدخول من جديد");
+        }}
+      />
+      <HRApp
+        currentUser={currentUser}
+        users={users}
+        setUsers={setUsers}
+        onLogout={logout}
+        activityLog={activityLog}
+        logActivity={(action, targetType, targetLabel) => logActivity(currentUser, action, targetType, targetLabel)}
+        idleHooksRef={idleHooksRef}
+      />
+    </>
   );
 }
 
