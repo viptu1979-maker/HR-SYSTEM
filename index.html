@@ -1089,7 +1089,7 @@ function biText(lang, ar, en) {
   return lang === "en" ? e || a : a || e;
 }
 
-const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "", mustChangePassword: false, qualityAccess: false, maintenanceAccess: false };
+const EMPTY_USER = { username: "", password: "", role: "employee", name: "", branchId: "", employeeId: "", entityId: "", customTabs: null, customRoleLabel: "", email: "", mustChangePassword: false, qualityAccess: false, maintenanceAccess: false, employeesReadOnly: false };
 const CUSTOMIZABLE_TAB_KEYS = ["dash", "employees", "iqamas", "licenses", "branches", "attendance", "attendanceLog", "compliance", "warnings", "leaveRequests", "advanceRequests", "tasks", "messages", "payroll", "eos", "quality", "maintenance", "settings"];
 
 /* التبويبات الافتراضية المقترحة لكل دور — تظهر مُفعّلة تلقائيًا عند اختيار الدور، وتقدر تعدّلها يدويًا بعد كده */
@@ -4356,7 +4356,7 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             attendance={scopedAttendance}
             branchName={branchName}
             entityName={entityName}
-            onRenewExpiry={renewExpiry}
+            onRenewExpiry={!isAdmin && currentUser.employeesReadOnly ? undefined : renewExpiry}
           />
         )}
         {tab === "employees" && hasTab("employees") && (
@@ -4368,7 +4368,8 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             entityOfBranch={entityOfBranch}
             leaves={scopedLeaves}
             logActivity={logActivity}
-            canEditWeeklyOff={isAdmin || isManager || isEntityManager}
+            canEditWeeklyOff={(isAdmin || isManager || isEntityManager) && !(!isAdmin && currentUser.employeesReadOnly)}
+            readOnly={!isAdmin && !!currentUser.employeesReadOnly}
             jumpToEmployeeId={jumpToEmployeeId}
             onJumpHandled={() => setJumpToEmployeeId(null)}
           />
@@ -5484,7 +5485,7 @@ function useEmployeeProfileHandlers(employees, setEmployees, logActivity) {
   };
 }
 
-function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch, leaves, logActivity, canEditWeeklyOff = true, jumpToEmployeeId, onJumpHandled }) {
+function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBranch, leaves, logActivity, canEditWeeklyOff = true, readOnly = false, jumpToEmployeeId, onJumpHandled }) {
   const { t } = useLang();
   const [form, setForm] = useState(EMPTY_EMP);
   const [editingId, setEditingId] = useState(null);
@@ -5670,12 +5671,12 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         action={
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Btn tone="secondary" small onClick={() => setShowShiftsReport(true)}>{t("🖶 تقرير دوامات الفروع", "🖶 Branch Shifts Report")}</Btn>
-            <Btn tone="secondary" small onClick={() => setShowImport((v) => !v)}>{showImport ? t("إغلاق الاستيراد", "Close Import") : t("استيراد جماعي", "Bulk Import")}</Btn>
+            {!readOnly && <Btn tone="secondary" small onClick={() => setShowImport((v) => !v)}>{showImport ? t("إغلاق الاستيراد", "Close Import") : t("استيراد جماعي", "Bulk Import")}</Btn>}
           </div>
         }
       />
 
-      {showImport && (
+      {showImport && !readOnly && (
         <div style={{ background: "#fff", border: `1px solid ${COLORS.gold}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: COLORS.espresso }}>
             {t("استيراد جماعي للموظفين (JSON)", "Bulk Employee Import (JSON)")}
@@ -5736,6 +5737,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         </div>
       )}
 
+      {!readOnly && (
       <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
         <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: COLORS.espresso }}>
           {editingId ? t("تعديل بيانات موظف", "Edit Employee") : t("إضافة موظف جديد", "Add New Employee")}
@@ -5908,6 +5910,7 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
         </div>
         {formErr && <div style={{ marginTop: 10, fontSize: 12, color: COLORS.brick }}>{formErr}</div>}
       </div>
+      )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
         <SectionTitle>{t("قائمة الموظفين", "Employee List")} ({fmt(list.length)})</SectionTitle>
@@ -6023,10 +6026,10 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
                     <Stamp tone={e.status === "نشط" ? "green" : e.status === "موقوف" ? "gold" : "brick"}>{trLabel(t, STATUS_LABELS_EN, e.status)}</Stamp>
                   </td>
                   <td style={{ padding: "9px 12px", display: "flex", gap: 6, flexWrap: "wrap" }} className="no-print">
-                    <Btn small tone="secondary" onClick={() => edit(e)}>{t("تعديل", "Edit")}</Btn>
+                    {!readOnly && <Btn small tone="secondary" onClick={() => edit(e)}>{t("تعديل", "Edit")}</Btn>}
                     <Btn small tone="secondary" onClick={() => { setCertEmp(e); setCertType("salary"); setCertRefNo(""); setCertAddressedTo(""); }}>{t("📄 راتب", "📄 Salary")}</Btn>
                     <Btn small tone="secondary" onClick={() => { setCertEmp(e); setCertType("employment"); setCertRefNo(""); setCertAddressedTo(""); }}>{t("📄 عمل", "📄 Employment")}</Btn>
-                    <Btn small tone="danger" onClick={() => remove(e.id)}>{t("حذف", "Delete")}</Btn>
+                    {!readOnly && <Btn small tone="danger" onClick={() => remove(e.id)}>{t("حذف", "Delete")}</Btn>}
                   </td>
                 </tr>
               ))}
@@ -6054,7 +6057,8 @@ function EmployeesTab({ employees, setEmployees, branches, entities, entityOfBra
           onUpdateDaySchedule={updateDaySchedule}
           onResetFace={resetFaceDescriptor}
           onToggleFaceRequired={toggleFaceRequired}
-          canEditWeeklyOff={canEditWeeklyOff}
+          canEditWeeklyOff={canEditWeeklyOff && !readOnly}
+          readOnly={readOnly}
           onPrintCertificate={(type) => { setCertEmp(profileEmp); setCertType(type); setCertRefNo(""); setCertAddressedTo(""); }}
           onClose={() => setProfileEmp(null)}
         />
@@ -6352,7 +6356,7 @@ function BranchShiftsReportModal({ branches, entities, employees, onClose }) {
 }
 
 /* ============ الملف الشخصي الكامل للموظف ============ */
-function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, onToggleMultiShift, onToggleFlexibleSchedule, onToggleUseDaySchedules, onUpdateDaySchedule, onResetFace, onToggleFaceRequired, canEditWeeklyOff = true, onPrintCertificate, onClose }) {
+function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemoveCareerEntry, onUpdateGovFees, onToggleWeeklyOffDay, onUpdateWorkShift, onUpdateWorkShift2, onToggleTwoShifts, onToggleMultiShift, onToggleFlexibleSchedule, onToggleUseDaySchedules, onUpdateDaySchedule, onResetFace, onToggleFaceRequired, canEditWeeklyOff = true, readOnly = false, onPrintCertificate, onClose }) {
   const { t } = useLang();
   const [careerForm, setCareerForm] = useState({ date: new Date().toISOString().slice(0, 10), title: "", note: "" });
   const feesRefs = {
@@ -6693,6 +6697,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
                 <input
                   type="checkbox"
                   checked={emp.faceAttendanceEnabled !== false}
+                  disabled={readOnly}
                   onChange={(e) => onToggleFaceRequired && onToggleFaceRequired(emp.id, e.target.checked)}
                 />
                 <span style={{ fontSize: 11.5, color: "#a3927a" }}>
@@ -6713,7 +6718,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
                 <Stamp tone="gold">{t("لم تُسجَّل بعد", "Not registered yet")}</Stamp>
               )}
             </div>
-            {emp.faceDescriptor && (
+            {emp.faceDescriptor && !readOnly && (
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12.5, padding: "5px 0" }}>
                 <span style={{ color: "#a3927a", maxWidth: 320 }}>
                   {t(
@@ -6771,7 +6776,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
             </div>
           </Section>
 
-          {!isSaudi && (
+          {!isSaudi && !readOnly && (
           <Section title={t("الرسوم الحكومية", "Government Fees")}>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 10 }}>
               <Field label={t("رسوم تجديد الإقامة (﷼)", "Iqama Renewal Fee (SAR)")}>
@@ -6841,7 +6846,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
           )}
 
           <Section title={`${t("المسار الوظيفي", "Career Path")} (${career.length})`}>
-            <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
+            {!readOnly && <div style={{ display: "flex", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
               <DateField style={{ ...inputStyle, maxWidth: 140 }} value={careerForm.date} onChange={(v) => setCareerForm({ ...careerForm, date: v })} />
               <input
                 style={{ ...inputStyle, maxWidth: 200 }}
@@ -6856,7 +6861,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
                 onChange={(e) => setCareerForm({ ...careerForm, note: e.target.value })}
               />
               <Btn small onClick={addCareer}>{t("إضافة", "Add")}</Btn>
-            </div>
+            </div>}
             {career.length === 0 && <Empty text={t("لا يوجد سجل مسار وظيفي بعد", "No career history recorded yet")} />}
             {career.map((h) => (
               <div key={h.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderTop: `1px dashed ${COLORS.line}` }}>
@@ -6866,7 +6871,7 @@ function EmployeeProfileModal({ emp, branches, leaves, onAddCareerEntry, onRemov
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <span style={{ fontSize: 11, color: "#a3927a" }}>{h.date}</span>
-                  <Btn small tone="danger" onClick={() => onRemoveCareerEntry(emp.id, h.id)}>{t("حذف", "Delete")}</Btn>
+                  {!readOnly && <Btn small tone="danger" onClick={() => onRemoveCareerEntry(emp.id, h.id)}>{t("حذف", "Delete")}</Btn>}
                 </div>
               </div>
             ))}
@@ -15359,6 +15364,10 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
                 );
               })}
             </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, cursor: "pointer", marginTop: 12 }}>
+              <input type="checkbox" checked={!!form.employeesReadOnly} onChange={(e) => setForm({ ...form, employeesReadOnly: e.target.checked })} />
+              {t("الموظفون: عرض فقط (لا يعدّل الموظف ولا دوامه ولا يضيف ولا يحذف)", "Employees: view only (cannot edit, add, delete, or change shifts)")}
+            </label>
             <div style={{ fontSize: 11, color: "#a3927a", marginTop: 8 }}>
               {t(
                 "ملاحظة: تبويبَي \"المستخدمون\" و\"التقارير\" مقصوران على حساب الأدمن دائمًا ولا يمكن منحهما لأي دور آخر.",
@@ -15425,6 +15434,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
                       {(u.role === "branch_manager" || u.role === "quality" || u.role === "maintenance" || u.role === "attendance_device") && ` · ${branches.find((b) => b.id === u.branchId)?.name || "—"}`}
                       {u.role === "employee" && ` · ${employees.find((e) => e.id === u.employeeId)?.name || t("غير مرتبط", "Not linked")}`}
                       {Array.isArray(u.customTabs) && ` · 🔧 ${t(`صلاحيات مخصصة (${u.customTabs.length} تبويب)`, `Custom access (${u.customTabs.length} tabs)`)}`}
+                      {u.employeesReadOnly && ` · 👁 ${t("الموظفون: عرض فقط", "Employees: view only")}`}
                       {u.qualityAccess && ` · ◒ ${t("الجودة", "Quality")}`}
                       {u.maintenanceAccess && ` · 🔧 ${t("الصيانة", "Maintenance")}`}
                     </div>
