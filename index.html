@@ -2521,9 +2521,8 @@ function useAttendanceClock({ myEmployee, attendance, setAttendance, setEmployee
            فيش وقت دخول مقرَّر أصلاً، فمايتحسبش عليه تأخير إطلاقًا */
         const todayDayName = JS_DAY_INDEX_TO_AR[new Date().getDay()];
         const isOffDayToday = getOffDays(myEmployee).includes(todayDayName);
-        const shiftStart = effectiveShift(myEmployee, todayDayName).start;
-        const diff = (myEmployee.flexibleSchedule || isOffDayToday) ? 0 : minutesOf(timeStr) - minutesOf(shiftStart);
-        const lateMinutes = diff > LATE_EARLY_GRACE_MINUTES ? diff : 0;
+        const todayShift = effectiveShift(myEmployee, todayDayName);
+        const lateMinutes = (myEmployee.flexibleSchedule || isOffDayToday) ? 0 : computeLateMinutes(timeStr, todayShift.start, todayShift.end);
         /* لو already موجود هنا (سجل "حاضر" مُضاف يدويًا أو جماعيًا لنفس اليوم لكن بدون وقت حضور فعلي)،
            نكمّل عليه بنفس الـ id بدل ما ننشئ سجل تاني منفصل — وإلا يتكرر سجل الحضور مرتين لنفس اليوم
            ويتأثر أي تقرير/حساب راتب يفترض سجل واحد بس لكل موظف/يوم */
@@ -2550,8 +2549,7 @@ function useAttendanceClock({ myEmployee, attendance, setAttendance, setEmployee
         logActivity && logActivity("تسجيل حضور (ذاتي)", "attendance", `${myEmployee.name}: ${timeStr}${checkInBranchName ? " — " + checkInBranchName : ""}`);
       } else {
         const shiftStart2 = myEmployee.workShift2?.start || "17:00";
-        const diff = myEmployee.flexibleSchedule ? 0 : minutesOf(timeStr) - minutesOf(shiftStart2);
-        const lateMinutes2 = diff > LATE_EARLY_GRACE_MINUTES ? diff : 0;
+        const lateMinutes2 = myEmployee.flexibleSchedule ? 0 : computeLateMinutes(timeStr, shiftStart2, myEmployee.workShift2?.end || "22:00");
         setAttendance((prev) =>
           prev.map((a) =>
             a.id === already.id
@@ -5115,6 +5113,30 @@ function dayNameOfDate(dateStr, t) {
   const d = new Date(dateStr + "T00:00:00");
   if (isNaN(d)) return "";
   return t(JS_DAY_INDEX_TO_AR[d.getDay()], JS_DAY_INDEX_TO_EN[d.getDay()]);
+}
+
+/* دقائق التأخير الصحيحة: الفرق بين وقت الحضور وبداية الدوام بشكل دائري (يتعامل مع منتصف الليل)،
+   وما يتجاوز نصف اليوم يُعتبر حضورًا قبل الدوام (مو تأخير 16 ساعة). وأي تأخير يكون بعد انتهاء الدوام كله
+   أو أكبر من مدة الدوام نفسه ما يُحتسب تأخير (غالبًا الدوام المسجّل في ملف الموظف ما يطابق دوامه الفعلي) */
+function computeLateMinutes(arrivalHHMM, shiftStartHHMM, shiftEndHHMM) {
+  const toMin = (x) => {
+    const [h, m] = String(x || "").split(":").map(Number);
+    return isNaN(h) || isNaN(m) ? null : h * 60 + m;
+  };
+  const a = toMin(arrivalHHMM);
+  const s = toMin(shiftStartHHMM);
+  if (a === null || s === null) return 0;
+  let diff = a - s;
+  if (diff >= 720) diff -= 1440;
+  if (diff < -720) diff += 1440;
+  if (diff <= LATE_EARLY_GRACE_MINUTES) return 0;
+  const e = toMin(shiftEndHHMM);
+  if (e !== null && e !== s) {
+    let len = e - s;
+    if (len <= 0) len += 1440;
+    if (diff >= len) return 0;
+  }
+  return diff;
 }
 
 /* يرجّع وقت بداية/نهاية دوام الموظف الفعلي ليوم معيّن (باسمه العربي، مثل "السبت") — لو مفعّل عنده
