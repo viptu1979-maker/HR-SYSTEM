@@ -14822,15 +14822,29 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
     try {
       const cred = firebase.auth.EmailAuthProvider.credential(auth.currentUser.email, padPasswordForAuth(recoveryPassword));
       await auth.currentUser.reauthenticateWithCredential(cred);
-      await auth.currentUser.updateEmail(recoveryEmail.trim());
-      setUsers((prev) => prev.map((u) => (u.authUid === auth.currentUser.uid ? { ...u, email: recoveryEmail.trim() } : u)));
-      logActivity && logActivity("ربط بريد استرجاع كلمة المرور", "users", recoveryEmail.trim());
-      setRecoveryMsg(t("تم ربط البريد بنجاح ✔ — تقدر تستخدمه الآن لاسترجاع كلمة المرور من شاشة الدخول.", "Email linked successfully ✔ — you can now use it to recover your password from the sign-in screen."));
+      const newEmail = recoveryEmail.trim();
+      /* Firebase (مع تفعيل "حماية تعداد البريد" — الوضع الافتراضي للمشاريع الجديدة) يرفض updateEmail المباشر
+         بالخطأ auth/operation-not-allowed. الطريقة المدعومة: verifyBeforeUpdateEmail — يرسل رابط تأكيد للبريد
+         الجديد، ويتغيّر البريد فعليًا بعد الضغط على الرابط */
+      const returnUrl = window.location.origin + window.location.pathname;
+      if (typeof auth.currentUser.verifyBeforeUpdateEmail === "function") {
+        await auth.currentUser.verifyBeforeUpdateEmail(newEmail, { url: returnUrl });
+      } else {
+        await auth.currentUser.updateEmail(newEmail);
+      }
+      setUsers((prev) => prev.map((u) => (u.authUid === auth.currentUser.uid ? { ...u, email: newEmail } : u)));
+      logActivity && logActivity("طلب ربط بريد استرجاع كلمة المرور", "users", newEmail);
+      setRecoveryMsg(t(
+        `أُرسل رابط تأكيد إلى ${newEmail} — افتحي بريدك (وتفقدي Spam) واضغطي الرابط لإتمام الربط. بعد التأكيد، سجّلي الدخول بهذا البريد نفسه في خانة اسم المستخدم.`,
+        `A confirmation link was sent to ${newEmail} — open your inbox (check Spam) and click it to finish linking. After confirming, sign in using this email in the username field.`
+      ));
       setRecoveryPassword("");
     } catch (e) {
       setRecoveryErr(
         e.code === "auth/wrong-password"
           ? t("كلمة المرور الحالية غير صحيحة", "Current password is incorrect")
+          : e.code === "auth/email-already-in-use"
+          ? t("هذا البريد مستخدم لحساب آخر — استخدمي بريدًا مختلفًا", "This email is already used by another account — use a different one")
           : t(`تعذّر ربط البريد — خطأ: ${e.code || e.message}`, `Couldn't link the email — error: ${e.code || e.message}`)
       );
     }
@@ -15799,7 +15813,9 @@ function Root() {
     setLoginError("");
     setLoggingIn(true);
     try {
-      const email = usernameToAuthEmail(uname);
+      /* بعد ربط بريد استرجاع حقيقي (وتأكيده)، بريد حساب Firebase يصير هو البريد الحقيقي — فنسمح بالدخول
+         به مباشرة في خانة اسم المستخدم: لو فيها "@" نستخدمها كبريد كما هي، وإلا نحوّل الاسم لبريد داخلي */
+      const email = uname.includes("@") ? uname.toLowerCase() : usernameToAuthEmail(uname);
       const cred = await auth.signInWithEmailAndPassword(email, padPasswordForAuth(loginForm.password));
       /* جلب فوري (مو مرتبط بحالة usersLoaded/الاشتراك، عشان ما نستنى دورة رندر إضافية) لإيجاد ملف
          المستخدم المرتبط بنفس حساب Firebase اللي دخل بيه للتو */
