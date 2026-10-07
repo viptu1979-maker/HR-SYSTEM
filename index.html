@@ -11015,6 +11015,52 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
   const [saving, setSaving] = useState(false);
+  /* ربط بريد استرجاع كلمة المرور — لأي مستخدم (مو الأدمن بس): بعد ربطه وتأكيده من رسالة تصله، يقدر يستخدم
+     "نسيت كلمة المرور" من شاشة الدخول ويستعيد حسابه بنفسه */
+  const [linkPw, setLinkPw] = useState("");
+  const [linkEmail, setLinkEmail] = useState("");
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkMsg, setLinkMsg] = useState("");
+  const [linkErr, setLinkErr] = useState("");
+  const authEmailNow = auth.currentUser?.email || "";
+  const linkedRealEmail = authEmailNow && !authEmailNow.endsWith("@hrsystem.local") ? authEmailNow : "";
+  const linkRecovery = async () => {
+    setLinkErr("");
+    setLinkMsg("");
+    if (!linkPw.trim() || !/^\S+@\S+\.\S+$/.test(linkEmail.trim())) {
+      setLinkErr(t("اكتبي كلمة مرورك الحالية وبريدًا صحيحًا", "Enter your current password and a valid email"));
+      return;
+    }
+    if (!auth.currentUser) {
+      setLinkErr(t("يجب تسجيل الدخول أولاً", "You must be signed in first"));
+      return;
+    }
+    setLinkBusy(true);
+    try {
+      const cred = firebase.auth.EmailAuthProvider.credential(auth.currentUser.email, padPasswordForAuth(linkPw));
+      await auth.currentUser.reauthenticateWithCredential(cred);
+      const newEmail = linkEmail.trim();
+      const returnUrl = window.location.origin + window.location.pathname;
+      await auth.currentUser.verifyBeforeUpdateEmail(newEmail, { url: returnUrl });
+      setUsers((prev) => prev.map((u) => (u.username === currentUser.username ? { ...u, recoveryEmail: newEmail } : u)));
+      logActivity && logActivity("طلب ربط بريد استرجاع كلمة المرور", "users", currentUser.username);
+      setLinkMsg(t(
+        `أُرسل رابط تأكيد إلى ${newEmail} — افتحي بريدك (وتفقدي Spam) واضغطي الرابط. بعدها سجّلي الدخول بهذا البريد في خانة اسم المستخدم، وتقدرين تستعيدين كلمة المرور من "نسيت كلمة المرور".`,
+        `A confirmation link was sent to ${newEmail} — open your inbox (check Spam) and click it. Then sign in using this email in the username field; you can recover your password via "Forgot password".`
+      ));
+      setLinkPw("");
+    } catch (e) {
+      const c = e && e.code;
+      setLinkErr(
+        c === "auth/wrong-password" || c === "auth/invalid-credential" || c === "auth/invalid-login-credentials"
+          ? t("كلمة المرور الحالية غير صحيحة", "Current password is incorrect")
+          : c === "auth/email-already-in-use"
+          ? t("هذا البريد مستخدم لحساب آخر", "This email is already used by another account")
+          : t(`تعذّر ربط البريد — خطأ: ${c || (e && e.message)}`, `Couldn't link the email — error: ${c || (e && e.message)}`)
+      );
+    }
+    setLinkBusy(false);
+  };
 
   const submit = async () => {
     setError("");
@@ -11025,9 +11071,12 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
     setSaving(true);
     /* كلمة المرور الحالية بقت مخزّنة في مستند منفصل (userCredentials) مش جوه سجل الحساب نفسه —
        نجيبها هنا لحظة التحقق بدل ما تكون جاهزة مسبقًا في currentUser */
+    const isMigratedAccount = !!(currentUser.authUid && auth.currentUser);
     let storedPassword;
     try {
-      storedPassword = await getUserCredential(currentUser.id);
+      /* الحساب المرحَّل: مصدر الحقيقة هو Firebase (يتحقق منه reauthenticate تحت) — النسخة المخزّنة قد تكون قديمة
+         لو الشخص استرجع كلمة مروره عبر رابط البريد */
+      storedPassword = isMigratedAccount ? oldPassword : await getUserCredential(currentUser.id);
     } catch (e) {
       setSaving(false);
       setError(t("تعذّر التحقق من كلمة المرور الحالية — تحقّق من الإنترنت وحاول مرة أخرى", "Couldn't verify your current password — check your connection and try again"));
@@ -11068,6 +11117,10 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
         await auth.currentUser.updatePassword(padPasswordForAuth(newPassword));
       } catch (e) {
         setSaving(false);
+        if (e && (e.code === "auth/wrong-password" || e.code === "auth/invalid-credential" || e.code === "auth/invalid-login-credentials")) {
+          setError(t("كلمة المرور الحالية غير صحيحة", "Current password is incorrect"));
+          return;
+        }
         setError(
           t(
             "تعذّر تحديث كلمة الدخول الفعلية — سجّلي خروج ثم دخول بكلمة مرورك الحالية وحاولي تغييرها مرة أخرى",
@@ -11219,6 +11272,30 @@ function ChangePasswordModal({ currentUser, setUsers, onClose, logActivity, forc
                   <Btn tone="secondary" onClick={onClose}>{t("إلغاء", "Cancel")}</Btn>
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {!forced && currentUser.authUid && (
+          <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px dashed ${COLORS.line}` }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: COLORS.espresso, marginBottom: 4 }}>
+              📧 {t("بريد استرجاع كلمة المرور", "Password recovery email")}
+            </div>
+            <div style={{ fontSize: 11.5, color: "#8a7a63", marginBottom: 10, lineHeight: 1.7 }}>
+              {linkedRealEmail
+                ? t(`البريد المرتبط حاليًا: ${linkedRealEmail}. تدخلين به، ولو نسيتي كلمة المرور استخدمي "نسيت كلمة المرور" من شاشة الدخول.`, `Linked email: ${linkedRealEmail}. Use it to sign in; if you forget your password use "Forgot password" on the sign-in screen.`)
+                : t("اربطي بريدك عشان تقدرين تستعيدين كلمة المرور بنفسك لو نسيتيها.", "Link your email so you can recover your password yourself if you forget it.")}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              <Field label={t("كلمة المرور الحالية", "Current Password")}>
+                <input type="password" style={inputStyle} value={linkPw} onChange={(e) => setLinkPw(e.target.value)} />
+              </Field>
+              <Field label={t("البريد الإلكتروني", "Email")}>
+                <input type="email" dir="ltr" style={inputStyle} value={linkEmail} onChange={(e) => setLinkEmail(e.target.value)} placeholder={linkedRealEmail || "name@gmail.com"} />
+              </Field>
+              {linkErr && <div style={{ color: COLORS.brick, fontSize: 12 }}>{linkErr}</div>}
+              {linkMsg && <div style={{ color: COLORS.green, fontSize: 12, lineHeight: 1.7 }}>{linkMsg}</div>}
+              <Btn onClick={linkRecovery} disabled={linkBusy}>{linkBusy ? t("جارِ الإرسال...", "Sending...") : t("إرسال رابط التأكيد", "Send confirmation link")}</Btn>
             </div>
           </div>
         )}
@@ -11403,7 +11480,7 @@ function LoginScreen({ form, setForm, onSubmit, error, busy }) {
       }
     }
     setResetSending(false);
-    setResetMsg(t("لو البريد صحيح ومسجّل لحساب الأدمن، هيوصلك رابط استرجاع كلمة المرور خلال دقائق. تأكد من مجلد الرسائل غير المرغوبة (Spam) لو ما وصلتك.", "If the email is correct and registered to the admin account, a password reset link will arrive within a few minutes. Check your spam folder if it doesn't show up."));
+    setResetMsg(t("لو البريد صحيح ومسجّل بحساب في النظام، هيوصلك رابط استرجاع كلمة المرور خلال دقائق. تأكد من مجلد الرسائل غير المرغوبة (Spam) لو ما وصلتك.", "If the email is correct and linked to an account, a password reset link will arrive within a few minutes. Check your spam folder if it doesn't show up."));
   };
 
   return (
@@ -11438,14 +11515,14 @@ function LoginScreen({ form, setForm, onSubmit, error, busy }) {
           }}
         >
           <div style={{ textAlign: "center", marginBottom: 22 }}>
-            <div style={{ fontSize: 17, fontWeight: 800, color: COLORS.espresso }}>{t("استرجاع كلمة مرور الأدمن", "Recover Admin Password")}</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: COLORS.espresso }}>{t("استرجاع كلمة المرور", "Recover Password")}</div>
             <div style={{ fontSize: 11.5, color: COLORS.coffee, marginTop: 4 }}>
-              {t("متاح لحساب الأدمن العام فقط، وبعد ربط بريد استرجاع من داخل النظام مسبقًا.", "Available for the general admin account only, and only after a recovery email has been linked from inside the system beforehand.")}
+              {t("متاح لأي حساب ربط بريد استرجاعه مسبقًا من داخل النظام (تغيير كلمة المرور ← بريد استرجاع كلمة المرور).", "Available for any account that already linked a recovery email from inside the system (Change Password → Password recovery email).")}
             </div>
           </div>
           {!resetMsg ? (
             <>
-              <Field label={t("البريد الإلكتروني المسجَّل للأدمن", "Admin's registered email")}>
+              <Field label={t("البريد الإلكتروني المربوط بحسابك", "Your linked email")}>
                 <input
                   type="email"
                   style={inputStyle}
