@@ -9618,6 +9618,102 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
     logActivity && logActivity(`تعديل ${editItemForm.type}`, "payroll", `${empName(target?.employeeId)} — ${fmt(amt)} ﷼`);
     cancelEditItem();
   };
+  /* ===== عرض قيود السلف/الخصومات/الحوافز: ملخّص + فلترة + تجميع حسب الموظف ===== */
+  const [itemSearch, setItemSearch] = useState("");
+  const [itemTypeFilter, setItemTypeFilter] = useState("");
+  const [itemMonthFilter, setItemMonthFilter] = useState("");
+  const [itemView, setItemView] = useState("grouped");
+  const [openItemGroups, setOpenItemGroups] = useState({});
+  const itemMonths = Array.from(new Set(payrollItems.map((x) => x.month).filter(Boolean))).sort().reverse();
+  const filteredItems = payrollItems
+    .slice()
+    .reverse()
+    .filter((x) => {
+      if (itemTypeFilter && x.type !== itemTypeFilter) return false;
+      if (itemMonthFilter && x.month !== itemMonthFilter) return false;
+      const q = itemSearch.trim().toLowerCase();
+      if (q) {
+        const hay = `${(employees.find((e) => e.id === x.employeeId)?.name || "")} ${x.note || ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  const itemTotals = {};
+  const itemCounts = {};
+  filteredItems.forEach((x) => {
+    itemTotals[x.type] = (itemTotals[x.type] || 0) + Number(x.amount || 0);
+    itemCounts[x.type] = (itemCounts[x.type] || 0) + 1;
+  });
+  const itemGroups = (() => {
+    const map = new Map();
+    filteredItems.forEach((x) => {
+      if (!map.has(x.employeeId)) map.set(x.employeeId, { id: x.employeeId, items: [], totals: {} });
+      const g = map.get(x.employeeId);
+      g.items.push(x);
+      g.totals[x.type] = (g.totals[x.type] || 0) + Number(x.amount || 0);
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      const an = employees.find((e) => e.id === a.id)?.name || "";
+      const bn = employees.find((e) => e.id === b.id)?.name || "";
+      return an.localeCompare(bn);
+    });
+  })();
+  /* صف قيد واحد (سلفة/خصم/حافز) مع نموذج التعديل المضمَّن — يُستخدم في العرض المجمَّع وفي عرض القائمة */
+  const renderItemRow = (p, i, showEmpName) => (
+          <React.Fragment key={p.id}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", flexWrap: "wrap", gap: 8, fontSize: 12.5, background: editingItemId === p.id ? COLORS.paper : "transparent" }}>
+            <div style={{ flex: "1 1 260px", minWidth: 0 }}>
+              {showEmpName && <b>{empName(p.employeeId)} — </b>}
+              <span>{p.note || t("بدون ملاحظة", "No note")}</span>
+              <div style={{ color: "#a3927a", fontFamily: "Consolas, monospace", fontSize: 11, marginTop: 2 }}>
+                {p.date || "—"}{p.month ? ` · ${t("استحقاق", "due")} ${p.month}` : ""}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <Stamp tone={p.type === "حافز" ? "green" : "brick"}>
+                {trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, p.type)}
+              </Stamp>
+              <span style={{ fontFamily: "Consolas, monospace", fontWeight: 700 }}>{fmt(p.amount)} ﷼</span>
+              <Btn small onClick={() => setPrintItem(p)}>{t("🖶 طباعة", "🖶 Print")}</Btn>
+              <Btn small tone="secondary" onClick={() => (editingItemId === p.id ? cancelEditItem() : startEditItem(p))}>{t("تعديل", "Edit")}</Btn>
+              <Btn small tone="danger" onClick={() => removeItem(p.id)}>{t("حذف", "Delete")}</Btn>
+            </div>
+          </div>
+          {editingItemId === p.id && editItemForm && (
+            <div style={{ padding: "12px 14px", background: COLORS.paper, borderTop: `1px dashed ${COLORS.line}` }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
+                <Field label={t("النوع", "Type")}>
+                  <select style={inputStyle} value={editItemForm.type} onChange={(e) => setEditItemForm({ ...editItemForm, type: e.target.value })}>
+                    <option value="سلفة">{t("سلفة", "Advance")}</option>
+                    <option value="خصم">{t("خصم", "Deduction")}</option>
+                    <option value="حافز">{t("حافز", "Incentive")}</option>
+                  </select>
+                </Field>
+                <Field label={t("المبلغ", "Amount")}>
+                  <input type="number" style={{ ...inputStyle, width: 120 }} value={editItemForm.amount} onChange={(e) => setEditItemForm({ ...editItemForm, amount: e.target.value })} />
+                </Field>
+                <Field label={t("تاريخ القيد", "Entry Date")}>
+                  <input type="date" style={inputStyle} value={editItemForm.date} onChange={(e) => setEditItemForm({ ...editItemForm, date: e.target.value })} />
+                </Field>
+                <Field label={t("شهر الاستحقاق", "Applicable Month")}>
+                  <input type="month" style={inputStyle} value={editItemForm.month} onChange={(e) => setEditItemForm({ ...editItemForm, month: e.target.value })} />
+                </Field>
+                <Field label={t("ملاحظة / السبب", "Note / Reason")}>
+                  <input type="text" style={{ ...inputStyle, minWidth: 220 }} value={editItemForm.note} onChange={(e) => setEditItemForm({ ...editItemForm, note: e.target.value })} />
+                </Field>
+                <Btn small onClick={saveEditItem}>{t("حفظ التعديل", "Save Changes")}</Btn>
+                <Btn small tone="secondary" onClick={cancelEditItem}>{t("إلغاء", "Cancel")}</Btn>
+              </div>
+              {p.loanGroupId && (
+                <div style={{ marginTop: 8, fontSize: 11, color: "#8a7a63" }}>
+                  {t("هذا قسط من سلفة مقسَّمة — التعديل يخص هذا القسط فقط، ولا يغيّر الأقساط الأخرى.", "This is one installment of a split advance — editing affects this installment only, not the others.")}
+                </div>
+              )}
+              {editItemErr && <div style={{ marginTop: 8, fontSize: 12, color: COLORS.brick }}>{editItemErr}</div>}
+            </div>
+          )}
+          </React.Fragment>
+  );
   const empName = (id) => employees.find((e) => e.id === id)?.name || "—";
   /* تبديل سريع بين طرق الاستلام الثلاث (تحويل بنكي ← نقدًا ← مدد ← ...) بضغطة واحدة على خانة طريقة
      الاستلام في جدول الرواتب — بدل ما تحتاجي تفتحي ملف الموظف كل مرة عشان تغيّريها (بلاغ المستخدمة) */
@@ -9871,60 +9967,123 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
           )}
         </div>
       </div>
-      <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 24 }} className="no-print">
-        {payrollItems.length === 0 && <Empty text={t("لا توجد قيود سلف أو خصومات أو حوافز مسجّلة", "No advances, deductions, or incentives registered")} />}
-        {payrollItems.slice().reverse().map((p, i) => (
-          <React.Fragment key={p.id}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 14px", borderTop: i ? `1px dashed ${COLORS.line}` : "none", fontSize: 12.5, background: editingItemId === p.id ? COLORS.paper : "transparent" }}>
-            <div>
-              <b>{empName(p.employeeId)}</b> — {p.note || t("بدون ملاحظة", "No note")}
-              <span style={{ color: "#a3927a", fontFamily: "Consolas, monospace" }}> · {p.date || p.month}</span>
-            </div>
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <Stamp tone={p.type === "حافز" ? "green" : "brick"}>
-                {trLabel(t, PAYROLL_ITEM_TYPE_LABELS_EN, p.type)}
-              </Stamp>
-              <span style={{ fontFamily: "Consolas, monospace", fontWeight: 700 }}>{fmt(p.amount)} ﷼</span>
-              <Btn small onClick={() => setPrintItem(p)}>{t("🖶 طباعة", "🖶 Print")}</Btn>
-              <Btn small tone="secondary" onClick={() => (editingItemId === p.id ? cancelEditItem() : startEditItem(p))}>{t("تعديل", "Edit")}</Btn>
-              <Btn small tone="danger" onClick={() => removeItem(p.id)}>{t("حذف", "Delete")}</Btn>
-            </div>
+      <div className="no-print" style={{ marginBottom: 24 }}>
+        {payrollItems.length === 0 ? (
+          <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+            <Empty text={t("لا توجد قيود سلف أو خصومات أو حوافز مسجّلة", "No advances, deductions, or incentives registered")} />
           </div>
-          {editingItemId === p.id && editItemForm && (
-            <div style={{ padding: "12px 14px", background: COLORS.paper, borderTop: `1px dashed ${COLORS.line}` }}>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "flex-end" }}>
-                <Field label={t("النوع", "Type")}>
-                  <select style={inputStyle} value={editItemForm.type} onChange={(e) => setEditItemForm({ ...editItemForm, type: e.target.value })}>
-                    <option value="سلفة">{t("سلفة", "Advance")}</option>
-                    <option value="خصم">{t("خصم", "Deduction")}</option>
-                    <option value="حافز">{t("حافز", "Incentive")}</option>
-                  </select>
-                </Field>
-                <Field label={t("المبلغ", "Amount")}>
-                  <input type="number" style={{ ...inputStyle, width: 120 }} value={editItemForm.amount} onChange={(e) => setEditItemForm({ ...editItemForm, amount: e.target.value })} />
-                </Field>
-                <Field label={t("تاريخ القيد", "Entry Date")}>
-                  <input type="date" style={inputStyle} value={editItemForm.date} onChange={(e) => setEditItemForm({ ...editItemForm, date: e.target.value })} />
-                </Field>
-                <Field label={t("شهر الاستحقاق", "Applicable Month")}>
-                  <input type="month" style={inputStyle} value={editItemForm.month} onChange={(e) => setEditItemForm({ ...editItemForm, month: e.target.value })} />
-                </Field>
-                <Field label={t("ملاحظة / السبب", "Note / Reason")}>
-                  <input type="text" style={{ ...inputStyle, minWidth: 220 }} value={editItemForm.note} onChange={(e) => setEditItemForm({ ...editItemForm, note: e.target.value })} />
-                </Field>
-                <Btn small onClick={saveEditItem}>{t("حفظ التعديل", "Save Changes")}</Btn>
-                <Btn small tone="secondary" onClick={cancelEditItem}>{t("إلغاء", "Cancel")}</Btn>
-              </div>
-              {p.loanGroupId && (
-                <div style={{ marginTop: 8, fontSize: 11, color: "#8a7a63" }}>
-                  {t("هذا قسط من سلفة مقسَّمة — التعديل يخص هذا القسط فقط، ولا يغيّر الأقساط الأخرى.", "This is one installment of a split advance — editing affects this installment only, not the others.")}
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+              {[
+                { k: "سلفة", label: t("إجمالي السلف", "Total Advances"), color: COLORS.brick, bg: COLORS.brickBg },
+                { k: "خصم", label: t("إجمالي الخصومات", "Total Deductions"), color: COLORS.brick, bg: COLORS.brickBg },
+                { k: "حافز", label: t("إجمالي الحوافز", "Total Incentives"), color: COLORS.green, bg: COLORS.greenBg },
+              ].map((c) => (
+                <div key={c.k} style={{ flex: "1 1 160px", background: c.bg, border: `1px solid ${COLORS.line}`, borderRadius: 10, padding: "10px 14px" }}>
+                  <div style={{ fontSize: 11.5, color: "#8a7a63" }}>{c.label}</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: c.color, fontFamily: "Consolas, monospace" }}>{fmt(itemTotals[c.k] || 0)} ﷼</div>
+                  <div style={{ fontSize: 11, color: "#a3927a" }}>{itemCounts[c.k] || 0} {t("قيد", "entries")}</div>
                 </div>
-              )}
-              {editItemErr && <div style={{ marginTop: 8, fontSize: 12, color: COLORS.brick }}>{editItemErr}</div>}
+              ))}
             </div>
-          )}
-          </React.Fragment>
-        ))}
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12 }}>
+              <input
+                style={{ ...inputStyle, maxWidth: 230 }}
+                placeholder={t("ابحث باسم الموظف أو الملاحظة...", "Search employee or note...")}
+                value={itemSearch}
+                onChange={(e) => setItemSearch(e.target.value)}
+              />
+              {[["", t("الكل", "All")], ["سلفة", t("سلف", "Advances")], ["خصم", t("خصومات", "Deductions")], ["حافز", t("حوافز", "Incentives")]].map(([k, label]) => (
+                <button
+                  key={k || "all"}
+                  type="button"
+                  onClick={() => setItemTypeFilter(k)}
+                  style={{
+                    padding: "6px 12px", borderRadius: 999, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                    border: `1px solid ${itemTypeFilter === k ? COLORS.espresso : COLORS.line}`,
+                    background: itemTypeFilter === k ? COLORS.espresso : "#fff",
+                    color: itemTypeFilter === k ? "#fff" : COLORS.coffee,
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+              <select style={{ ...inputStyle, maxWidth: 160 }} value={itemMonthFilter} onChange={(e) => setItemMonthFilter(e.target.value)}>
+                <option value="">{t("كل الأشهر", "All months")}</option>
+                {itemMonths.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+              <div style={{ display: "flex", gap: 6, marginInlineStart: "auto" }}>
+                {[["grouped", t("حسب الموظف", "By employee")], ["list", t("الأحدث أولًا", "Latest first")]].map(([k, label]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => setItemView(k)}
+                    style={{
+                      padding: "6px 12px", borderRadius: 7, fontSize: 12, fontWeight: 700, cursor: "pointer",
+                      border: `1px solid ${itemView === k ? COLORS.espresso : COLORS.line}`,
+                      background: itemView === k ? COLORS.paperDark : "#fff", color: COLORS.coffee,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {filteredItems.length === 0 && (
+              <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 }}>
+                <Empty text={t("لا توجد قيود مطابقة للفلترة", "No entries match the filters")} />
+              </div>
+            )}
+
+            {filteredItems.length > 0 && itemView === "list" && (
+              <div style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden" }}>
+                {filteredItems.map((p, i) => renderItemRow(p, i, true))}
+              </div>
+            )}
+
+            {filteredItems.length > 0 && itemView === "grouped" && (
+              <>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <Btn small tone="secondary" onClick={() => setOpenItemGroups(Object.fromEntries(itemGroups.map((g) => [g.id, true])))}>{t("فتح الكل", "Expand all")}</Btn>
+                  <Btn small tone="secondary" onClick={() => setOpenItemGroups(Object.fromEntries(itemGroups.map((g) => [g.id, false])))}>{t("إغلاق الكل", "Collapse all")}</Btn>
+                  <span style={{ fontSize: 11.5, color: "#a3927a", alignSelf: "center" }}>{itemGroups.length} {t("موظف", "employees")} · {filteredItems.length} {t("قيد", "entries")}</span>
+                </div>
+                {itemGroups.map((g) => {
+                  const open = openItemGroups[g.id] !== undefined ? !!openItemGroups[g.id] : (itemGroups.length <= 5 || !!itemSearch.trim() && itemGroups.length <= 3 || g.items.some((x) => x.id === editingItemId));
+                  return (
+                    <div key={g.id} style={{ background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10, overflow: "hidden", marginBottom: 8 }}>
+                      <div
+                        onClick={() => setOpenItemGroups((prev) => ({ ...prev, [g.id]: !open }))}
+                        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, padding: "10px 14px", cursor: "pointer", background: open ? COLORS.paper : "#fff" }}
+                      >
+                        <div style={{ fontWeight: 800, color: COLORS.espresso, fontSize: 13 }}>
+                          <span style={{ color: "#a3927a", marginInlineEnd: 6 }}>{open ? "▾" : "◂"}</span>
+                          {empName(g.id)}
+                          <span style={{ fontWeight: 500, color: "#a3927a", fontSize: 11.5 }}> · {g.items.length} {t("قيد", "entries")}</span>
+                        </div>
+                        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                          {g.totals["سلفة"] > 0 && <Stamp tone="brick">{t("سلف", "Adv")} {fmt(g.totals["سلفة"])}</Stamp>}
+                          {g.totals["خصم"] > 0 && <Stamp tone="brick">{t("خصم", "Ded")} {fmt(g.totals["خصم"])}</Stamp>}
+                          {g.totals["حافز"] > 0 && <Stamp tone="green">{t("حافز", "Inc")} {fmt(g.totals["حافز"])}</Stamp>}
+                        </div>
+                      </div>
+                      {open && (
+                        <div style={{ borderTop: `1px solid ${COLORS.line}` }}>
+                          {g.items.map((p, i) => renderItemRow(p, i, false))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </>
+            )}
+          </>
+        )}
       </div>
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 10 }} className="no-print">
