@@ -425,6 +425,44 @@ function saveDataDocTransactional(payload, lastSyncedFieldsRef) {
   );
 }
 
+/* حفظ قائمة الحسابات بدمج آمن: بدل ما نكتب مصفوفة المستخدمين كاملة من نسخة الجهاز (وممكن تكون قديمة فتمسح
+   تعديل جهاز تاني — خصوصًا مع كثرة الأجهزة المفتوحة)، نحسب فقط الحسابات اللي هذا الجهاز عدّلها/أضافها/حذفها
+   مقارنةً بآخر نسخة مزامَنة، ونطبّقها فوق أحدث نسخة من الخادم داخل معاملة ذرّية — فتعديل أي جهاز ما يضيع */
+function mergeUsersLists(serverUsers, localUsers, baselineUsers) {
+  const baseById = new Map((baselineUsers || []).map((u) => [u.id, u]));
+  const localById = new Map((localUsers || []).map((u) => [u.id, u]));
+  const changed = (localUsers || []).filter((u) => JSON.stringify(baseById.get(u.id)) !== JSON.stringify(u));
+  const removedIds = new Set((baselineUsers || []).filter((u) => !localById.has(u.id)).map((u) => u.id));
+  const changedById = new Map(changed.map((u) => [u.id, u]));
+  const serverIds = new Set((serverUsers || []).map((u) => u.id));
+  const merged = [];
+  (serverUsers || []).forEach((u) => {
+    if (removedIds.has(u.id)) return;
+    merged.push(changedById.has(u.id) ? changedById.get(u.id) : u);
+  });
+  changed.forEach((u) => {
+    if (!serverIds.has(u.id)) merged.push(u);
+  });
+  return merged;
+}
+function saveUsersTransactional(localUsers, baselineJson) {
+  let baseline = [];
+  try {
+    baseline = baselineJson ? JSON.parse(baselineJson) : [];
+  } catch (e) {
+    baseline = [];
+  }
+  return db.runTransaction((transaction) =>
+    transaction.get(USERS_DOC).then((snap) => {
+      const d = snap && snap.data ? snap.data() : null;
+      const server = d && Array.isArray(d.users) ? d.users : [];
+      const merged = server.length ? mergeUsersLists(server, localUsers, baseline) : localUsers;
+      transaction.set(USERS_DOC, JSON.parse(JSON.stringify({ users: merged })));
+      return merged;
+    })
+  );
+}
+
 /* ============ Firebase Authentication — الأساس الحقيقي للحماية ============
    أسماء المستخدمين عندنا مو إيميلات (أرقام هوية/إقامة غالبًا)، فنحوّلها لصيغة إيميل داخلية صناعية
    ثابتة لكل مستخدم، يستخدمها Firebase Auth فقط، والموظف نفسه ما يشوفها ولا يحتاجها إطلاقًا */
@@ -14974,6 +15012,7 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
   const [form, setForm] = useState(EMPTY_USER);
   const [editingId, setEditingId] = useState(null);
   const [err, setErr] = useState("");
+  const [credErr, setCredErr] = useState("");
   const [bulkResult, setBulkResult] = useState(null);
   const [migrating, setMigrating] = useState(false);
   const [migrationResult, setMigrationResult] = useState(null);
@@ -15252,13 +15291,17 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
       if (editedTarget?.authUid) syncUserRoleDoc(editedTarget.authUid, payload.role, editingId);
       /* كلمة المرور هنا اختيارية وقت التعديل: اتركها فارغة لعدم التغيير، أو اكتبي كلمة جديدة لتعيينها */
       if (typedPassword && typedPassword.trim()) {
-        setUserCredential(editingId, typedPassword.trim()).catch(() => {});
+        setUserCredential(editingId, typedPassword.trim())
+          .then(() => setCredErr(""))
+          .catch((e) => setCredErr(t(`تعذّر حفظ كلمة المرور الجديدة: ${(e && (e.code || e.message)) || "خطأ"}`, `Couldn't save the new password: ${(e && (e.code || e.message)) || "error"}`)));
       }
       logActivity && logActivity("تعديل مستخدم", "users", payload.username);
     } else {
       const newId = uid();
       setUsers((prev) => [...prev, { ...payload, id: newId }]);
-      setUserCredential(newId, typedPassword.trim()).catch(() => {});
+      setUserCredential(newId, typedPassword.trim())
+        .then(() => setCredErr(""))
+        .catch((e) => setCredErr(t(`تعذّر حفظ كلمة مرور الحساب الجديد: ${(e && (e.code || e.message)) || "خطأ"} — احذفي الحساب وأضيفيه من جديد`, `Couldn't save the new account's password: ${(e && (e.code || e.message)) || "error"}`)));
       logActivity && logActivity("إضافة مستخدم", "users", payload.username);
     }
     resetForm();
@@ -15298,6 +15341,11 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
   return (
     <div>
       <Header title={t("المستخدمون والصلاحيات", "Users & Permissions")} subtitle={t("إدارة حسابات الدخول: أدمن، مسؤول فرع، موظف — كل حساب بباسورد خاص به", "Manage login accounts: admin, branch manager, employee — each with its own password")} />
+      {credErr && (
+        <div style={{ background: COLORS.brickBg, border: `1px solid ${COLORS.brick}`, color: COLORS.brick, borderRadius: 8, padding: "10px 14px", fontSize: 12.5, marginBottom: 14 }}>
+          ⚠ {credErr}
+        </div>
+      )}
 
       <div style={{ background: unmigratedUsers.length ? COLORS.brickBg : COLORS.greenBg, border: `1px solid ${unmigratedUsers.length ? COLORS.brick : COLORS.green}`, borderRadius: 10, padding: 18, marginBottom: 22 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
@@ -15924,6 +15972,11 @@ function Root() {
   const [loginError, setLoginError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
   const [authSyncError, setAuthSyncError] = useState("");
+  const [usersSaveError, setUsersSaveError] = useState("");
+  const [usersSavedTick, setUsersSavedTick] = useState(0);
+  const [usersSavedVisible, setUsersSavedVisible] = useState(false);
+  const usersLatestRef = useRef("");
+  const usersPendingRef = useRef(false);
   /* نفس مبدأ إعادة المحاولة التلقائية لاستماع بيانات النظام أدناه — هذا الاستماع بالذات لو فشل
      بيمنع تسجيل الدخول بالكامل (شاشة حمراء + زر "تحديث الصفحة" فقط)، فأولى بمحاولة تلقائية */
   const [usersRetryTick, setUsersRetryTick] = useState(0);
@@ -15956,6 +16009,8 @@ function Root() {
     const unsub = USERS_DOC.onSnapshot(
       (snap) => {
         if (snap.metadata.hasPendingWrites) return;
+        /* لو فيه تعديل حسابات محلي لسه ما انحفظ، ما نكتب فوقه بنسخة الخادم (الحفظ بالدمج راح يدمجها) */
+        if (usersPendingRef.current && usersLatestRef.current !== lastSyncedUsersRef.current) return;
         const d = snap.data();
         if (d && Array.isArray(d.users) && d.users.length) {
           setUsers(d.users);
@@ -16000,15 +16055,48 @@ function Root() {
     if (match) setCurrentUsername(match.username);
   }, [fbUser, usersLoaded, users, currentUsername]);
 
+  /* تنبيه قبل إغلاق/تحديث الصفحة لو فيه تعديل حسابات ما انحفظ بعد، + إشعار قصير "تم حفظ الحسابات ✓" */
+  useEffect(() => {
+    const handler = (e) => {
+      if (usersPendingRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, []);
+  useEffect(() => {
+    if (!usersSavedTick) return undefined;
+    setUsersSavedVisible(true);
+    const id = setTimeout(() => setUsersSavedVisible(false), 2500);
+    return () => clearTimeout(id);
+  }, [usersSavedTick]);
+
   useEffect(() => {
     if (!usersLoaded) return;
     const json = JSON.stringify(users);
+    usersLatestRef.current = json;
     if (json === lastSyncedUsersRef.current) return;
-    USERS_DOC.set({ users })
-      .then(() => {
-        lastSyncedUsersRef.current = json;
+    usersPendingRef.current = true;
+    saveUsersTransactional(users, lastSyncedUsersRef.current)
+      .then((merged) => {
+        const mergedJson = JSON.stringify(merged);
+        lastSyncedUsersRef.current = mergedJson;
+        setUsersSaveError("");
+        /* لو أثناء الحفظ وصلت تعديلات من جهاز تاني (اندمجت في النتيجة)، نحدّث الشاشة بها — بشرط ما يكون المستخدم
+           عدّل شيئًا جديدًا بعد بدء هذا الحفظ (وقتها حفظ لاحق يتولّاه) */
+        if (usersLatestRef.current === json) {
+          usersPendingRef.current = false;
+          if (mergedJson !== json) setUsers(merged);
+          setUsersSavedTick((n) => n + 1);
+        }
       })
-      .catch(() => setAuthSyncError("تعذر حفظ بيانات المستخدمين — تحقّق من الإنترنت"));
+      .catch((e) => {
+        setAuthSyncError("تعذر حفظ بيانات المستخدمين — تحقّق من الإنترنت");
+        setUsersSaveError(`${(e && e.code) || ""} ${(e && e.message) || ""}`.trim() || "خطأ غير معروف");
+      });
+    // eslint-disable-next-line
   }, [users, usersLoaded]);
 
   /* سجلّ الدخول والعمليات (من دخل البرنامج وماذا فعل) — يتزامن لحظيًا بين كل الأجهزة، وبنفس منطق
@@ -16254,6 +16342,20 @@ function Root() {
 
   return (
     <>
+      {usersSavedVisible && !usersSaveError && (
+        <div className="no-print" style={{ position: "fixed", top: 10, left: "50%", transform: "translateX(-50%)", zIndex: 9998, background: "#2f6b3d", color: "#fff", padding: "8px 16px", borderRadius: 10, fontSize: 12.5 }}>
+          ✓ تم حفظ الحسابات في قاعدة البيانات
+        </div>
+      )}
+      {usersSaveError && (
+        <div
+          className="no-print"
+          style={{ position: "fixed", top: 10, left: "50%", transform: "translateX(-50%)", zIndex: 9998, background: "#7a2a22", color: "#fff", padding: "10px 16px", borderRadius: 10, fontSize: 12.5, maxWidth: "92vw", boxShadow: "0 4px 18px rgba(0,0,0,0.35)", lineHeight: 1.7 }}
+        >
+          ⚠ لم يُحفظ تعديل الحسابات في قاعدة البيانات — {usersSaveError}
+          <button onClick={() => setUsersSaveError("")} style={{ marginInlineStart: 10, background: "transparent", color: "#fff", border: "1px solid #fff", borderRadius: 6, cursor: "pointer" }}>إخفاء</button>
+        </div>
+      )}
       <IdleLogoutGuard
         enabled={currentUser.role !== "attendance_device"}
         hooksRef={idleHooksRef}
