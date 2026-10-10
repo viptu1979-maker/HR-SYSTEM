@@ -3539,10 +3539,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
             return;
         setAdvanceRequests((prev) => prev.map((r) => (r.id === reqId ? { ...r, status: "موافقة", decidedBy: currentUser.name, decidedAt: new Date().toISOString() } : r)));
         const month = new Date().toISOString().slice(0, 7);
-        setPayrollItems((prev) => [
-            ...prev,
-            { id: uid(), employeeId: req.employeeId, type: "سلفة", amount: req.amount, month, note: req.reason || "", advanceRequestId: req.id },
-        ]);
+        setPayrollItems((prev) => prev.some((p) => p.advanceRequestId === req.id)
+            ? prev
+            : [...prev, { id: uid(), employeeId: req.employeeId, type: "سلفة", amount: req.amount, month, note: req.reason || "", advanceRequestId: req.id }]);
         logActivity && logActivity("موافقة على طلب سلفة", "advanceRequests", `${((_a = employees.find((e) => e.id === req.employeeId)) === null || _a === void 0 ? void 0 : _a.name) || ""}: ${fmt(req.amount)} ﷼`);
     });
     const rejectAdvanceRequest = (reqId) => {
@@ -3578,7 +3577,9 @@ function HRApp({ currentUser, users, setUsers, onLogout, activityLog, logActivit
                 status: "قيد المراجعة",
                 requestedAt: new Date().toISOString(),
             };
-            setAdvanceRequests((prev) => [newReq, ...prev]);
+            setAdvanceRequests((prev) => prev.some((r) => r.employeeId === newReq.employeeId && r.status === "قيد المراجعة" && Number(r.amount) === Number(newReq.amount) && (r.reason || "") === (newReq.reason || "") && Date.now() - new Date(r.requestedAt).getTime() < 120000)
+                ? prev
+                : [newReq, ...prev]);
             logActivity && logActivity("تقديم طلب سلفة", "advanceRequests", `${(myEmployee === null || myEmployee === void 0 ? void 0 : myEmployee.name) || ""}: ${fmt(req.amount)} ﷼`);
         };
         const { requestClockIn, requestClockOut, faceModal, handleFaceVerified, handleFaceCancel, geoBusy, geoError, } = useAttendanceClock({ myEmployee, attendance, setAttendance, setEmployees, branches, logActivity, t });
@@ -7317,9 +7318,14 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
         setEditingIssueDate(null);
         setIssueForm(null);
     };
+    const addItemBusyRef = useRef(false);
     const addItem = () => {
         if (!itemForm.employeeId || !itemForm.amount || Number(itemForm.amount) <= 0)
             return;
+        if (addItemBusyRef.current)
+            return;
+        addItemBusyRef.current = true;
+        setTimeout(() => { addItemBusyRef.current = false; }, 1500);
         const totalAmount = Number(itemForm.amount);
         /* بعد تسجيل أي سلفة/خصم/حافز، تُرسَل إشعار تلقائي للموظف على صفحته الذاتية — وفي حالة الخصم والسلفة
            يُطلب منه "موافقة" صريحة (يقدر يشوفها الأدمن من تبويب الرسائل)، والحافز إشعار بس بدون حاجة لموافقة */
@@ -7419,6 +7425,19 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
         }
         return true;
     });
+    const dupKeyOf = (x) => x.advanceRequestId ? "r:" + x.advanceRequestId : [x.employeeId, x.type, Number(x.amount), x.month, x.date || "", x.note || "", x.loanGroupId || "", x.relatedWarningId || ""].join("|");
+    const dupSeen = {};
+    const dupIds = [];
+    payrollItems.forEach((x) => { const k = dupKeyOf(x); if (dupSeen[k])
+        dupIds.push(x.id);
+    else
+        dupSeen[k] = true; });
+    const removeDuplicateItems = () => {
+        const seen = {};
+        setPayrollItems((prev) => prev.filter((x) => { const k = dupKeyOf(x); if (seen[k])
+            return false; seen[k] = true; return true; }));
+        logActivity && logActivity("حذف قيود مكررة", "payroll", `${dupIds.length} قيد`);
+    };
     const itemTotals = {};
     const itemCounts = {};
     filteredItems.forEach((x) => {
@@ -7679,6 +7698,9 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
             React.createElement("div", { style: { marginTop: 10, fontSize: 11.5, color: "#a3927a" } }, t('السلفة والخصم يُطرحان من صافي راتب الموظف في "شهر الاستحقاق" المحدد، والحافز يُضاف إليه. عند اختيار "على دفعات" يُقسَّم مبلغ السلفة بالتساوي على عدد الأشهر المحدد بدءًا من الشهر المختار، ويُسجَّل كل قسط كقيد سلفة مستقل في شهره. يظهر أثر كل قيد في جدول كشف الرواتب أدناه عند اختيار نفس الشهر.', 'Advances and deductions are subtracted from the employee\'s net salary in the selected "applicable month", and incentives are added to it. When "Installments" is selected, the advance amount is split evenly across the chosen number of months starting from the selected month, with each installment recorded as its own advance entry in its month. The effect of each entry appears in the payroll table below when that same month is selected.'))),
         React.createElement("div", { className: "no-print", style: { marginBottom: 24 } }, payrollItems.length === 0 ? (React.createElement("div", { style: { background: "#fff", border: `1px solid ${COLORS.line}`, borderRadius: 10 } },
             React.createElement(Empty, { text: t("لا توجد قيود سلف أو خصومات أو حوافز مسجّلة", "No advances, deductions, or incentives registered") }))) : (React.createElement(React.Fragment, null,
+            dupIds.length > 0 && (React.createElement("div", { style: { background: COLORS.brickBg, border: `1px solid ${COLORS.brick}`, borderRadius: 10, padding: 12, marginBottom: 12, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, fontSize: 12.5 } },
+                React.createElement("span", null, t(`يوجد ${dupIds.length} قيد مكرر (نفس الموظف والنوع والمبلغ والشهر). يبقى قيد واحد من كل مجموعة.`, `${dupIds.length} duplicate entries found. One entry is kept from each group.`)),
+                React.createElement(Btn, { small: true, onClick: removeDuplicateItems }, t("حذف المكرر", "Remove duplicates")))),
             React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } }, [
                 { k: "سلفة", label: t("إجمالي السلف", "Total Advances"), color: COLORS.brick, bg: COLORS.brickBg },
                 { k: "خصم", label: t("إجمالي الخصومات", "Total Deductions"), color: COLORS.brick, bg: COLORS.brickBg },
@@ -10438,12 +10460,17 @@ function AdvanceRequestForm({ onSubmit, t }) {
     const [form, setForm] = useState({ amount: "", reason: "" });
     const [sent, setSent] = useState(false);
     const [err, setErr] = useState("");
+    const submittingRef = useRef(false);
     const submit = () => {
+        if (submittingRef.current)
+            return;
         const amt = Number(form.amount);
         if (!amt || amt <= 0) {
             setErr(t("الرجاء إدخال مبلغ صحيح", "Please enter a valid amount"));
             return;
         }
+        submittingRef.current = true;
+        setTimeout(() => { submittingRef.current = false; }, 2500);
         onSubmit && onSubmit({ amount: amt, reason: form.reason.trim() });
         setForm({ amount: "", reason: "" });
         setErr("");
