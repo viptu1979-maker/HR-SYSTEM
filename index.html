@@ -375,8 +375,63 @@ const USER_CREDENTIALS_COLLECTION = db.collection("userCredentials");
 const setUserCredential = (accountId, password) => {
     if (!accountId)
         return Promise.reject(new Error("missing accountId"));
-    return USER_CREDENTIALS_COLLECTION.doc(accountId).set({ password });
+    /* merge: عشان ما نمسح حقل "session" (الجلسة النشطة) اللي محفوظ في نفس المستند */
+    return USER_CREDENTIALS_COLLECTION.doc(accountId).set({ password }, { merge: true });
 };
+/* ============ جلسة نشطة واحدة لكل حساب (متصفح واحد فقط في نفس الوقت) ============
+   نخزّن في نفس مستند الحساب (userCredentials/{id}) حقل "session": { browserId, lastSeen, device } — بدون الحاجة
+   لتغيير قواعد الأمان (نفس صلاحيات الحساب نفسه أو الأدمن). كل متصفح له معرّف ثابت (localStorage)، فالتبويبات
+   المتعددة في نفس المتصفح مسموحة. الجلسة تُحجَز عند الدخول وتُجدَّد كل 30 ثانية (نبض)، وتُعتبر منتهية لو سكتت
+   أكتر من 150 ثانية (جهاز انطفأ/قُفل المتصفح بدون خروج) فما يتعلّق الحساب للأبد. أي خطأ اتصال = لا نمنع الدخول */
+const SESSION_LEASE_MS = 150 * 1000;
+const SESSION_HEARTBEAT_MS = 30 * 1000;
+const HR_BROWSER_ID = (() => {
+    try {
+        let id = window.localStorage.getItem("hrBrowserId");
+        if (!id) {
+            id = "b" + Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
+            window.localStorage.setItem("hrBrowserId", id);
+        }
+        return id;
+    }
+    catch (e) {
+        return "t" + Math.random().toString(36).slice(2, 12);
+    }
+})();
+function describeDevice() {
+    const ua = (typeof navigator !== "undefined" && navigator.userAgent) || "";
+    const os = /Android/i.test(ua) ? "Android" : /iPhone|iPad|iPod/i.test(ua) ? "iPhone/iPad" : /Windows/i.test(ua) ? "Windows" : /Mac OS/i.test(ua) ? "Mac" : /Linux/i.test(ua) ? "Linux" : "جهاز";
+    const br = /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera" : /Chrome\//.test(ua) ? "Chrome" : /Firefox\//.test(ua) ? "Firefox" : /Safari\//.test(ua) ? "Safari" : "متصفح";
+    return `${br} على ${os}`;
+}
+/* يحجز/يجدّد الجلسة لهذا المتصفح. يرجع { ok:true } لو الحساب متاح لهذا المتصفح، أو { ok:false, other:{lastSeen,device} }
+   لو في متصفح تاني نشط عليه. الأخطاء تُعامَل كنجاح (ما نقفل أحد بسبب خلل اتصال) */
+function acquireAccountSession(accountId, now = Date.now()) {
+    if (!accountId)
+        return Promise.resolve({ ok: true });
+    const ref = USER_CREDENTIALS_COLLECTION.doc(accountId);
+    return db
+        .runTransaction((transaction) => transaction.get(ref).then((snap) => {
+        const d = snap && snap.exists ? snap.data() : null;
+        const cur = d && d.session;
+        const mine = cur && cur.browserId === HR_BROWSER_ID;
+        const free = !cur || !cur.browserId || now - Number(cur.lastSeen || 0) >= SESSION_LEASE_MS;
+        if (mine || free) {
+            transaction.set(ref, { session: { browserId: HR_BROWSER_ID, lastSeen: now, device: describeDevice() } }, { merge: true });
+            return { ok: true };
+        }
+        return { ok: false, other: { lastSeen: Number(cur.lastSeen || 0), device: cur.device || "" } };
+    }))
+        .catch(() => ({ ok: true, error: true }));
+}
+/* تحرير الجلسة (عند الخروج أو إغلاق الصفحة) — كتابة مباشرة بدون انتظار */
+function releaseAccountSession(accountId) {
+    if (!accountId)
+        return Promise.resolve();
+    return USER_CREDENTIALS_COLLECTION.doc(accountId)
+        .set({ session: null }, { merge: true })
+        .catch(() => { });
+}
 const getUserCredential = (accountId) => {
     if (!accountId)
         return Promise.resolve(null);
@@ -11142,6 +11197,17 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
     /* إعادة تهيئة دخول حساب موظف ما يقدر يدخل بكلمة مروره (كلمة الدخول الفعلية في Firebase مختلفة عن المخزّنة) */
     const [resetLoginConfirm, setResetLoginConfirm] = useState(false);
     const [resetLoginDone, setResetLoginDone] = useState(null);
+    /* إنهاء الجلسة النشطة لحساب عالق على جهاز/متصفح (الأدمن فقط) */
+    const [endSessionMsg, setEndSessionMsg] = useState("");
+    const endAccountSession = () => {
+        if (!editingId)
+            return;
+        setEndSessionMsg("");
+        releaseAccountSession(editingId).then(() => {
+            setEndSessionMsg(t("تم إنهاء الجلسة النشطة — يقدر الحساب يدخل من أي متصفح الآن.", "Active session ended — the account can now sign in from any browser."));
+            logActivity && logActivity("إنهاء جلسة مستخدم", "users", (users.find((u) => u.id === editingId) || {}).username || "");
+        });
+    };
     const resetLoginForAccount = () => {
         const target = users.find((u) => u.id === editingId);
         if (!target || !target.authUid)
@@ -11520,6 +11586,9 @@ function UsersTab({ users, setUsers, employees, branches, entities, logActivity,
                         t("أعطي الموظف كلمة المرور الجديدة — يدخل بها، ويقدر يغيّرها بنفسه بعدها.", "Give the employee the new password — he can log in, then change it himself.")),
                     React.createElement("div", { style: { marginTop: 6 } },
                         React.createElement(Btn, { small: true, tone: "secondary", onClick: () => setResetLoginDone(null) }, t("تم — إخفاء", "Done — hide"))))),
+                editingId && (React.createElement("div", { style: { marginBottom: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" } },
+                    React.createElement(Btn, { small: true, tone: "secondary", onClick: endAccountSession }, t("🔓 إنهاء الجلسة النشطة لهذا الحساب", "🔓 End this account's active session")),
+                    endSessionMsg && React.createElement("span", { style: { fontSize: 12, color: COLORS.green } }, endSessionMsg))),
                 editingId && ((_a = users.find((u) => u.id === editingId)) === null || _a === void 0 ? void 0 : _a.authUid) && (React.createElement("div", { style: { marginBottom: 10 } }, !resetLoginConfirm ? (React.createElement(Btn, { small: true, tone: "secondary", onClick: () => setResetLoginConfirm(true) }, t("🔧 الموظف ما يقدر يدخل — إعادة تهيئة دخول هذا الحساب", "🔧 Employee can't log in — reset this account's login"))) : (React.createElement("div", { style: { fontSize: 12, background: COLORS.brickBg, border: `1px solid ${COLORS.brick}`, borderRadius: 8, padding: 12 } },
                     React.createElement("div", { style: { marginBottom: 8 } }, t("سيُفصل هذا الحساب عن حساب الدخول القديم في Firebase، وبعدها تحذفين حساب الدخول القديم من Firebase وتنشئين كلمة مرور جديدة (4 خطوات تظهر لك). لا يتأثر أي بيان آخر. متأكدة؟", "This unlinks the account from its old Firebase login. You'll then delete the old login in Firebase and set a new password (4 steps will be shown). No other data is affected. Continue?")),
                     React.createElement("div", { style: { display: "flex", gap: 8 } },
@@ -12008,6 +12077,68 @@ function Root() {
         });
     };
     const currentUser = users.find((u) => u.username === currentUsername) || null;
+    /* ===== جلسة نشطة واحدة لكل حساب: عند ظهور مستخدم مسجَّل دخوله نحجز له الجلسة (أو نمنعه لو الحساب مفتوح في
+       متصفح تاني)، ثم نجدّد الحجز كل 30 ثانية، ونحرّره عند إغلاق الصفحة ===== */
+    const [sessionState, setSessionState] = useState("none");
+    const currentAccountId = currentUser ? currentUser.id : null;
+    useEffect(() => {
+        if (!currentAccountId) {
+            setSessionState("none");
+            return undefined;
+        }
+        let cancelled = false;
+        let timer = null;
+        const kickOut = (message) => {
+            loggingOutRef.current = true;
+            setCurrentUsername(null);
+            setLoginError(message);
+            setLoggingIn(false);
+            auth.signOut().catch(() => { }).finally(() => {
+                loggingOutRef.current = false;
+            });
+        };
+        const blockedMessage = (other) => {
+            const mins = other && other.lastSeen ? Math.max(0, Math.round((Date.now() - other.lastSeen) / 60000)) : 0;
+            return `هذا الحساب مفتوح الآن في متصفح آخر${other && other.device ? ` (${other.device})` : ""}، آخر نشاط قبل ${mins} دقيقة. سجّلي خروج من ذلك المتصفح أولًا، أو إذا أغلقتِه بدون خروج انتظري دقيقتين ونصف ثم حاولي من جديد.`;
+        };
+        setSessionState("checking");
+        acquireAccountSession(currentAccountId).then((res) => {
+            if (cancelled)
+                return;
+            if (!res.ok) {
+                kickOut(blockedMessage(res.other));
+                return;
+            }
+            setSessionState("ok");
+            const beat = () => {
+                acquireAccountSession(currentAccountId).then((r) => {
+                    if (cancelled || r.ok)
+                        return;
+                    kickOut("تم فتح هذا الحساب من متصفح آخر، فتم تسجيل خروجك من هنا.");
+                });
+            };
+            timer = setInterval(beat, SESSION_HEARTBEAT_MS);
+            const onVisible = () => {
+                if (document.visibilityState === "visible")
+                    beat();
+            };
+            document.addEventListener("visibilitychange", onVisible);
+            timer = { id: timer, onVisible };
+        });
+        const onPageHide = () => {
+            releaseAccountSession(currentAccountId);
+        };
+        window.addEventListener("pagehide", onPageHide);
+        return () => {
+            cancelled = true;
+            if (timer) {
+                clearInterval(timer.id);
+                document.removeEventListener("visibilitychange", timer.onVisible);
+            }
+            window.removeEventListener("pagehide", onPageHide);
+        };
+        // eslint-disable-next-line
+    }, [currentAccountId]);
     /* حالة التحقق الثنائي بالإيميل — تُستخدم مؤقتًا فقط أثناء خطوة إدخال الكود، ومحلية على الجهاز */
     const [pendingUser, setPendingUser] = useState(null);
     const [sentCode, setSentCode] = useState("");
@@ -12116,9 +12247,11 @@ function Root() {
         if (currentUser)
             logActivity(currentUser, "خروج", "", "");
         loggingOutRef.current = true;
+        /* نحرّر الجلسة النشطة قبل تسجيل الخروج من Firebase (يحتاج جلسة صالحة للكتابة) */
+        const releasing = currentUser ? releaseAccountSession(currentUser.id) : Promise.resolve();
         setCurrentUsername(null);
-        auth
-            .signOut()
+        releasing
+            .then(() => auth.signOut())
             .catch(() => { })
             .finally(() => {
             loggingOutRef.current = false;
@@ -12144,6 +12277,10 @@ function Root() {
     }
     if (!currentUser) {
         return (React.createElement(LoginScreen, { form: loginForm, setForm: setLoginForm, onSubmit: login, error: loginError || authSyncError, busy: loggingIn }));
+    }
+    /* لا نعرض أي شاشة من البرنامج قبل التأكد إن هذا المتصفح هو صاحب الجلسة النشطة للحساب */
+    if (sessionState !== "ok") {
+        return (React.createElement("div", { dir: "rtl", style: { minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Segoe UI', Tahoma, Arial, sans-serif", color: COLORS.coffee, background: COLORS.paper } }, "\u062C\u0627\u0631\u0650 \u0627\u0644\u062A\u062D\u0642\u0642 \u0645\u0646 \u0627\u0644\u062C\u0644\u0633\u0629..."));
     }
     /* أول تسجيل دخول بحساب مُولَّد بكلمة مرور افتراضية — لازم يغيّرها قبل ما يدخل النظام */
     if (currentUser.mustChangePassword) {
