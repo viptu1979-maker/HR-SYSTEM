@@ -7189,9 +7189,9 @@ function exportOvertimeExcel(rows, month, branches, t) {
         });
         return;
     }
-    const otRows = rows.filter((r) => Number(r.overtimeHours || 0) > 0 || Number(r.overtimePay || 0) > 0);
-    if (otRows.length === 0) {
-        window.alert(t("لا يوجد وقت إضافي مسجّل في هذا الشهر.", "No overtime recorded for this month."));
+    /* كل الموظفين (حتى بدون إضافي) عشان تقدر تضيف/تعدّل الساعات يدويًا في الإكسل — عمود القيمة معادلة = الساعات × سعر الساعة */
+    if (rows.length === 0) {
+        window.alert(t("لا يوجد موظفون.", "No employees."));
         return;
     }
     const branchNameOf = (id) => { var _a; return ((_a = branches.find((b) => b.id === id)) === null || _a === void 0 ? void 0 : _a.name) || "—"; };
@@ -7202,7 +7202,7 @@ function exportOvertimeExcel(rows, month, branches, t) {
         t("الموظف", "Employee"),
         t("الفرع", "Branch"),
         t("رقم الهوية/الإقامة", "ID/Iqama No."),
-        t("ساعات الإضافي", "Overtime Hours"),
+        t("ساعات الإضافي (عدّليها يدويًا)", "Overtime Hours (editable)"),
         t("سعر ساعة الإضافي (×1.5)", "Overtime Hourly Rate (×1.5)"),
         t("قيمة الإضافي (﷼)", "Overtime Amount (SAR)"),
         t("شهر الإضافي", "Overtime Month"),
@@ -7210,30 +7210,33 @@ function exportOvertimeExcel(rows, month, branches, t) {
         t("موعد الاستلام (يوم 10)", "Pay Date (10th)"),
         t("طريقة الاستلام", "Payment Method"),
     ];
-    const dataRows = otRows.map((r) => {
+    const dataRows = rows.map((r, i) => {
         const hrs = Number(r.overtimeHours || 0);
+        const rate = round2(r.overtimeHourlyRate);
+        const rowNo = i + 2;
         return [
             r.name,
             branchNameOf(r.branchId),
             r.nationalId || "",
             hrs,
-            hrs > 0 ? round2(Number(r.overtimePay || 0) / hrs) : 0,
-            round2(r.overtimePay),
+            rate,
+            { t: "n", f: `D${rowNo}*E${rowNo}`, v: round2(hrs * rate), z: "0.00" },
             month,
             calcDate,
             payDate,
             trLabel(t, PAYMENT_METHOD_LABELS_EN, r.paymentMethod || "تحويل بنكي"),
         ];
     });
+    const last = rows.length + 1;
     const totalsRow = [
         t("الإجمالي", "Total"), "", "",
-        otRows.reduce((s, r) => s + Number(r.overtimeHours || 0), 0),
+        { t: "n", f: `SUM(D2:D${last})`, v: rows.reduce((s, r) => s + Number(r.overtimeHours || 0), 0) },
         "",
-        round2(otRows.reduce((s, r) => s + Number(r.overtimePay || 0), 0)),
+        { t: "n", f: `SUM(F2:F${last})`, v: round2(rows.reduce((s, r) => s + Number(r.overtimeHours || 0) * round2(r.overtimeHourlyRate), 0)), z: "0.00" },
         "", "", "", "",
     ];
     const ws = window.XLSX.utils.aoa_to_sheet([header, ...dataRows, totalsRow]);
-    ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 16 }, { wch: 14 }, { wch: 16 }];
+    ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 16 }, { wch: 14 }, { wch: 16 }];
     const wb = window.XLSX.utils.book_new();
     window.XLSX.utils.book_append_sheet(wb, ws, t("الوقت الإضافي", "Overtime"));
     window.XLSX.writeFile(wb, `${t("الوقت_الإضافي", "Overtime")}_${month}.xlsx`);
@@ -7680,7 +7683,8 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
            تقرير أيام الغياب/التأخير) لكن يُستبعد تمامًا من حساب الراتب الفعلي — موظف دوامين يشتغل
            إضافي مسائي كان ما يتقاضى عنه شيء إطلاقًا */
         const overtimeHours = monthAttendance.reduce((s, a) => s + Number(a.overtimeHours || 0) + Number(a.overtimeHours2 || 0), 0);
-        const overtimePay = overtimeHours * hourlyRate * 1.5;
+        const overtimeHourlyRate = hourlyRate * 1.5;
+        const overtimePay = overtimeHours * overtimeHourlyRate;
         /* السلف والخصومات والحوافز المسجّلة لهذا الموظف في الشهر المختار */
         const monthItems = payrollItems.filter((p) => p.employeeId === e.id && p.month === month);
         const advances = monthItems.filter((p) => p.type === "سلفة").reduce((s, p) => s + Number(p.amount || 0), 0);
@@ -7709,6 +7713,7 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
             attendanceDeduction,
             overtimeHours,
             overtimePay,
+            overtimeHourlyRate,
             overtimePayDate: overtimePayDateOf(month),
             advances,
             extraDeductions,
