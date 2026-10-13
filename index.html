@@ -7244,6 +7244,13 @@ function overtimePayDateOf(month) {
     }
     return y + "-" + String(mo).padStart(2, "0") + "-" + OVERTIME_PAY_DAY;
 }
+function overtimeCalcDateOf(month) {
+    const m = /^(\d{4})-(\d{2})$/.exec(month || "");
+    if (!m)
+        return "";
+    const last = new Date(Number(m[1]), Number(m[2]), 0).getDate();
+    return month + "-" + String(last).padStart(2, "0");
+}
 function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranch, gosiRates, attendance, setAttendance, leaves, payrollItems, setPayrollItems, logActivity, onSendMessage, leaveRequests }) {
     var _a, _b, _c, _d;
     const { t } = useLang();
@@ -7887,7 +7894,7 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
                                 r.attendanceIssues.some((d) => d.kind === "overtime") && React.createElement("span", { className: "no-print", title: t("توجد أيام قابلة للتصحيح", "There are correctable days") }, " \u270E")),
                             React.createElement("td", { "data-label": t("قيمة الإضافي (منفصل)", "Overtime Pay (separate)"), style: { padding: "9px 12px", color: COLORS.green } },
                                 fmt(r.overtimePay),
-                                r.overtimePay > 0 && React.createElement("div", { style: { fontSize: 10, color: "#8a7a63", fontFamily: "inherit" } }, t(`يُصرف ${r.overtimePayDate}`, `Paid ${r.overtimePayDate}`))),
+                                r.overtimePay > 0 && React.createElement("div", { style: { fontSize: 10, color: "#8a7a63", fontFamily: "inherit" } }, t(`يُحتسب ${overtimeCalcDateOf(month)} · يُصرف ${r.overtimePayDate}`, `Calc ${overtimeCalcDateOf(month)} · Paid ${r.overtimePayDate}`))),
                             React.createElement("td", { "data-label": t("السلف", "Advances"), style: { padding: "9px 12px", color: COLORS.brick } }, fmt(r.advances)),
                             React.createElement("td", { "data-label": t("خصومات أخرى", "Other Deductions"), style: { padding: "9px 12px", color: COLORS.brick } }, fmt(r.extraDeductions)),
                             React.createElement("td", { "data-label": t("الحوافز", "Incentives"), style: { padding: "9px 12px", color: COLORS.green } }, fmt(r.incentives)),
@@ -8187,7 +8194,10 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
                                 " ",
                                 t("ساعة", "hrs"))),
                         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "4px 0" } },
-                            React.createElement("span", null, t("موعد الاستلام", "Pay date")),
+                            React.createElement("span", null, t("تاريخ الاحتساب (آخر الشهر)", "Calculation date (month end)")),
+                            React.createElement("span", { style: { fontFamily: "Consolas, monospace" } }, overtimeCalcDateOf(payslip.__month))),
+                        React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 12.5, padding: "4px 0" } },
+                            React.createElement("span", null, t("موعد الاستلام (يوم 10)", "Pay date (10th)")),
                             React.createElement("span", { style: { fontFamily: "Consolas, monospace" } }, payslip.overtimePayDate || overtimePayDateOf(payslip.__month))),
                         React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontWeight: 800, fontSize: 15, color: COLORS.green, borderTop: `1px solid ${COLORS.line}`, marginTop: 6, paddingTop: 8 } },
                             React.createElement("span", null, t("قيمة الإضافي المستحقة", "Overtime Amount Due")),
