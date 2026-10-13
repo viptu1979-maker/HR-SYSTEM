@@ -7179,6 +7179,65 @@ function exportPayrollSheetExcel(rows, month, branches, t) {
     window.XLSX.utils.book_append_sheet(wb, ws, t("مسيرة الرواتب", "Payroll Sheet"));
     window.XLSX.writeFile(wb, `${t("مسيرة_الرواتب", "Payroll_Sheet")}_${month}.xlsx`);
 }
+/* تصدير كشف الوقت الإضافي فقط (منفصل عن مسيرة الرواتب): الاحتساب آخر الشهر والصرف يوم 10 من الشهر التالي */
+function exportOvertimeExcel(rows, month, branches, t) {
+    if (!window.XLSX) {
+        window.__hrLoad("xlsx")
+            .then(() => exportOvertimeExcel(rows, month, branches, t))
+            .catch(() => {
+            window.alert(t("تعذّر تحميل مكتبة تصدير الإكسل — تأكد من اتصال الإنترنت وحاول مرة أخرى.", "Couldn't load the Excel export library — check your internet connection and try again."));
+        });
+        return;
+    }
+    const otRows = rows.filter((r) => Number(r.overtimeHours || 0) > 0 || Number(r.overtimePay || 0) > 0);
+    if (otRows.length === 0) {
+        window.alert(t("لا يوجد وقت إضافي مسجّل في هذا الشهر.", "No overtime recorded for this month."));
+        return;
+    }
+    const branchNameOf = (id) => { var _a; return ((_a = branches.find((b) => b.id === id)) === null || _a === void 0 ? void 0 : _a.name) || "—"; };
+    const calcDate = overtimeCalcDateOf(month);
+    const payDate = overtimePayDateOf(month);
+    const round2 = (n) => Math.round(Number(n || 0) * 100) / 100;
+    const header = [
+        t("الموظف", "Employee"),
+        t("الفرع", "Branch"),
+        t("رقم الهوية/الإقامة", "ID/Iqama No."),
+        t("ساعات الإضافي", "Overtime Hours"),
+        t("سعر ساعة الإضافي (×1.5)", "Overtime Hourly Rate (×1.5)"),
+        t("قيمة الإضافي (﷼)", "Overtime Amount (SAR)"),
+        t("شهر الإضافي", "Overtime Month"),
+        t("تاريخ الاحتساب (آخر الشهر)", "Calculation Date (month end)"),
+        t("موعد الاستلام (يوم 10)", "Pay Date (10th)"),
+        t("طريقة الاستلام", "Payment Method"),
+    ];
+    const dataRows = otRows.map((r) => {
+        const hrs = Number(r.overtimeHours || 0);
+        return [
+            r.name,
+            branchNameOf(r.branchId),
+            r.nationalId || "",
+            hrs,
+            hrs > 0 ? round2(Number(r.overtimePay || 0) / hrs) : 0,
+            round2(r.overtimePay),
+            month,
+            calcDate,
+            payDate,
+            trLabel(t, PAYMENT_METHOD_LABELS_EN, r.paymentMethod || "تحويل بنكي"),
+        ];
+    });
+    const totalsRow = [
+        t("الإجمالي", "Total"), "", "",
+        otRows.reduce((s, r) => s + Number(r.overtimeHours || 0), 0),
+        "",
+        round2(otRows.reduce((s, r) => s + Number(r.overtimePay || 0), 0)),
+        "", "", "", "",
+    ];
+    const ws = window.XLSX.utils.aoa_to_sheet([header, ...dataRows, totalsRow]);
+    ws["!cols"] = [{ wch: 24 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 11 }, { wch: 16 }, { wch: 14 }, { wch: 16 }];
+    const wb = window.XLSX.utils.book_new();
+    window.XLSX.utils.book_append_sheet(wb, ws, t("الوقت الإضافي", "Overtime"));
+    window.XLSX.writeFile(wb, `${t("الوقت_الإضافي", "Overtime")}_${month}.xlsx`);
+}
 /* نافذة مسيرة الرواتب الشهرية الكاملة — عرض كل الموظفين دفعة واحدة، قابلة للطباعة/الحفظ كـ PDF
    مباشرة من المتصفح (🖶 طباعة ← حفظ كـ PDF) */
 function PayrollSheetModal({ rows, totals, month, branches, onClose }) {
@@ -7679,7 +7738,8 @@ function PayrollTab({ employees, setEmployees, branches, entities, entityOfBranc
             React.createElement(Field, { label: t("شهر احتساب الغياب والتأخير", "Attendance Calculation Month") },
                 React.createElement("input", { type: "month", style: inputStyle, value: month, onChange: (e) => setMonth(e.target.value) })),
             React.createElement(Btn, { tone: "secondary", onClick: () => setShowPayrollSheet(true) }, t("📑 مسيرة الرواتب الشهرية", "📑 Monthly Payroll Sheet")),
-            React.createElement(Btn, { tone: "secondary", onClick: () => exportPayrollSheetExcel(rows, month, branches, t) }, t("⬇ تصدير إكسل", "⬇ Export Excel"))),
+            React.createElement(Btn, { tone: "secondary", onClick: () => exportPayrollSheetExcel(rows, month, branches, t) }, t("⬇ تصدير إكسل", "⬇ Export Excel")),
+            React.createElement(Btn, { tone: "secondary", onClick: () => exportOvertimeExcel(rows, month, branches, t) }, t("⬇ تصدير الإضافي إكسل", "⬇ Export Overtime Excel"))),
         showPayrollSheet && (React.createElement(PayrollSheetModal, { rows: rows, totals: totals, month: month, branches: branches, onClose: () => setShowPayrollSheet(false) })),
         React.createElement("div", { style: { display: "flex", gap: 14, flexWrap: "wrap", marginBottom: 18 } },
             React.createElement(ReceiptCard, { label: t("إجمالي الرواتب الأساسية", "Total Basic Salaries"), value: `${fmt(totals.salary)} ﷼` }),
