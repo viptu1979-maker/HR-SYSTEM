@@ -6098,7 +6098,7 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
     const [editingEntityId, setEditingEntityId] = useState(null);
     const [editEntityName, setEditEntityName] = useState("");
     const [editingBranchId, setEditingBranchId] = useState(null);
-    const [editBranchForm, setEditBranchForm] = useState({ name: "", city: "" });
+    const [editBranchForm, setEditBranchForm] = useState({ name: "", city: "", entityId: "" });
     const [mapPickerBranchId, setMapPickerBranchId] = useState(null);
     const addEntity = () => {
         if (!entityName.trim())
@@ -6139,17 +6139,25 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
     };
     const startEditBranch = (b) => {
         setEditingBranchId(b.id);
-        setEditBranchForm({ name: b.name || "", city: b.city || "" });
+        setEditBranchForm({ name: b.name || "", city: b.city || "", entityId: b.entityId || "" });
     };
     const cancelEditBranch = () => {
         setEditingBranchId(null);
-        setEditBranchForm({ name: "", city: "" });
+        setEditBranchForm({ name: "", city: "", entityId: "" });
     };
     /* تعديل اسم الفرع/المدينة فقط — الإحداثيات الجغرافية (lat/lng) والنطاق ومركز الجيوفنس وبقية بيانات الفرع تفضل زي ما هي بدون أي تغيير */
     const saveEditBranch = () => {
-        if (!editBranchForm.name.trim())
+        var _a;
+        if (!editBranchForm.name.trim() || !editBranchForm.entityId)
             return;
-        setBranches((prev) => prev.map((b) => (b.id === editingBranchId ? { ...b, name: editBranchForm.name.trim(), city: editBranchForm.city.trim() } : b)));
+        const cur = branches.find((b) => b.id === editingBranchId);
+        if (cur && cur.entityId !== editBranchForm.entityId) {
+            const newName = ((_a = entities.find((en) => en.id === editBranchForm.entityId)) === null || _a === void 0 ? void 0 : _a.name) || "";
+            const empCount = employees.filter((e) => e.branchId === cur.id).length;
+            if (!window.confirm(t(`نقل الفرع "${cur.name}" إلى كيان "${newName}"؟` + (empCount > 0 ? ` سينتقل معه ${empCount} موظف تلقائيًا.` : ""), `Move branch "${cur.name}" to entity "${newName}"?` + (empCount > 0 ? ` ${empCount} employees will move with it.` : ""))))
+                return;
+        }
+        setBranches((prev) => prev.map((b) => (b.id === editingBranchId ? { ...b, name: editBranchForm.name.trim(), city: editBranchForm.city.trim(), entityId: editBranchForm.entityId } : b)));
         cancelEditBranch();
     };
     const addBranch = () => {
@@ -6254,7 +6262,11 @@ function BranchesTab({ entities, setEntities, branches, setBranches, employees, 
                         React.createElement(Field, { label: t("اسم الفرع", "Branch Name") },
                             React.createElement("input", { style: inputStyle, value: editBranchForm.name, onChange: (e) => setEditBranchForm({ ...editBranchForm, name: e.target.value }), autoFocus: true })),
                         React.createElement(Field, { label: t("المدينة", "City") },
-                            React.createElement("input", { style: inputStyle, value: editBranchForm.city, onChange: (e) => setEditBranchForm({ ...editBranchForm, city: e.target.value }) }))),
+                            React.createElement("input", { style: inputStyle, value: editBranchForm.city, onChange: (e) => setEditBranchForm({ ...editBranchForm, city: e.target.value }) })),
+                        React.createElement(Field, { label: t("الكيان", "Entity") },
+                            React.createElement("select", { style: inputStyle, value: editBranchForm.entityId, onChange: (e) => setEditBranchForm({ ...editBranchForm, entityId: e.target.value }) },
+                                !entities.some((en) => en.id === editBranchForm.entityId) && React.createElement("option", { value: "" }, t("— اختاري الكيان —", "— Select entity —")),
+                                entities.map((en) => (React.createElement("option", { key: en.id, value: en.id }, en.name)))))),
                     React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-end" } },
                         React.createElement(Btn, { small: true, onClick: saveEditBranch }, t("حفظ", "Save")),
                         React.createElement(Btn, { small: true, tone: "secondary", onClick: cancelEditBranch }, t("إلغاء", "Cancel"))))) : (React.createElement(React.Fragment, null,
